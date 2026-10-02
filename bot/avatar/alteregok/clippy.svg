@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Iratkapocs — a Microsoft Office Clippy mém ihlette: nagy gemkapocs-alak, vastag
+  drótvonal, rajta két nagy szem és szemöldök, alul papírlap.
+
+  Mozgás: idegesen pattog, a szemöldök fel-le jár, a drót vége integet.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 320" width="240" height="320" role="img" aria-label="Iratkapocs">
+  <defs>
+    <linearGradient id="clip-drot" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#8b95a3"/>
+      <stop offset="28%" stop-color="#e6ecf3"/>
+      <stop offset="56%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#94a0ae"/>
+    </linearGradient>
+    <linearGradient id="clip-papir" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#d8dde4"/>
+    </linearGradient>
+    <filter id="clip-lagy" x="-70%" y="-70%" width="240%" height="240%">
+      <feGaussianBlur stdDeviation="2.6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <style>
+    .lebeg { animation: lebeg 3.4s ease-in-out infinite; }
+    @keyframes lebeg { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+    .szem { transform-box: fill-box; transform-origin: center; animation: pislog 5.2s ease-in-out infinite; }
+    @keyframes pislog { 0%,92%,100% { transform: scaleY(1); } 95% { transform: scaleY(0.08); } }
+
+    /* Clippy idegesen pattog */
+    .clip-pattog { transform-box: view-box; transform-origin: 120px 288px; animation: clip-pattog 1.15s ease-in-out infinite; }
+    @keyframes clip-pattog { 0%,100% { transform: translateY(0); } 44% { transform: translateY(-14px); } 60% { transform: translateY(-5px); } 78% { transform: translateY(-10px); } }
+
+    /* a szemöldök fel-le jár */
+    .clip-szemoldok { animation: clip-szemoldok 1.15s ease-in-out infinite; }
+    @keyframes clip-szemoldok { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+
+    /* a drót szabad vége integet */
+    .clip-veg { transform-box: view-box; transform-origin: 104px 216px; animation: clip-veg 1.6s ease-in-out infinite; }
+    @keyframes clip-veg { 0%,100% { transform: rotate(0deg); } 50% { transform: rotate(-9deg); } }
+  </style>
+
+  <!-- talajárnyék -->
+  <ellipse cx="120" cy="292" rx="60" ry="9" fill="#000" opacity="0.26"/>
+
+  <!-- papírlap a talajon -->
+  <path d="M 58 250 L 182 246 L 186 284 L 62 288 Z" fill="url(#clip-papir)" stroke="#a9b3bf" stroke-width="1.4"/>
+  <path d="M 72 258 L 170 255 M 72 266 L 170 263 M 72 274 L 140 271" stroke="#b9c3cf" stroke-width="2" stroke-linecap="round"/>
+
+  <g class="lebeg">
+    <g class="clip-pattog">
+      <!-- a gemkapocs drótja (külső hurok) -->
+      <path d="M 100 244 L 100 100 Q 100 66 120 66 Q 140 66 140 100 L 140 214 Q 140 240 122 240 Q 104 240 104 216 L 104 122"
+            fill="none" stroke="url(#clip-drot)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+      <!-- belső él-vonal a fémhatáshoz -->
+      <path d="M 100 244 L 100 100 Q 100 66 120 66 Q 140 66 140 100 L 140 214 Q 140 240 122 240 Q 104 240 104 216 L 104 122"
+            fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" opacity="0.55"
+            transform="translate(-2.6,-2.2)"/>
+
+      <!-- a drót szabad vége -->
+      <g class="clip-veg">
+        <path d="M 104 122 L 104 96" fill="none" stroke="url(#clip-drot)" stroke-width="10" stroke-linecap="round"/>
+      </g>
+
+      <!-- szemek -->
+      <circle cx="110" cy="112" r="13" fill="#ffffff" stroke="#94a0ae" stroke-width="1.6"/>
+      <circle cx="134" cy="112" r="13" fill="#ffffff" stroke="#94a0ae" stroke-width="1.6"/>
+      <circle class="szem" cx="112" cy="114" r="6" fill="#1f2937"/>
+      <circle class="szem" cx="136" cy="114" r="6" fill="#1f2937"/>
+      <circle cx="110" cy="111" r="2" fill="#ffffff"/>
+      <circle cx="134" cy="111" r="2" fill="#ffffff"/>
+
+      <!-- szemöldök -->
+      <g class="clip-szemoldok">
+        <path d="M 97 94 q 13 -7 26 -2" stroke="#5d6875" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <path d="M 147 94 q -13 -7 -26 -2" stroke="#5d6875" stroke-width="4" fill="none" stroke-linecap="round"/>
+      </g>
+
+      <!-- száj -->
+      <path d="M 112 136 q 10 7 20 0" stroke="#5d6875" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+      <circle cx="96" cy="134" r="3.4" fill="#c3ccd8" filter="url(#clip-lagy)"/>
+    </g>
+  </g>
+</svg>

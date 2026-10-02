@@ -1,0 +1,26 @@
+{
+  "name": "dsh-ui-extras",
+  "version": "0.1.1",
+  "private": true,
+  "description": "DeepSeek Harness UI extras: statistics panel (and later git/ssh/terminal panels).",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.2"
+  },
+  "license": "MIT"
+}

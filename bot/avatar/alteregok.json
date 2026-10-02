@@ -1,0 +1,133 @@
+{
+  "leiras": "A Házirobot alteregó avatarjai. Az id a fájlnév (bot/avatar/alteregok/<id>.svg). Az 'alap' az, amit először mutatunk, az 'autoAlap' az automatikus váltogatás alapértéke másodpercben (0 = kikapcsolva).",
+  "alap": "gyuszi",
+  "autoAlap": 0,
+  "lista": [
+    {
+      "id": "gyuszi",
+      "nev": "Gyuszi (a valódi)",
+      "alcim": "papírkosár fej · bádogkuka test · flexicső karok",
+      "fajl": "alteregok/gyuszi.svg",
+      "mozgas": "billeg + integet",
+      "ihlet": "Magyarok az űrben (Comedy Central, 2013) — Gyuszi",
+      "szin": "#f0b429"
+    },
+    {
+      "id": "klasszikus",
+      "nev": "Klasszikus",
+      "alcim": "fehér humanoid, sötét visorral",
+      "fajl": "alteregok/klasszikus.svg",
+      "mozgas": "lebeg + integet + villog",
+      "ihlet": "Magyarok az űrben, 6:10–6:40 — a háttér fehér robotja",
+      "szin": "#9fb3c8"
+    },
+    {
+      "id": "ezeros",
+      "nev": "Ezüst gépember",
+      "alcim": "ezüstfestés, üvegszár-antenna",
+      "fajl": "alteregok/ezeros.svg",
+      "mozgas": "tancol",
+      "ihlet": "Clouds Across the Moon (The Rah Band) — a robot-utánzó táncos",
+      "szin": "#b8c6d9"
+    },
+    {
+      "id": "gonk",
+      "nev": "Gonk",
+      "alcim": "négyzetes test, rövid lábak",
+      "fajl": "alteregok/gonk.svg",
+      "mozgas": "billeg",
+      "ihlet": "Csillagok háborúja — GNK power droid",
+      "szin": "#eab308"
+    },
+    {
+      "id": "asztromech",
+      "nev": "Asztromech",
+      "alcim": "hengeres test, gömb fejtető",
+      "fajl": "alteregok/asztromech.svg",
+      "mozgas": "fejforgat",
+      "ihlet": "Csillagok háborúja — R2-D2",
+      "szin": "#38bdf8"
+    },
+    {
+      "id": "protokoll",
+      "nev": "Protokoll-droid",
+      "alcim": "arany, kimért tartás",
+      "fajl": "alteregok/protokoll.svg",
+      "mozgas": "biccent",
+      "ihlet": "Csillagok háborúja — C-3PO",
+      "szin": "#d4a017"
+    },
+    {
+      "id": "kukagyerek",
+      "nev": "Kuka-gyerek",
+      "alcim": "kockás test, távcső-nyak",
+      "fajl": "alteregok/kukagyerek.svg",
+      "mozgas": "sassze",
+      "ihlet": "WALL-E — a rozsdás kis kompaktor",
+      "szin": "#f59e0b"
+    },
+    {
+      "id": "tojas",
+      "nev": "Tojás",
+      "alcim": "fehér tojásdad test, kék sáv",
+      "fajl": "alteregok/tojas.svg",
+      "mozgas": "lebeg",
+      "ihlet": "WALL-E — EVE",
+      "szin": "#7dd3fc"
+    },
+    {
+      "id": "gomb",
+      "nev": "Golyó",
+      "alcim": "guruló gömb, lebegő fej",
+      "fajl": "alteregok/gomb.svg",
+      "mozgas": "gurul",
+      "ihlet": "Csillagok háborúja — BB-8",
+      "szin": "#fb923c"
+    },
+    {
+      "id": "bender",
+      "nev": "Bender",
+      "alcim": "hengeres fej, szemetes-száj",
+      "fajl": "alteregok/bender.svg",
+      "mozgas": "pattoq",
+      "ihlet": "Futurama — Bender",
+      "szin": "#22d3ee"
+    },
+    {
+      "id": "marvin",
+      "nev": "Búskomor",
+      "alcim": "túlméretezett fej, apró test",
+      "fajl": "alteregok/marvin.svg",
+      "mozgas": "lebeg",
+      "ihlet": "Galaxis útikalauz stopposoknak — Marvin",
+      "szin": "#86efac"
+    },
+    {
+      "id": "szem",
+      "nev": "Szem",
+      "alcim": "lapos panel, vörös lencse",
+      "fajl": "alteregok/szem.svg",
+      "mozgas": "villog",
+      "ihlet": "2001: Űrodüsszeia — HAL 9000",
+      "szin": "#ef4444"
+    },
+    {
+      "id": "clippy",
+      "nev": "Iratkapocs",
+      "alcim": "gemkapocs drót, nagy szemek",
+      "fajl": "alteregok/clippy.svg",
+      "mozgas": "pattoq",
+      "ihlet": "Microsoft Office — Clippy mém",
+      "szin": "#a3e635"
+    },
+    {
+      "id": "spot",
+      "nev": "Robotkutya",
+      "alcim": "négylábú, szenzortorony",
+      "fajl": "alteregok/spot.svg",
+      "mozgas": "billeg",
+      "ihlet": "Boston Dynamics — Spot",
+      "szin": "#facc15"
+    }
+  ]
+}

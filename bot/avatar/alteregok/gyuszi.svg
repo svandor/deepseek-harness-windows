@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Gyuszi (a valódi) — a Házirobot fő alteregója.
+
+  A Comedy Central "Magyarok az űrben" (2013) Gyuszi robotja ihlette, de a
+  leírás szerint: MŰANYAG PAPÍRKOSÁR a fej, BÁDOGKUKA a test, hosszú konyhai
+  PÁRAELSZÍVÓ FLEXICSŐ a karok (fehér műanyag, acélmerevítés miatt gyűrűzött).
+
+  Mozgás: tántorgó billegés, a csőkarok gumi módjára kilengenek és visszahullanak,
+  a kukafedél zörög, a kosárba süllyesztett szemek pisloganak.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 320" width="240" height="320" role="img" aria-label="Gyuszi">
+  <defs>
+    <linearGradient id="gy-badog" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#77828e"/>
+      <stop offset="16%" stop-color="#c3ccd6"/>
+      <stop offset="50%" stop-color="#e5ebf1"/>
+      <stop offset="82%" stop-color="#a7b2be"/>
+      <stop offset="100%" stop-color="#727d89"/>
+    </linearGradient>
+    <linearGradient id="gy-kosar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="68%" stop-color="#eef2f7"/>
+      <stop offset="100%" stop-color="#c9d4e1"/>
+    </linearGradient>
+    <linearGradient id="gy-cso" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#c6cfda"/>
+      <stop offset="42%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#a9b4c0"/>
+    </linearGradient>
+    <clipPath id="gy-kosar-clip">
+      <path d="M 74 48 L 166 48 L 154 146 Q 120 154 86 146 Z"/>
+    </clipPath>
+    <filter id="gy-lagy" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3.2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <style>
+    .lebeg { animation: lebeg 3.4s ease-in-out infinite; }
+    @keyframes lebeg { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+
+    .szem { transform-box: fill-box; transform-origin: center; animation: pislog 5.2s ease-in-out infinite; }
+    @keyframes pislog { 0%,92%,100% { transform: scaleY(1); } 95% { transform: scaleY(0.08); } }
+
+    /* Gyuszi: a kukán ülő kosárfej lassan bólogat */
+    .gy-fej { transform-box: view-box; transform-origin: 120px 154px; animation: gy-bolint 6.2s ease-in-out infinite; }
+    @keyframes gy-bolint { 0%,100% { transform: rotate(-2.6deg); } 50% { transform: rotate(3.2deg); } }
+
+    /* a fedél zörög, mintha a kosár rázkódna tőle */
+    .gy-fedel { transform-box: view-box; transform-origin: 120px 168px; animation: gy-zorog 1.9s ease-in-out infinite; }
+    @keyframes gy-zorog { 0%,100% { transform: rotate(0deg); } 28% { transform: rotate(-1.8deg); } 58% { transform: rotate(1.3deg); } 80% { transform: rotate(-0.6deg); } }
+
+    /* a flexicsövek gumi módjára kilengenek, majd visszahullanak */
+    .gy-kar-bal { transform-box: view-box; transform-origin: 72px 200px; animation: gy-leng-bal 3.2s cubic-bezier(.42,0,.58,1) infinite; }
+    @keyframes gy-leng-bal { 0%,100% { transform: rotate(0deg); } 38% { transform: rotate(-12deg); } 68% { transform: rotate(7deg); } }
+
+    .gy-kar-jobb { transform-box: view-box; transform-origin: 168px 200px; animation: gy-leng-jobb 2.7s cubic-bezier(.42,0,.58,1) infinite; }
+    @keyframes gy-leng-jobb { 0%,100% { transform: rotate(0deg); } 42% { transform: rotate(26deg); } 60% { transform: rotate(-9deg); } 78% { transform: rotate(4deg); } }
+
+    /* a kuka elején a működésjelző fények */
+    .gy-feny1 { animation: gy-villan 2.3s steps(1) infinite; }
+    .gy-feny2 { animation: gy-villan 2.3s steps(1) .5s infinite; }
+    @keyframes gy-villan { 0%,62% { opacity: .28; } 63%,100% { opacity: 1; } }
+  </style>
+
+  <!-- talajárnyék -->
+  <ellipse cx="120" cy="292" rx="62" ry="10" fill="#000" opacity="0.28"/>
+
+  <g class="lebeg">
+    <!-- bal flexicső kar (lóg, kileng) -->
+    <g class="gy-kar-bal">
+      <path d="M 72 200 C 50 226 46 254 60 274" stroke="url(#gy-cso)" stroke-width="12" fill="none" stroke-linecap="round"/>
+      <path d="M 72 200 C 50 226 46 254 60 274" stroke="#a4aeba" stroke-width="12" fill="none" stroke-dasharray="2 7" opacity="0.8"/>
+      <rect x="48" y="266" width="23" height="13" rx="6" fill="#e2e8ef" stroke="#98a3b0" stroke-width="1.4"/>
+      <path d="M 50 278 l -7 6 M 68 278 l 7 6" stroke="#98a3b0" stroke-width="2" stroke-linecap="round" fill="none"/>
+    </g>
+
+    <!-- test: bádogkuka -->
+    <path d="M 80 168 Q 74 226 82 274 Q 120 284 158 274 Q 166 226 160 168 Z" fill="url(#gy-badog)" stroke="#78838f" stroke-width="1.6"/>
+    <path d="M 79 194 Q 120 205 161 194" stroke="#8b97a4" stroke-width="3" fill="none"/>
+    <path d="M 78 221 Q 120 232 162 221" stroke="#8b97a4" stroke-width="3" fill="none"/>
+    <path d="M 79 247 Q 120 258 161 247" stroke="#8b97a4" stroke-width="3" fill="none"/>
+    <path d="M 133 205 q 17 7 12 21 q -4 11 -15 8" fill="#96a2ae" opacity="0.65"/>
+    <circle class="gy-feny1" cx="103" cy="183" r="4" fill="#5eead4"/>
+    <circle class="gy-feny2" cx="117" cy="183" r="4" fill="#fbbf24"/>
+
+    <!-- a kuka fülei (a karok vállai) -->
+    <path d="M 81 176 q -19 5 -16 23 q 2 12 13 14" stroke="#8e9aa7" stroke-width="7" fill="none" stroke-linecap="round"/>
+    <path d="M 159 176 q 19 5 16 23 q -2 12 -13 14" stroke="#8e9aa7" stroke-width="7" fill="none" stroke-linecap="round"/>
+
+    <!-- fedél (zörög) -->
+    <g class="gy-fedel">
+      <ellipse cx="120" cy="166" rx="46" ry="11" fill="#bfc9d4" stroke="#78838f" stroke-width="1.6"/>
+      <ellipse cx="120" cy="162" rx="37" ry="8" fill="#dde4eb"/>
+      <rect x="113" y="153" width="15" height="8" rx="4" fill="#9aa5b2"/>
+    </g>
+
+    <!-- nyak -->
+    <rect x="110" y="144" width="20" height="24" rx="4" fill="#8e9aa7"/>
+
+    <!-- fej: műanyag papírkosár -->
+    <g class="gy-fej">
+      <path d="M 74 48 L 166 48 L 154 146 Q 120 154 86 146 Z" fill="url(#gy-kosar)" stroke="#9aa8b8" stroke-width="1.8"/>
+      <g clip-path="url(#gy-kosar-clip)">
+        <path d="M 90 42 L 95 154" stroke="#bac6d4" stroke-width="2.6" fill="none"/>
+        <path d="M 106 42 L 108 156" stroke="#bac6d4" stroke-width="2.6" fill="none"/>
+        <path d="M 134 42 L 132 156" stroke="#bac6d4" stroke-width="2.6" fill="none"/>
+        <path d="M 150 42 L 145 154" stroke="#bac6d4" stroke-width="2.6" fill="none"/>
+        <path d="M 70 74 L 170 74" stroke="#bac6d4" stroke-width="2.6" fill="none"/>
+        <path d="M 72 100 L 168 100" stroke="#bac6d4" stroke-width="2.6" fill="none"/>
+        <path d="M 75 124 L 165 124" stroke="#bac6d4" stroke-width="2.6" fill="none"/>
+        <path d="M 78 144 L 162 144" stroke="#bac6d4" stroke-width="2.6" fill="none"/>
+      </g>
+      <rect x="70" y="41" width="100" height="12" rx="6" fill="#f1f5f9" stroke="#9aa8b8" stroke-width="1.6"/>
+      <path d="M 74 50 q -15 3 -13 18 q 2 10 11 12" stroke="#c6d0dd" stroke-width="4" fill="none" stroke-linecap="round"/>
+      <path d="M 166 50 q 15 3 13 18 q -2 10 -11 12" stroke="#c6d0dd" stroke-width="4" fill="none" stroke-linecap="round"/>
+
+      <!-- a kosárba süllyesztett arc -->
+      <rect x="94" y="90" width="52" height="36" rx="10" fill="#16202c"/>
+      <ellipse class="szem" cx="110" cy="108" rx="6.5" ry="8.5" fill="#67e8f9" filter="url(#gy-lagy)"/>
+      <ellipse class="szem" cx="130" cy="108" rx="6.5" ry="8.5" fill="#67e8f9" filter="url(#gy-lagy)"/>
+      <path d="M 105 133 q 15 7 30 0" stroke="#9aa8b8" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+    </g>
+
+    <!-- jobb flexicső kar (integet) -->
+    <g class="gy-kar-jobb">
+      <path d="M 168 200 C 190 180 197 150 188 118" stroke="url(#gy-cso)" stroke-width="12" fill="none" stroke-linecap="round"/>
+      <path d="M 168 200 C 190 180 197 150 188 118" stroke="#a4aeba" stroke-width="12" fill="none" stroke-dasharray="2 7" opacity="0.8"/>
+      <rect x="177" y="104" width="23" height="13" rx="6" fill="#e2e8ef" stroke="#98a3b0" stroke-width="1.4"/>
+      <path d="M 179 104 l -7 -7 M 198 104 l 7 -7" stroke="#98a3b0" stroke-width="2" stroke-linecap="round" fill="none"/>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,17 @@
+# Normalise line endings per file kind.
+#
+# The plugin bundles are read by the browser through the Harness module loader,
+# not by node or PowerShell, so their bytes must stay exactly as written: a
+# checked-out CRLF copy is a different file from the tested one. Everything that
+# runs in a shell keeps the platform default so Windows tooling stays happy.
+* text=auto eol=lf
+
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binary assets must never be touched.
+*.ico binary
+*.png binary
+*.exe binary
+*.dll binary

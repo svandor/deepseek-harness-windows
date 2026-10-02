@@ -1,0 +1,42 @@
+[
+  {
+    "time": 370,
+    "sprite": "C:\\Szerver\\Deepseek Harness\\bot\\avatar\\src\\storyboard\\sprite-01.webp",
+    "geom": "160x90+320+180",
+    "out": "C:\\Szerver\\Deepseek Harness\\bot\\avatar\\src\\storyboard\\crop-0370.png",
+    "page": 1,
+    "tile": 12,
+    "row": 2,
+    "col": 2
+  },
+  {
+    "time": 380,
+    "sprite": "C:\\Szerver\\Deepseek Harness\\bot\\avatar\\src\\storyboard\\sprite-01.webp",
+    "geom": "160x90+480+180",
+    "out": "C:\\Szerver\\Deepseek Harness\\bot\\avatar\\src\\storyboard\\crop-0380.png",
+    "page": 1,
+    "tile": 13,
+    "row": 2,
+    "col": 3
+  },
+  {
+    "time": 390,
+    "sprite": "C:\\Szerver\\Deepseek Harness\\bot\\avatar\\src\\storyboard\\sprite-01.webp",
+    "geom": "160x90+640+180",
+    "out": "C:\\Szerver\\Deepseek Harness\\bot\\avatar\\src\\storyboard\\crop-0390.png",
+    "page": 1,
+    "tile": 14,
+    "row": 2,
+    "col": 4
+  },
+  {
+    "time": 400,
+    "sprite": "C:\\Szerver\\Deepseek Harness\\bot\\avatar\\src\\storyboard\\sprite-01.webp",
+    "geom": "160x90+0+270",
+    "out": "C:\\Szerver\\Deepseek Harness\\bot\\avatar\\src\\storyboard\\crop-0400.png",
+    "page": 1,
+    "tile": 15,
+    "row": 3,
+    "col": 0
+  }
+]

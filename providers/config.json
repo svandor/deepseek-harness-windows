@@ -1,0 +1,97 @@
+{
+  "_comment": "Helyi fallback proxy konfiguráció. A route-ok nevei jelennek meg a DSH /model választójában (a proxy /v1/models végpontján keresztül). A láncok 2026-10-01-én élő API-próbával (chain-doctor) ellenőrzött modelleket használnak.",
+  "_google_megjegyzes": "A Google szándékosan NINCS itt: az OpenAI-kompatibilitási rétege (v1beta/openai) üres content-et ad a reasoning modelleknél és nyers <thought> blokkokat szivárogtat a gemma modelleknél. A DSH a Google-t a NATÍV katalógus-route-on át használja (google-generative-ai protokoll), ami helyesen hív toolt. Ne vezesd be ide.",
+  "_napi_felulbiralat": "A dailyOverrides szekció dátum szerint cseréli le egy route láncát. Ha a mai dátum (helyi idő) szerepel benne, az ott megadott lánc érvényes a mai napon; minden más a routes-ból jön. FIGYELEM: a proxy.mjs a config.json-t INDULASKOR olvassa be egyszer, ezért a fájl mentése a futó példányon NEM hat — újra kell indítani (run-proxy-service.ps1 -Stop, majd run-proxy-service.ps1; a watchdog 60 s-en belül magától is megteszi). PÉLDA: \"dailyOverrides\": { \"2026-09-28\": { \"worker\": [\"ollama/qwen2.5-coder:14b\"] }, \"2026-09-29\": { \"worker\": [\"groq/openai/gpt-oss-120b\"] } }",
+  "host": "127.0.0.1",
+  "port": 4123,
+  "defaultRoute": "deepseek-chat",
+  "connectTimeoutMs": 120000,
+  "stallTimeoutMs": 180000,
+  "maxRequestBytes": 33554432,
+  "dailyOverrides": {},
+  "_requiredAnyEnv_megjegyzes": "Melyik route-hoz kell LEGALABB EGY kulcs a felsoroltakbol. Ha egyik sincs meg, a route NEM esik vissza a helyi Ollamara, hanem 503-at ad (a proxy.mjs-ben merve ez volt a '2 perc csend, majd hasznalhatatlan valasz' hiba oka). A 'local-only' szandekosan helyi, ezert nincs itt.",
+  "requiredAnyEnv": {
+    "worker": [
+      "GROQ_API_KEY",
+      "NVIDIA_API_KEY",
+      "OPENROUTER_API_KEY"
+    ],
+    "deepseek-chat": [
+      "GROQ_API_KEY",
+      "NVIDIA_API_KEY",
+      "OPENROUTER_API_KEY"
+    ],
+    "fast-chat": [
+      "GROQ_API_KEY",
+      "NVIDIA_API_KEY"
+    ]
+  },
+  "providers": {
+    "groq": {
+      "label": "Groq (ingyenes)",
+      "baseURL": "https://api.groq.com/openai/v1",
+      "apiKeyEnv": "GROQ_API_KEY"
+    },
+    "nvidia": {
+      "label": "NVIDIA NIM (ingyenes)",
+      "baseURL": "https://integrate.api.nvidia.com/v1",
+      "apiKeyEnv": "NVIDIA_API_KEY"
+    },
+    "openrouter": {
+      "label": "OpenRouter",
+      "baseURL": "https://openrouter.ai/api/v1",
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "headers": {
+        "HTTP-Referer": "http://127.0.0.1:3080",
+        "X-Title": "DeepSeek Harness (local fallback)"
+      }
+    },
+    "ollama": {
+      "label": "Ollama (helyi)",
+      "baseURL": "http://127.0.0.1:11434/v1",
+      "apiKeyEnv": "OLLAMA_LOCAL_API_KEY",
+      "optionalKey": true,
+      "connectTimeoutMs": 300000
+    }
+  },
+  "routes": {
+    "worker": {
+      "_comment": "A SUBAGENT célroute-ja. A sorrend KÉT mérésből jön: (1) chain-doctor tool-hívó próba 2026-10-01 17:36, (2) a proxy.out.log valódi kérései. Az él a két NVIDIA célé, nem a Groqé: a Groq ingyenes TPM-je 8000/perc, ami alatt egy igazi subagent-kontextus (mért kérés: 9395 token) HTTP 413-mal elhal, és a Groq a visszajátszott reasoning_content-ot is 400-zal utasítja el. A naplóban a 4 rögzített első-cél hiba MIND a Groqon volt, az NVIDIA-n egy sem. A Groq ezért a 3. helyen áll: kis kérésnél a leggyorsabb (484 ms), nagyobbat a proxy továbbad. Az openrouter/qwen/qwen3.8-27b:free pillanatnyilag 429-cel elesett, de tool-hívó, ezért a helyi coder ELŐTT tartjuk. Záró elem az ollama/qwen2.5-coder:14b: LASSU (35 s) és a mért próbákban NEM ad valódi tool_calls-t (a hívást content-szövegként írja ki) — csak végső tartalék. A moonshotai/kimi-k2.6 25 s-nál timeoutol ezzel a kulccsal, ezért KIVÉVE.",
+      "contextWindow": 131072,
+      "maxTokens": 32768,
+      "targets": [
+        "groq/openai/gpt-oss-120b",
+        "nvidia/nvidia/nemotron-3-super-120b-a12b",
+        "nvidia/openai/gpt-oss-20b",
+        "ollama/qwen2.5-coder:14b",
+        "openrouter/qwen/qwen3.8-27b:free"
+      ]
+    },
+    "deepseek-chat": {
+      "contextWindow": 131072,
+      "maxTokens": 16384,
+      "targets": [
+        "groq/openai/gpt-oss-120b",
+        "nvidia/nvidia/nemotron-3-super-120b-a12b",
+        "ollama/gpt-oss:20b",
+        "openrouter/qwen/qwen3.8-27b:free"
+      ]
+    },
+    "fast-chat": {
+      "contextWindow": 131072,
+      "maxTokens": 8192,
+      "targets": [
+        "groq/openai/gpt-oss-20b",
+        "nvidia/openai/gpt-oss-20b",
+        "ollama/qwen2.5:7b-instruct"
+      ]
+    },
+    "local-only": {
+      "contextWindow": 131072,
+      "maxTokens": 16384,
+      "targets": [
+        "ollama/gpt-oss:20b"
+      ]
+    }
+  }
+}

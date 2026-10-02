@@ -1,0 +1,70 @@
+# LiteLLM proxy konfiguráció — alternatíva a proxy.mjs helyett.
+#
+# Ugyanazt adja, mint a proxy.mjs: egy OpenAI-kompatibilis végpont, mögötte
+# automatikus fallback-lánc. Többet is tud (spend tracking, virtual keys,
+# admin UI, auto-router), cserébe nagyobb függőség.
+#
+# Indítás (venv-ben, mert a pip a Temp mappába ír, amit a DSH sandbox tilt):
+#   python -m venv .venv
+#   .\.venv\Scripts\python.exe -m pip install -r requirements-litellm.txt
+#   $env:GROQ_API_KEY='...'; $env:CEREBRAS_API_KEY='...'; $env:OPENROUTER_API_KEY='...'
+#   .\.venv\Scripts\python.exe -m litellm --config litellm-config.yaml --port 4123
+#
+# A DSH-ban ugyanazt a `local-fallback` providert használd, mint a proxy.mjs-nél
+# (baseURL: http://127.0.0.1:4123/v1), csak a model_name-eket igazítsd a
+# lentebb megadottakhoz.
+
+model_list:
+  # ── ingyenes kertek ──────────────────────────────────────────────────────
+  - model_name: deepseek-chat
+    litellm_params:
+      model: groq/llama-3.3-70b-versatile
+      api_key: os.environ/GROQ_API_KEY
+
+  - model_name: deepseek-chat
+    litellm_params:
+      model: cerebras/gpt-oss-120b
+      api_key: os.environ/CEREBRAS_API_KEY
+
+  - model_name: deepseek-chat
+    litellm_params:
+      model: openrouter/deepseek/deepseek-chat-v3.1:free
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # ── helyi Ollama (utolsó mentsvár) ───────────────────────────────────────
+  - model_name: deepseek-chat
+    litellm_params:
+      model: ollama_chat/gpt-oss:20b
+      api_base: http://127.0.0.1:11434
+
+  # ── gyors/olcsó sáv ─────────────────────────────────────────────────────
+  - model_name: fast-chat
+    litellm_params:
+      model: groq/llama-3.1-8b-instant
+      api_key: os.environ/GROQ_API_KEY
+
+  - model_name: fast-chat
+    litellm_params:
+      model: ollama_chat/qwen2.5:7b-instruct
+      api_base: http://127.0.0.1:11434
+
+  # ── csak helyi (adat nem hagyja el a gépet) ──────────────────────────────
+  - model_name: local-only
+    litellm_params:
+      model: ollama_chat/gpt-oss:20b
+      api_base: http://127.0.0.1:11434
+
+litellm_settings:
+  # Ha egy provider hibára fut, a LiteLLM végigjárja az azonos
+  # model_name-hez tartozó összes bejegyzést, mielőtt hibát adna.
+  num_retries: 1
+  request_timeout: 600
+  drop_params: true
+
+router_settings:
+  routing_strategy: simple-shuffle
+  # Provider-szintű, nem csak modell-szintű failover:
+  fallbacks:
+    - deepseek-chat: ["fast-chat", "local-only"]
+  allowed_fails: 2
+  cooldown_time: 30

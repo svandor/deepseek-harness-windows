@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Szem — a 2001: Űrodüsszeia HAL 9000 ihlette: lapos panel, középen nagy vörös
+  kameralencse, körülötte fémes gyűrű, alul vékony fénycsík.
+
+  Mozgás: a lencse lassan pulzál, a gyűrű körbefordul — a test maga mozdulatlan.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 320" width="240" height="320" role="img" aria-label="Szem">
+  <defs>
+    <linearGradient id="szem-panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2c333c"/>
+      <stop offset="50%" stop-color="#151a20"/>
+      <stop offset="100%" stop-color="#0b0e12"/>
+    </linearGradient>
+    <radialGradient id="szem-lencse" cx="42%" cy="38%" r="70%">
+      <stop offset="0%" stop-color="#fff1f1"/>
+      <stop offset="18%" stop-color="#fca5a5"/>
+      <stop offset="52%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#7f1d1d"/>
+    </radialGradient>
+    <filter id="szem-lagy" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <style>
+    .lebeg { animation: lebeg 3.4s ease-in-out infinite; }
+    @keyframes lebeg { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+    .szem { transform-box: fill-box; transform-origin: center; animation: pislog 5.2s ease-in-out infinite; }
+    @keyframes pislog { 0%,92%,100% { transform: scaleY(1); } 95% { transform: scaleY(0.08); } }
+
+    /* a lencse lassan pulzál */
+    .szem-lencse { transform-box: view-box; transform-origin: 120px 168px; animation: szem-pulzal 3.6s ease-in-out infinite; }
+    @keyframes szem-pulzal { 0%,100% { transform: scale(1); opacity: .82; } 50% { transform: scale(1.07); opacity: 1; } }
+
+    /* a fémes gyűrű körbefordul */
+    .szem-gyuru { transform-box: view-box; transform-origin: 120px 168px; animation: szem-gyuru 14s linear infinite; }
+    @keyframes szem-gyuru { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+    /* a fénycsík ide-oda vándorol */
+    .szem-csik { animation: szem-csik 4.8s ease-in-out infinite; }
+    @keyframes szem-csik { 0%,100% { transform: translateX(-16px); opacity: .5; } 50% { transform: translateX(16px); opacity: 1; } }
+  </style>
+
+  <!-- talajárnyék -->
+  <ellipse cx="120" cy="292" rx="54" ry="9" fill="#000" opacity="0.3"/>
+
+  <g class="lebeg">
+    <!-- panel -->
+    <path d="M 60 100 Q 60 90 72 90 L 168 90 Q 180 90 180 100 L 180 236 Q 180 246 168 246 L 72 246 Q 60 246 60 236 Z"
+          fill="url(#szem-panel)" stroke="#39424c" stroke-width="2"/>
+    <path d="M 68 98 L 172 98" stroke="#4b5563" stroke-width="2" opacity="0.7"/>
+    <circle cx="74" cy="104" r="3" fill="#4b5563"/>
+    <circle cx="166" cy="104" r="3" fill="#4b5563"/>
+    <circle cx="74" cy="232" r="3" fill="#4b5563"/>
+    <circle cx="166" cy="232" r="3" fill="#4b5563"/>
+
+    <!-- kameralencse -->
+    <circle cx="120" cy="168" r="44" fill="#0b0e12" stroke="#39424c" stroke-width="2"/>
+    <circle cx="120" cy="168" r="36" fill="#1b1113"/>
+    <circle class="szem-lencse" cx="120" cy="168" r="27" fill="url(#szem-lencse)" filter="url(#szem-lagy)"/>
+    <circle cx="120" cy="168" r="27" fill="none" stroke="#7f1d1d" stroke-width="4"/>
+    <circle cx="110" cy="157" r="7" fill="#fff5f5" opacity="0.75"/>
+    <!-- forgó fémes gyűrű -->
+    <circle class="szem-gyuru" cx="120" cy="168" r="37" fill="none" stroke="#c7ced8" stroke-width="4.5"
+            stroke-dasharray="18 13" stroke-linecap="round"/>
+
+    <!-- feliratok és fénycsík -->
+    <rect x="88" y="116" width="64" height="7" rx="3.5" fill="#4b5563" opacity="0.85"/>
+    <rect x="96" y="216" width="48" height="6" rx="3" fill="#4b5563" opacity="0.85"/>
+    <g class="szem-csik">
+      <rect x="86" y="256" width="68" height="6" rx="3" fill="#ef4444" filter="url(#szem-lagy)"/>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,34 @@
+{
+  "id": "pelda-oldalfigyelo",
+  "leiras": "Példa job: nyilvános oldalak változásfigyelése (heti) — ezt a fájlt másold le és alakítsd a saját feladataidra",
+  "schedule": {
+    "tipus": "cron",
+    "kifejezes": "0 7 * * 1"
+  },
+  "csatorna": ".bot",
+  "preset": "standard-free",
+  "modell": {
+    "route": "fast-chat",
+    "maxTokens": 1500
+  },
+  "prompt": "prompts/pelda-oldalfigyelo.md",
+  "toolAllowlist": [
+    "read"
+  ],
+  "domainAllowlist": [],
+  "koltsegKeretUsd": 0,
+  "jovahagyasKell": false,
+  "kimenet": [
+    "riport",
+    "email"
+  ],
+  "megorzesNap": 180,
+  "oldalak": [],
+  "_megjegyzes": [
+    "MINTA: a bot/jobs/ mappába tett minden *.json egy job, amit a robot futtat.",
+    "Az `oldalak` tömbbe kerülnek a figyelt URL-ek: {\"nev\": \"...\", \"url\": \"...\"}.",
+    "Amíg üres, a job nem épít bázist, csak jelzi, hogy nincs mit figyelni.",
+    "A saját jobjaidat NE tedd a repóba: a bot/jobs/*.json gépenkénti (gitignore),",
+    "csak a pelda-*.json marad nyilvános mintaként."
+  ]
+}

@@ -1,0 +1,21 @@
+# Teszt-patch: a dsh-base-beli `tool-subagent` sor felülírása id szerint.
+#
+# TANULSÁGOK (mind mért hiba volt):
+#   1. A headless profilban a tool-subagent a dsh-BASE-ből jön. A web profil
+#      letiltja és a preset-re bízza — a headless nem. Ezért a presethez írt
+#      agentOptions NEM érvényesül, és az `- insert:` duplicate id-t ad.
+#   2. A `modelSelectionSettings: true` megköveteli a
+#      `@deepseek-ai/dsh-tool-subagent/model-selection-settings` plugint a Host
+#      scope-ban (a web profil mountolja, a headless nem). Enélkül a boot elhal.
+#      Ezért azt itt kihagyjuk — az `agentOptions` önmagában is működik.
+
+- id: tool-subagent
+  config:
+    provider: spawn
+    toolName: subagent
+    backgroundMode: continuable
+    agentOptions:
+      provider: deepseek-official
+      model: deepseek-v4-pro
+      reasoningEffort: high
+      maxTokens: 4096

@@ -1,0 +1,26 @@
+{
+  "name": "dsh-hazi-robot",
+  "version": "0.1.1",
+  "private": true,
+  "description": "Házirobot panel a DeepSeek Harness felületén: állapot, jobok és beállítás-űrlap.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.2"
+  },
+  "license": "MIT"
+}

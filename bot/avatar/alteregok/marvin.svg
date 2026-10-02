@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Búskomor — a Galaxis útikalauz stopposoknak Marvinja ihlette: túlméretezett
+  fej, apró test, búskomor szemek, oldalt kartámaszok.
+
+  Mozgás: alig mozdul — a fej nehezen billen, a szemhéj lassan lecsukódik.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 320" width="240" height="320" role="img" aria-label="Búskomor">
+  <defs>
+    <radialGradient id="mar-fej" cx="38%" cy="30%" r="76%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="58%" stop-color="#e4ece4"/>
+      <stop offset="100%" stop-color="#a9b6a9"/>
+    </radialGradient>
+    <linearGradient id="mar-test" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#8d9a8d"/>
+      <stop offset="40%" stop-color="#c6d1c6"/>
+      <stop offset="100%" stop-color="#8d9a8d"/>
+    </linearGradient>
+    <clipPath id="mar-fej-clip">
+      <circle cx="120" cy="112" r="54"/>
+    </clipPath>
+  </defs>
+
+  <style>
+    .lebeg { animation: lebeg 3.4s ease-in-out infinite; }
+    @keyframes lebeg { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+    .szem { transform-box: fill-box; transform-origin: center; animation: pislog 5.2s ease-in-out infinite; }
+    @keyframes pislog { 0%,92%,100% { transform: scaleY(1); } 95% { transform: scaleY(0.08); } }
+
+    /* Marvin: nagyon lassú, nehéz fejbiccentés */
+    .mar-fej { transform-box: view-box; transform-origin: 120px 166px; animation: mar-fej 9.5s ease-in-out infinite; }
+    @keyframes mar-fej { 0%,100% { transform: rotate(-2.4deg); } 50% { transform: rotate(2.6deg); } }
+
+    /* a szemhéj lassan lecsukódik — ez a búskomorság */
+    .mar-szemhej { transform-box: fill-box; transform-origin: top center; animation: mar-szemhej 7.2s ease-in-out infinite; }
+    @keyframes mar-szemhej { 0%,20%,100% { transform: scaleY(0.35); } 55%,70% { transform: scaleY(1); } }
+
+    .mar-kar { transform-box: view-box; transform-origin: 62px 214px; animation: mar-kar 9.5s ease-in-out infinite; }
+    @keyframes mar-kar { 0%,100% { transform: rotate(0deg); } 50% { transform: rotate(-4deg); } }
+
+    .mar-feny { animation: mar-feny 4.6s ease-in-out infinite; }
+    @keyframes mar-feny { 0%,100% { opacity: .45; } 50% { opacity: .85; } }
+  </style>
+
+  <!-- talajárnyék -->
+  <ellipse cx="120" cy="292" rx="52" ry="10" fill="#000" opacity="0.28"/>
+
+  <g class="lebeg">
+    <!-- apró lábak -->
+    <rect x="102" y="252" width="15" height="34" rx="7" fill="#8d9a8d" stroke="#68756a" stroke-width="1.4"/>
+    <rect x="123" y="252" width="15" height="34" rx="7" fill="#8d9a8d" stroke="#68756a" stroke-width="1.4"/>
+    <rect x="94" y="278" width="30" height="12" rx="6" fill="#68756a"/>
+    <rect x="116" y="278" width="30" height="12" rx="6" fill="#68756a"/>
+
+    <!-- apró test -->
+    <rect x="98" y="196" width="44" height="62" rx="14" fill="url(#mar-test)" stroke="#68756a" stroke-width="1.6"/>
+    <rect x="108" y="212" width="24" height="14" rx="5" fill="#4a564c"/>
+    <circle cx="114" cy="219" r="3" fill="#fbbf24" class="mar-feny"/>
+    <circle cx="126" cy="219" r="3" fill="#f87171" class="mar-feny"/>
+    <rect x="106" y="236" width="28" height="5" rx="2.5" fill="#a3b0a4"/>
+
+    <!-- kartámaszok -->
+    <g class="mar-kar">
+      <rect x="56" y="208" width="44" height="12" rx="6" fill="#a3b0a4" stroke="#68756a" stroke-width="1.3"/>
+      <rect x="52" y="218" width="12" height="26" rx="6" fill="#8d9a8d" stroke="#68756a" stroke-width="1.3"/>
+    </g>
+    <rect x="140" y="208" width="44" height="12" rx="6" fill="#a3b0a4" stroke="#68756a" stroke-width="1.3"/>
+    <rect x="176" y="218" width="12" height="26" rx="6" fill="#8d9a8d" stroke="#68756a" stroke-width="1.3"/>
+
+    <!-- nyak -->
+    <rect x="110" y="180" width="20" height="22" rx="5" fill="#7d8a7e" stroke="#68756a" stroke-width="1.2"/>
+
+    <!-- túlméretezett fej -->
+    <g class="mar-fej">
+      <circle cx="120" cy="112" r="54" fill="url(#mar-fej)" stroke="#68756a" stroke-width="1.7"/>
+      <g clip-path="url(#mar-fej-clip)">
+        <rect x="66" y="66" width="108" height="14" fill="#f5a623" opacity="0.9"/>
+        <rect x="66" y="66" width="108" height="6" fill="#ffd88a" opacity="0.6"/>
+      </g>
+      <circle cx="120" cy="112" r="54" fill="none" stroke="#68756a" stroke-width="1.7"/>
+      <!-- búskomor szemek -->
+      <ellipse cx="100" cy="124" rx="12" ry="10" fill="#3d4a3f"/>
+      <ellipse cx="140" cy="124" rx="12" ry="10" fill="#3d4a3f"/>
+      <ellipse class="szem" cx="100" cy="124" rx="6.5" ry="6" fill="#cfe8cf" filter="url(#mar-feny)"/>
+      <ellipse class="szem" cx="140" cy="124" rx="6.5" ry="6" fill="#cfe8cf" filter="url(#mar-feny)"/>
+      <!-- félig lecsukott szemhéj -->
+      <ellipse class="mar-szemhej" cx="100" cy="118" rx="13" ry="9" fill="#dbe6db"/>
+      <ellipse class="mar-szemhej" cx="140" cy="118" rx="13" ry="9" fill="#dbe6db"/>
+      <!-- szomorú száj -->
+      <path d="M 104 148 q 16 -10 32 0" stroke="#68756a" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+      <circle cx="88" cy="146" r="3" fill="#a9b6a9"/>
+      <circle cx="152" cy="146" r="3" fill="#a9b6a9"/>
+      <!-- antennák -->
+      <line x1="102" y1="64" x2="94" y2="44" stroke="#8d9a8d" stroke-width="2.6" stroke-linecap="round"/>
+      <line x1="138" y1="64" x2="146" y2="44" stroke="#8d9a8d" stroke-width="2.6" stroke-linecap="round"/>
+      <circle cx="92" cy="41" r="4" fill="#86efac" class="mar-feny"/>
+      <circle cx="148" cy="41" r="4" fill="#86efac" class="mar-feny"/>
+    </g>
+  </g>
+</svg>

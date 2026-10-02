@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Golyó — a Csillagok háborúja BB-8 ihlette: nagy gömb alakú test guruló
+  mintázattal, külön lebegő kúpos fej, két antenna.
+
+  Mozgás: a test gurul a saját középpontja körül, a fej lebeg és követi.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 320" width="240" height="320" role="img" aria-label="Golyó">
+  <defs>
+    <radialGradient id="gomb-test" cx="38%" cy="32%" r="72%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="62%" stop-color="#eef1f5"/>
+      <stop offset="100%" stop-color="#b6bfc9"/>
+    </radialGradient>
+    <linearGradient id="gomb-fej" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#c2cbd6"/>
+    </linearGradient>
+    <clipPath id="gomb-kor">
+      <circle cx="120" cy="214" r="64"/>
+    </clipPath>
+    <filter id="gomb-lagy" x="-70%" y="-70%" width="240%" height="240%">
+      <feGaussianBlur stdDeviation="2.6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <style>
+    .lebeg { animation: lebeg 3.4s ease-in-out infinite; }
+    @keyframes lebeg { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+    .szem { transform-box: fill-box; transform-origin: center; animation: pislog 5.2s ease-in-out infinite; }
+    @keyframes pislog { 0%,92%,100% { transform: scaleY(1); } 95% { transform: scaleY(0.08); } }
+
+    /* a test gurul — a mintázat körbejár */
+    .gomb-gurul { transform-box: view-box; transform-origin: 120px 214px; animation: gomb-gurul 3.6s linear infinite; }
+    @keyframes gomb-gurul { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+    /* a fej lebeg és enyhén dől */
+    .gomb-fej { transform-box: view-box; transform-origin: 120px 150px; animation: gomb-fej 3.6s ease-in-out infinite; }
+    @keyframes gomb-fej { 0%,100% { transform: translateY(0) rotate(-4deg); } 50% { transform: translateY(-7px) rotate(4deg); } }
+
+    .gomb-feny { animation: gomb-feny 2.4s steps(1) infinite; }
+    @keyframes gomb-feny { 0%,58% { opacity: .3; } 59%,100% { opacity: 1; } }
+  </style>
+
+  <!-- talajárnyék -->
+  <ellipse cx="120" cy="292" rx="60" ry="10" fill="#000" opacity="0.28"/>
+
+  <g class="lebeg">
+    <!-- test: guruló gömb -->
+    <circle cx="120" cy="214" r="64" fill="url(#gomb-test)" stroke="#98a3b0" stroke-width="1.7"/>
+    <g class="gomb-gurul" clip-path="url(#gomb-kor)">
+      <circle cx="120" cy="214" r="64" fill="none" stroke="#f97316" stroke-width="4" stroke-dasharray="30 22"/>
+      <circle cx="120" cy="182" r="17" fill="#f97316" opacity="0.92"/>
+      <circle cx="120" cy="182" r="9" fill="#e2e8ef"/>
+      <circle cx="152" cy="238" r="15" fill="#f97316" opacity="0.92"/>
+      <circle cx="152" cy="238" r="8" fill="#e2e8ef"/>
+      <circle cx="88" cy="240" r="13" fill="#f97316" opacity="0.92"/>
+      <circle cx="88" cy="240" r="7" fill="#e2e8ef"/>
+      <circle cx="120" cy="214" r="47" fill="none" stroke="#cbd4de" stroke-width="2.6"/>
+      <circle cx="120" cy="214" r="30" fill="none" stroke="#cbd4de" stroke-width="2.2"/>
+      <path d="M 120 150 L 120 278 M 56 214 L 184 214" stroke="#cbd4de" stroke-width="2.2"/>
+    </g>
+    <circle class="gomb-feny" cx="120" cy="214" r="11" fill="#f97316" opacity="0.35" filter="url(#gomb-lagy)"/>
+
+    <!-- fej: kúpos, lebeg -->
+    <g class="gomb-fej">
+      <path d="M 96 152 L 144 152 L 137 108 Q 120 100 103 108 Z" fill="url(#gomb-fej)" stroke="#98a3b0" stroke-width="1.6"/>
+      <rect x="98" y="144" width="44" height="9" rx="4.5" fill="#98a3b0"/>
+      <rect x="104" y="118" width="32" height="16" rx="7" fill="#1f2937"/>
+      <ellipse class="szem gomb-feny" cx="113" cy="126" rx="4.4" ry="5.4" fill="#f97316" filter="url(#gomb-lagy)"/>
+      <ellipse class="szem gomb-feny" cx="127" cy="126" rx="4.4" ry="5.4" fill="#f97316" filter="url(#gomb-lagy)"/>
+      <path d="M 108 112 q 12 -6 24 0" stroke="#f97316" stroke-width="3" fill="none" stroke-linecap="round"/>
+      <line x1="106" y1="106" x2="100" y2="90" stroke="#98a3b0" stroke-width="2.4" stroke-linecap="round"/>
+      <line x1="134" y1="106" x2="140" y2="90" stroke="#98a3b0" stroke-width="2.4" stroke-linecap="round"/>
+      <circle cx="99" cy="87" r="3.4" fill="#f97316"/>
+      <circle cx="141" cy="87" r="3.4" fill="#f97316"/>
+    </g>
+  </g>
+</svg>

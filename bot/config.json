@@ -1,0 +1,48 @@
+{
+  "botName": "Házirobot",
+  "avatar": "avatar/hazirobot.svg",
+  "proxy": {
+    "baseUrl": "http://127.0.0.1:4123/v1",
+    "route": "fast-chat",
+    "timeoutMs": 120000
+  },
+  "llm": {
+    "enabled": true
+  },
+  "email": {
+    "enabled": true,
+    "dryRun": true,
+    "from": "",
+    "to": [],
+    "smtp": {
+      "host": "",
+      "port": 587,
+      "secure": false,
+      "user": ""
+    }
+  },
+  "far": {
+    "callbackUrl": "https://example.org/api/far/resztvevo",
+    "ertesitesTo": [],
+    "cdpUrl": "http://127.0.0.1:9333",
+    "executorMode": "local",
+    "sshHost": "user@example-host",
+    "sshRunDir": "/home/user/far-survey",
+    "dryRun": true
+  },
+  "paths": {
+    "state": "state/bot.db",
+    "reports": "reports",
+    "outbox": "state/outbox",
+    "runs": "state/runs",
+    "jobs": "jobs"
+  },
+  "limits": {
+    "defaultBudgetUsd": 0.05,
+    "maxRunsPerDay": 100
+  },
+  "avatarAlterego": {
+    "aktiv": "bender",
+    "auto": 1800
+  }
+}

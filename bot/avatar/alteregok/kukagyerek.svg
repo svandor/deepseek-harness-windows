@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Kuka-gyerek — a WALL-E ihlette: alacsony, kockás test, távcső-szerű nyak,
+  binokuláris fej, napszem alakú szemek, lánctalp, elöl sárga-fekete veszélycsík.
+
+  Mozgás: kíváncsi oldalazás, a fej előre-hátra billen.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 320" width="240" height="320" role="img" aria-label="Kuka-gyerek">
+  <defs>
+    <linearGradient id="kuka-test" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#a97b22"/>
+      <stop offset="26%" stop-color="#e8b74a"/>
+      <stop offset="54%" stop-color="#fbd97a"/>
+      <stop offset="100%" stop-color="#a97b22"/>
+    </linearGradient>
+    <linearGradient id="kuka-fej" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fbd97a"/>
+      <stop offset="100%" stop-color="#c08f2c"/>
+    </linearGradient>
+    <pattern id="kuka-csik" width="14" height="10" patternUnits="userSpaceOnUse">
+      <rect width="14" height="10" fill="#facc15"/>
+      <rect width="7" height="10" fill="#1f2937"/>
+    </pattern>
+    <filter id="kuka-lagy" x="-70%" y="-70%" width="240%" height="240%">
+      <feGaussianBlur stdDeviation="2.6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <style>
+    .lebeg { animation: lebeg 3.4s ease-in-out infinite; }
+    @keyframes lebeg { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+    .szem { transform-box: fill-box; transform-origin: center; animation: pislog 5.2s ease-in-out infinite; }
+    @keyframes pislog { 0%,92%,100% { transform: scaleY(1); } 95% { transform: scaleY(0.08); } }
+
+    .kuka-sassze { transform-box: view-box; transform-origin: 120px 288px; animation: kuka-sassze 3.4s ease-in-out infinite; }
+    @keyframes kuka-sassze { 0%,100% { transform: translateX(-5px) rotate(-1.2deg); } 50% { transform: translateX(5px) rotate(1.2deg); } }
+
+    .kuka-fej { transform-box: view-box; transform-origin: 120px 140px; animation: kuka-fej 3.4s ease-in-out infinite; }
+    @keyframes kuka-fej { 0%,100% { transform: rotate(-6deg); } 50% { transform: rotate(7deg); } }
+
+    .kuka-kar { transform-box: view-box; transform-origin: 82px 158px; animation: kuka-kar 2.8s ease-in-out infinite; }
+    @keyframes kuka-kar { 0%,100% { transform: rotate(0deg); } 50% { transform: rotate(-22deg); } }
+  </style>
+
+  <!-- talajárnyék -->
+  <ellipse cx="120" cy="292" rx="58" ry="10" fill="#000" opacity="0.28"/>
+
+  <g class="lebeg">
+    <g class="kuka-sassze">
+      <!-- lánctalp -->
+      <rect x="78" y="234" width="84" height="40" rx="14" fill="#3f4650" stroke="#2a3038" stroke-width="1.5"/>
+      <circle cx="92" cy="254" r="9" fill="#6b7480"/><circle cx="112" cy="254" r="9" fill="#8b94a0"/>
+      <circle cx="132" cy="254" r="9" fill="#6b7480"/><circle cx="150" cy="254" r="9" fill="#8b94a0"/>
+      <rect x="72" y="248" width="96" height="8" rx="4" fill="#2a3038"/>
+
+      <!-- kar: vékony, felemelve -->
+      <g class="kuka-kar">
+        <rect x="75" y="152" width="13" height="34" rx="6.5" fill="#c08f2c" stroke="#8a6420" stroke-width="1.2"/>
+        <rect x="75" y="180" width="13" height="30" rx="6.5" fill="#e8b74a" stroke="#8a6420" stroke-width="1.2"/>
+        <rect x="68" y="206" width="26" height="15" rx="7" fill="#8b94a0" stroke="#5c646e" stroke-width="1.3"/>
+        <path d="M 68 208 l -7 -5 M 94 208 l 7 -5" stroke="#5c646e" stroke-width="2.4" stroke-linecap="round" fill="none"/>
+      </g>
+
+      <!-- test: kocka -->
+      <rect x="82" y="146" width="76" height="90" rx="10" fill="url(#kuka-test)" stroke="#8a6420" stroke-width="1.7"/>
+      <rect x="82" y="214" width="76" height="16" rx="3" fill="url(#kuka-csik)" opacity="0.92"/>
+      <rect x="96" y="176" width="48" height="26" rx="6" fill="#5c4a22"/>
+      <rect x="101" y="182" width="15" height="6" rx="2.5" fill="#4ade80"/>
+      <rect x="124" y="182" width="15" height="6" rx="2.5" fill="#fbbf24"/>
+      <rect x="101" y="192" width="38" height="5" rx="2.5" fill="#93c5fd"/>
+      <path d="M 92 158 q 28 10 56 0" stroke="#8a6420" stroke-width="2" fill="none" opacity="0.7"/>
+
+      <!-- nyak: távcső-szerű, rugós -->
+      <rect x="112" y="118" width="16" height="30" rx="5" fill="#8b94a0" stroke="#5c646e" stroke-width="1.2"/>
+      <rect x="110" y="126" width="20" height="4" rx="2" fill="#5c646e"/>
+      <rect x="110" y="136" width="20" height="4" rx="2" fill="#5c646e"/>
+
+      <!-- fej: binokuláris -->
+      <g class="kuka-fej">
+        <rect x="94" y="64" width="52" height="54" rx="16" fill="url(#kuka-fej)" stroke="#8a6420" stroke-width="1.7"/>
+        <circle cx="108" cy="90" r="14" fill="#1f2937"/>
+        <circle cx="132" cy="90" r="14" fill="#1f2937"/>
+        <circle class="szem" cx="108" cy="90" r="8" fill="#67e8f9" filter="url(#kuka-lagy)"/>
+        <circle class="szem" cx="132" cy="90" r="8" fill="#67e8f9" filter="url(#kuka-lagy)"/>
+        <rect x="98" y="66" width="44" height="8" rx="4" fill="#fbd97a" opacity="0.85"/>
+        <path d="M 104 110 q 16 7 32 0" stroke="#8a6420" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+      </g>
+    </g>
+  </g>
+</svg>

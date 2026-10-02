@@ -1,0 +1,99 @@
+# --- titkok és helyi állapot (SOHA ne kerüljön a repóba) ----------------------
+state/
+*.credentials.yaml
+.credentials.yaml
+settings.yaml
+*.pid
+harness.url
+window-geometry.txt
+tray-config.json
+*.log
+logs/
+
+# --- biztonsági mentések ------------------------------------------------------
+*.bak
+*.bak-*
+*.recover-backup
+*.deploy-backup
+*.bak[0-9]*
+*~
+
+# --- generált riportok és futásidejű állapot (providers) ----------------------
+# A retune.mjs / chain-doctor.mjs ide írja a futás riportjait és naplóját.
+# Ezek futásonként keletkeznek, nem tartoznak a repóba.
+providers/reports/
+providers/*.pid
+providers/config.json.bak-*
+
+# --- automatizált (headless) futások csatornája --------------------------------
+# A providers\run-headless-task.ps1 ide indítja a gépi futásokat, hogy azok
+# session-jei ne a projekt sávjába kerüljenek (a DSH minden ilyen könyvtárat
+# külön munkaterületként csoportosít).
+.automation/
+
+# --- fejlesztési/testkörnyezet ------------------------------------------------
+.test-dsh-home/
+.tmp-*/
+plugins/*/node_modules/
+node_modules/
+
+# --- build kimenetek ----------------------------------------------------------
+# A bin\ célzottan BENNE VAN a repóban (a kész launcher exe), de a köztes
+# fájlok nem.
+obj/
+*.user
+*.suo
+.vs/
+
+# Telepítési maradványok a bin\-ben: NEM tartoznak a repóba.
+#   * DshWindow.exe.old-<időbélyeg>  a tools\build-window.ps1 átnevezett példánya
+#     (a futó ablak foglalja az eredetit, ezért átnevezéssel lehet fordítani),
+#   * <guid>_DshWindow.exe           a Windows tálcára tűzéshez készített másolat.
+bin/*.old-*
+bin/*_DshWindow.exe
+
+# --- kiadási csomagok ---------------------------------------------------------
+# A portable ZIP, a telepítő EXE és a staging mappa futásonként keletkezik.
+# A kiadáshoz a GitHub Release-hez kerülnek fel, nem a repóba.
+dist/
+
+# --- Házirobot (bot) -----------------------------------------------------------
+# Titkok és futásidejű állapot: SOHA nem kerül a repóba.
+bot/secrets.json
+bot/state/
+bot/reports/
+bot/**/.callback_secret
+
+# --- Házirobot: GÉPENKÉNTI, PRIVÁT feladatok és integrációk ---------------------
+#
+# A robot KERETRENDSZERE nyilvános (panel, konzol, job-futtató, avatarok, napló,
+# őrfolyam), de az, hogy KI milyen feladatot állít be és milyen külső rendszerhez
+# köti, senki másra nem tartozik. Ezért ezek a helyek gépenkéntiek — a panel és
+# az agent a bot/extensions.json leíróból tudja meg, mi van telepítve.
+#
+# A minták benne maradnak, hogy a keretrendszer használata dokumentálva legyen.
+bot/extensions.json
+bot/far/
+bot/collect/
+bot/prompts/*
+!bot/prompts/pelda-*.md
+bot/jobs/*.json
+!bot/jobs/pelda-*.json
+bot/deploy-remote.ps1
+bot/tests/fixtures/
+bot/tests/rules.test.mjs
+
+# Az avatar-alapanyag munkakönyvtárai (nagy bináris letöltések).
+bot/avatar/src/dl-*/
+bot/avatar/src/*.mhtml
+bot/avatar/src/meta.json
+bot/avatar/src/storyboard/sprite-*
+bot/avatar/src/storyboard/downloads/
+bot/avatar/src/video.*
+
+# --- Windows / editor ---------------------------------------------------------
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+*.swp

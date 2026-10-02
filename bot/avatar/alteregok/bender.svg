@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Bender — a Futurama ihlette: hengeres fej, szemetes-száj, gombszem, antennán
+  gömb, szivar a szájban.
+
+  Mozgás: hátradől, az antenna rezeg, füstkarika száll fel.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 320" width="240" height="320" role="img" aria-label="Bender">
+  <defs>
+    <linearGradient id="be-fem" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#707b88"/>
+      <stop offset="24%" stop-color="#c2ccd8"/>
+      <stop offset="54%" stop-color="#e8eef4"/>
+      <stop offset="100%" stop-color="#767f8b"/>
+    </linearGradient>
+    <linearGradient id="be-fej" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#dfe6ee"/>
+      <stop offset="100%" stop-color="#9aa5b3"/>
+    </linearGradient>
+    <filter id="be-lagy" x="-70%" y="-70%" width="240%" height="240%">
+      <feGaussianBlur stdDeviation="2.6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <style>
+    .lebeg { animation: lebeg 3.4s ease-in-out infinite; }
+    @keyframes lebeg { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+    .szem { transform-box: fill-box; transform-origin: center; animation: pislog 5.2s ease-in-out infinite; }
+    @keyframes pislog { 0%,92%,100% { transform: scaleY(1); } 95% { transform: scaleY(0.08); } }
+
+    .be-dol { transform-box: view-box; transform-origin: 120px 268px; animation: be-dol 4.2s ease-in-out infinite; }
+    @keyframes be-dol { 0%,100% { transform: rotate(-1.6deg); } 50% { transform: rotate(2.6deg); } }
+
+    .be-antenna { transform-box: view-box; transform-origin: 120px 56px; animation: be-antenna 1.5s ease-in-out infinite; }
+    @keyframes be-antenna { 0%,100% { transform: rotate(-7deg); } 50% { transform: rotate(7deg); } }
+
+    .be-kar-jobb { transform-box: view-box; transform-origin: 156px 138px; animation: be-kar 2.6s ease-in-out infinite; }
+    @keyframes be-kar { 0%,100% { transform: rotate(-6deg); } 50% { transform: rotate(-20deg); } }
+
+    .be-fust { animation: be-fust 3.2s ease-out infinite; }
+    @keyframes be-fust { 0% { transform: translate(0,0) scale(.35); opacity: .75; } 100% { transform: translate(20px,-46px) scale(1.5); opacity: 0; } }
+
+    .be-feny { animation: be-feny 2.1s steps(1) infinite; }
+    @keyframes be-feny { 0%,62% { opacity: .3; } 63%,100% { opacity: 1; } }
+  </style>
+
+  <!-- talajárnyék -->
+  <ellipse cx="120" cy="292" rx="54" ry="10" fill="#000" opacity="0.28"/>
+
+  <g class="lebeg">
+    <g class="be-dol">
+      <!-- lábak -->
+      <rect x="98" y="244" width="17" height="34" rx="8" fill="#8d98a5" stroke="#5f6a76" stroke-width="1.4"/>
+      <rect x="125" y="244" width="17" height="34" rx="8" fill="#8d98a5" stroke="#5f6a76" stroke-width="1.4"/>
+      <rect x="90" y="272" width="32" height="12" rx="6" fill="#5f6a76"/>
+      <rect x="119" y="272" width="32" height="12" rx="6" fill="#5f6a76"/>
+
+      <!-- test: hengeres, ajtóval -->
+      <rect x="84" y="134" width="72" height="112" rx="20" fill="url(#be-fem)" stroke="#5f6a76" stroke-width="1.7"/>
+      <rect x="98" y="156" width="44" height="68" rx="10" fill="#a9b4c1" stroke="#5f6a76" stroke-width="1.4"/>
+      <circle cx="134" cy="190" r="4" fill="#5f6a76"/>
+      <rect x="92" y="140" width="56" height="8" rx="4" fill="#c2ccd8"/>
+
+      <!-- karok -->
+      <rect x="72" y="142" width="15" height="52" rx="7.5" fill="url(#be-fem)" stroke="#5f6a76" stroke-width="1.3"/>
+      <rect x="72" y="188" width="15" height="44" rx="7.5" fill="#b6c0cc" stroke="#5f6a76" stroke-width="1.3"/>
+      <circle cx="79.5" cy="234" r="8.5" fill="#c2ccd8" stroke="#5f6a76" stroke-width="1.3"/>
+      <g class="be-kar-jobb">
+        <rect x="149" y="134" width="15" height="52" rx="7.5" fill="url(#be-fem)" stroke="#5f6a76" stroke-width="1.3"/>
+        <rect x="149" y="180" width="15" height="44" rx="7.5" fill="#b6c0cc" stroke="#5f6a76" stroke-width="1.3"/>
+        <circle cx="156.5" cy="226" r="8.5" fill="#c2ccd8" stroke="#5f6a76" stroke-width="1.3"/>
+      </g>
+
+      <!-- nyak -->
+      <rect x="110" y="118" width="20" height="22" rx="5" fill="#8d98a5" stroke="#5f6a76" stroke-width="1.2"/>
+
+      <!-- fej: henger -->
+      <rect x="96" y="56" width="48" height="66" rx="16" fill="url(#be-fej)" stroke="#5f6a76" stroke-width="1.7"/>
+      <rect x="92" y="74" width="56" height="12" rx="6" fill="#8d98a5"/>
+      <circle class="szem be-feny" cx="110" cy="66" r="6" fill="#22d3ee" filter="url(#be-lagy)"/>
+      <circle class="szem be-feny" cx="130" cy="66" r="6" fill="#22d3ee" filter="url(#be-lagy)"/>
+      <!-- szemetes-száj -->
+      <rect x="104" y="92" width="32" height="18" rx="4" fill="#3f4650"/>
+      <rect x="106" y="96" width="28" height="2.6" fill="#8d98a5"/>
+      <rect x="106" y="101" width="28" height="2.6" fill="#8d98a5"/>
+      <rect x="106" y="106" width="28" height="2.6" fill="#8d98a5"/>
+      <!-- antenna -->
+      <g class="be-antenna">
+        <line x1="120" y1="56" x2="120" y2="34" stroke="#9aa5b2" stroke-width="2.6"/>
+        <circle cx="120" cy="30" r="5.4" fill="#22d3ee" filter="url(#be-lagy)"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- szivar és füst (a szájtől felfelé) -->
+  <g class="be-dol">
+    <rect x="134" y="98" width="30" height="9" rx="4.5" fill="#7c4a21" transform="rotate(-12 134 102)"/>
+    <circle cx="163" cy="97" r="4" fill="#f97316" class="be-feny"/>
+    <circle class="be-fust" cx="168" cy="92" r="9" fill="none" stroke="#b9c3cf" stroke-width="3" opacity="0.6"/>
+  </g>
+</svg>

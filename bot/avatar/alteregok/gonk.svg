@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Gonk — a Csillagok háborúja GNK power droidjának ihletett változata:
+  négyzetes, láda alakú test, rövid vastag lábak, lapos fejtető, oldalt kábelek,
+  elöl sárga-fekete szolgálati csík.
+
+  Mozgás: nehézkes, apró léptű dülöngélés — a lábak felváltva emelkednek.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 320" width="240" height="320" role="img" aria-label="Gonk">
+  <defs>
+    <linearGradient id="gonk-fem" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6e7885"/>
+      <stop offset="24%" stop-color="#b9c3cf"/>
+      <stop offset="56%" stop-color="#e2e8ef"/>
+      <stop offset="100%" stop-color="#79838f"/>
+    </linearGradient>
+    <linearGradient id="gonk-fedel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#d6dee7"/>
+      <stop offset="100%" stop-color="#8d98a5"/>
+    </linearGradient>
+    <pattern id="gonk-csik" width="16" height="12" patternUnits="userSpaceOnUse">
+      <rect width="16" height="12" fill="#eab308"/>
+      <rect width="8" height="12" fill="#1f2937"/>
+    </pattern>
+  </defs>
+
+  <style>
+    .lebeg { animation: lebeg 3.4s ease-in-out infinite; }
+    @keyframes lebeg { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+    .szem { transform-box: fill-box; transform-origin: center; animation: pislog 5.2s ease-in-out infinite; }
+    @keyframes pislog { 0%,92%,100% { transform: scaleY(1); } 95% { transform: scaleY(0.08); } }
+
+    .gonk-billeg { transform-box: view-box; transform-origin: 120px 288px; animation: gonk-billeg 1.9s ease-in-out infinite; }
+    @keyframes gonk-billeg { 0%,100% { transform: rotate(-1.9deg); } 50% { transform: rotate(1.9deg); } }
+
+    .gonk-lab-bal { animation: gonk-lep-bal 1.9s ease-in-out infinite; }
+    @keyframes gonk-lep-bal { 0%,45%,100% { transform: translateY(0); } 20% { transform: translateY(-7px); } }
+
+    .gonk-lab-jobb { animation: gonk-lep-jobb 1.9s ease-in-out infinite; }
+    @keyframes gonk-lep-jobb { 0%,55%,100% { transform: translateY(0); } 78% { transform: translateY(-7px); } }
+  </style>
+
+  <!-- talajárnyék -->
+  <ellipse cx="120" cy="292" rx="62" ry="10" fill="#000" opacity="0.28"/>
+
+  <g class="lebeg">
+    <g class="gonk-billeg">
+      <!-- kábelek a test mögött -->
+      <path d="M 74 198 q -16 10 -11 26 q 4 13 14 16" stroke="#4b5563" stroke-width="3.4" fill="none" stroke-linecap="round"/>
+      <path d="M 166 198 q 16 10 11 26 q -4 13 -14 16" stroke="#4b5563" stroke-width="3.4" fill="none" stroke-linecap="round"/>
+
+      <!-- lábak -->
+      <g class="gonk-lab-bal">
+        <rect x="84" y="248" width="21" height="38" rx="7" fill="#7f8a97" stroke="#5f6a76" stroke-width="1.4"/>
+        <rect x="77" y="280" width="34" height="11" rx="5.5" fill="#5f6a76"/>
+      </g>
+      <g class="gonk-lab-jobb">
+        <rect x="135" y="248" width="21" height="38" rx="7" fill="#7f8a97" stroke="#5f6a76" stroke-width="1.4"/>
+        <rect x="129" y="280" width="34" height="11" rx="5.5" fill="#5f6a76"/>
+      </g>
+
+      <!-- test: négyzetes láda -->
+      <rect x="74" y="150" width="92" height="106" rx="11" fill="url(#gonk-fem)" stroke="#5f6a76" stroke-width="1.7"/>
+      <rect x="74" y="228" width="92" height="20" rx="3" fill="url(#gonk-csik)" opacity="0.92"/>
+      <rect x="70" y="136" width="100" height="18" rx="7" fill="url(#gonk-fedel)" stroke="#5f6a76" stroke-width="1.6"/>
+      <rect x="100" y="130" width="40" height="7" rx="3.5" fill="#6e7885"/>
+
+      <!-- szemrés -->
+      <rect x="90" y="174" width="60" height="17" rx="5" fill="#1f2937"/>
+      <circle class="szem" cx="106" cy="182.5" r="4.6" fill="#facc15"/>
+      <circle class="szem" cx="134" cy="182.5" r="4.6" fill="#facc15"/>
+
+      <!-- hűtőbordák -->
+      <rect x="88" y="202" width="64" height="4" rx="2" fill="#8d98a5"/>
+      <rect x="88" y="211" width="64" height="4" rx="2" fill="#8d98a5"/>
+      <rect x="88" y="220" width="64" height="4" rx="2" fill="#8d98a5"/>
+
+      <!-- csavarok -->
+      <circle cx="84" cy="162" r="3" fill="#5f6a76"/><circle cx="156" cy="162" r="3" fill="#5f6a76"/>
+      <circle cx="84" cy="244" r="3" fill="#5f6a76"/><circle cx="156" cy="244" r="3" fill="#5f6a76"/>
+    </g>
+  </g>
+</svg>

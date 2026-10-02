@@ -1,0 +1,14 @@
+# LiteLLM proxy függőségek.
+#
+# Telepítés venv-be (a pip a Temp mappába ír, amit a DSH sandbox
+# workspace-write módban letilt, ezért nem működik globális user-install):
+#
+#   cd "C:\Szerver\Deepseek Harness\providers"
+#   python -m venv .venv
+#   .\.venv\Scripts\python.exe -m pip install --upgrade pip
+#   .\.venv\Scripts\python.exe -m pip install -r requirements-litellm.txt
+#
+# Megjegyzés: a litellm wheel `cp310-abi3`, tehát Python 3.10+ alatt működik.
+# A jelenlegi rendszer-Python 3.14.3; ha a telepítés elhasal, használj
+# 3.12-es venv-et, vagy maradj a proxy.mjs-nél (az nulla függőség).
+litellm[proxy]>=1.102.1

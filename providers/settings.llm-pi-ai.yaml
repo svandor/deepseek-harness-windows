@@ -1,0 +1,335 @@
+# ============================================================================
+#  llm-pi-ai provider blokkok a DeepSeek Harness-hez
+#  DSH 0.1.5-rc.3  |  ~/.dsh/settings.yaml
+# ============================================================================
+#
+#  ÁLLAPOT: ez a sablon 2026-09-27-én ÉLŐ API-próbával ellenőrzött
+#  modell-id-ket tartalmaz. A `providers/check-providers.mjs` szkripttel
+#  bármikor újraellenőrizhető, hogy a felvett id-k léteznek-e még.
+#
+#  FONTOS TAPASZTALAT: a pi-ai katalógus beépített modell-listája és a
+#  provider ÉLŐ /v1/models végpontja rendszeresen eltér. A katalógusból
+#  felvett modellek egy része már nem létezik a providernél (mért példa:
+#  a groq llama-3.1-8b-instant és llama-3.3-70b-versatile ezen a napon
+#  nem szerepelt a Groq listáján). Ezért a "Fetch available models" gomb
+#  használata kötelező, a kézi gépelés helyett.
+#
+#  HASZNÁLAT
+#  --------
+#  Ez egy SABLON. A tartalmat másold a ~/.dsh/settings.yaml fájlba, a
+#  meglevő kulcsok MELLETT. A pi-ai adapter a dsh-base-ben már mountolva
+#  van; az első mentés után azonnal életbe lép, újraindítás nem kell.
+#
+#  A kulcsokat NE ide írd! A Web GUI: Settings -> Models -> API key mezőbe
+#  gépelve write-only módon a ~/.dsh/.credentials.yaml-ba kerülnek, és a
+#  settings.yaml csak az `apiKeyEnv` NEVET tárolja.
+#
+# ============================================================================
+
+llm-pi-ai:
+  providers:
+
+    # ------------------------------------------------------------------
+    # 1) HELYI OLLAMA
+    # ------------------------------------------------------------------
+    # Az Ollama OpenAI-kompatibilis végpontja: http://localhost:11434/v1
+    #
+    # FONTOS: az OpenAI-kompatibilis implementáció akkor is kér kulcsot vagy
+    # Authorization fejlécet, ha a helyi szerver nem. Ezért kell PLACEHOLDER
+    # érték (pl. "ollama") az OLLAMA_LOCAL_API_KEY referenciába.
+    #
+    # A modell id pontosan az Ollama tag legyen (ollama list).
+    #
+    # TOOL-CALLING — mért adat (providers/check-ollama.mjs):
+    # a 18 helyi modelledből 11 tud tool-callingot, és CSAK azok
+    # használhatók agent-loopban. Az `ollama_show` "capabilities" mezője
+    # dönt: ha nincs benne "tools", a modell nem fog eszközt hívni.
+    #
+    #   tools IGEN: glm-ocr, msallai02/racka:4b-4qkm, racka:latest,
+    #               qwen2.5:7b-instruct, llama3.1:8b, qwen3-vl:8b,
+    #               mistral-nemo, deepseek-r1:14b, qwen2.5:14b,
+    #               qwen2.5-coder:14b, gpt-oss:20b
+    #   tools NEM:  nomic-embed-text, qwen2.5-coder:1.5b-base, moondream,
+    #               gemma2:9b, minicpm-v, llava:13b, deepseek-coder-v2:16b
+    #
+    # FIGYELEM: a llava:13b és minicpm-v LÁT, de NEM tud tool-callingot —
+    # agent-loopban használhatatlanok. Az egyetlen helyi modell, ami
+    # láT ÉS tud toolt: a qwen3-vl:8b.
+    #
+    # KERÜLD a "*-base" modelleket: azok nyers előrejelzők, nem instruct-ok.
+    # Mért példa: a qwen2.5-coder:1.5b-base egy triviális kérésre
+    # "I have no idea what this means!"-ot válaszolt.
+    ollama-local:
+      displayName: Ollama
+      apiKeyEnv: OLLAMA_LOCAL_API_KEY      # placeholder: ertek = "ollama"
+      api: openai-completions
+      baseURL: http://localhost:11434/v1
+      models:
+        # --- általános, tool-callingra használható ---
+        - id: gpt-oss:20b
+          name: GPT-OSS 20B
+          contextWindow: 131072
+          # reasoning-modell: 16384 alatt a gondolatmenetére fut ki és
+          # ÜRES content-et ad
+          maxTokens: 16384
+        - id: qwen2.5-coder:14b
+          name: Qwen2.5 Coder 14B
+          contextWindow: 32768
+          maxTokens: 8192
+        - id: qwen2.5:14b
+          name: Qwen2.5 14B
+          contextWindow: 32768
+          maxTokens: 8192
+        - id: mistral-nemo:latest
+          name: Mistral Nemo
+          contextWindow: 131072
+          maxTokens: 8192
+        - id: llama3.1:8b
+          name: Llama 3.1 8B
+          contextWindow: 131072
+          maxTokens: 8192
+        - id: deepseek-r1:14b
+          name: DeepSeek R1 14B (helyi reasoning)
+          contextWindow: 131072
+          maxTokens: 16384
+        # --- gyors chores ---
+        - id: qwen2.5:7b-instruct
+          name: Qwen2.5 7B Instruct
+          contextWindow: 32768
+          maxTokens: 8192
+        # --- vízió ÉS tool-calling: az `input` KÖTELEZŐ, különben nem
+        #     megy át a kép. Ez az egyetlen helyi modelled, ami mindkettőt
+        #     tudja. ---
+        - id: qwen3-vl:8b
+          name: Qwen3-VL 8B (lát + tool)
+          contextWindow: 262144
+          maxTokens: 16384
+          input: [text, image]
+
+    # ------------------------------------------------------------------
+    # 2) GROQ  —  élő próbával ellenőrizve: 11 modell a végponton
+    # ------------------------------------------------------------------
+    # Ingyenes szint, nagyon gyors. Kulcs: https://console.groq.com/keys
+    #
+    # FIGYELEM: ezen a napon a Groq listáján NEM szerepelt a
+    # llama-3.1-8b-instant és a llama-3.3-70b-versatile. A használható
+    # szöveges modellek a gpt-oss család és a qwen3.8-27b.
+    groq:
+      displayName: Groq
+      apiKeyEnv: GROQ_API_KEY
+      models:
+        - id: openai/gpt-oss-120b
+          name: GPT OSS 120B
+          contextWindow: 131072
+          maxTokens: 65536
+        - id: openai/gpt-oss-20b
+          name: GPT OSS 20B
+          contextWindow: 131072
+          maxTokens: 65536
+        - id: qwen/qwen3.8-27b
+          name: Qwen3.8 27B
+          contextWindow: 131072
+          maxTokens: 16384
+
+    # ------------------------------------------------------------------
+    # 3) OPENROUTER  —  458 modell, ebből 21 valóban ingyenes
+    # ------------------------------------------------------------------
+    # Kulcs: https://openrouter.ai/keys
+    # Ellenőrzés: a /v1/models végpont pricing.prompt === "0" ÉS
+    # pricing.completion === "0" mezője jelöli az ingyeneseket.
+    #
+    # FIGYELEM: ezen a napon nem létezett a minimax/minimax-m2.7:free,
+    # minimax/minimax-m3:free és z-ai/glm-5.2:free.
+    #
+    # KIVÉTELEK a listán: a stealth/space-bunny-alpha ingyenes, de
+    # stealth-értékelő modell (bármikor eltűnhet, az adataidat naplózzák);
+    # a google/lyria-* pedig kép/hang generáló, nem chat-modell.
+    openrouter:
+      displayName: OpenRouter
+      apiKeyEnv: OPENROUTER_API_KEY
+      models:
+        - id: qwen/qwen3.8-27b:free
+          name: "Qwen3.8 27B (free)"
+          contextWindow: 262144
+          maxTokens: 235929
+        - id: nvidia/nemotron-3-super-120b-a12b:free
+          name: "NVIDIA: Nemotron 3 Super (free)"
+          contextWindow: 262144
+          maxTokens: 235929
+        - id: nvidia/nemotron-3-ultra-550b-a55b:free
+          name: "NVIDIA: Nemotron 3 Ultra (free)"
+          contextWindow: 1000000
+          maxTokens: 65536
+        - id: nvidia/nemotron-3.5-lightning:free
+          name: "NVIDIA: Nemotron 3.5 Lightning (free)"
+          contextWindow: 1000000
+          maxTokens: 65536
+        - id: thinkingmachines/inkling:free
+          name: "Thinking Machines: Inkling (free)"
+          contextWindow: 1048576
+          maxTokens: 262144
+        - id: thinkingmachines/inkling-small:free
+          name: "Thinking Machines: Inkling Small (free)"
+          contextWindow: 1048576
+          maxTokens: 262144
+        - id: dots-studio/dots-3-note-preview:free
+          name: "Dots Studio: Dots3-Note Preview (free)"
+          contextWindow: 512000
+          maxTokens: 460800
+        - id: cohere/north-mini-code:free
+          name: "Cohere: North Mini Code (free)"
+          contextWindow: 256000
+          maxTokens: 64000
+        - id: google/gemma-4-31b-it:free
+          name: "Google: Gemma 4 31B (free)"
+          contextWindow: 262144
+          maxTokens: 32768
+        - id: google/gemma-4-26b-a4b-it:free
+          name: "Google: Gemma 4 26B A4B (free)"
+          contextWindow: 262144
+          maxTokens: 32768
+        - id: inclusionai/ling-3.0-flash-sante:free
+          name: "inclusionAI: Ling 3.0 Flash Sante (free)"
+          contextWindow: 262144
+          maxTokens: 32768
+        - id: poolside/laguna-s-2.1:free
+          name: "Poolside: Laguna S 2.1 (free)"
+          contextWindow: 262144
+          maxTokens: 32768
+        - id: liquid/lfm-2.5-2.6b:free
+          name: "LiquidAI: LFM2.5-2.6B (free)"
+          contextWindow: 65536
+          maxTokens: 8192
+        - id: openrouter/free
+          name: Free Models Router
+          contextWindow: 200000
+          maxTokens: 4096
+
+    # ------------------------------------------------------------------
+    # 4) NVIDIA NIM  —  élő próbával ellenőrizve: 82 modell
+    # ------------------------------------------------------------------
+    # Ingyenes API-kulcs. A legerősebb ingyenes forrás ezen a listán.
+    #
+    # FIGYELEM: ezen a napon nem létezett a deepseek-ai/deepseek-v4-flash-0731
+    # és a deepseek-ai/deepseek-v4-pro-0813; helyettük deepseek-v4.1-flash van.
+    nvidia:
+      displayName: NVIDIA NIM
+      apiKeyEnv: NVIDIA_API_KEY
+      models:
+        - id: moonshotai/kimi-k3
+          name: Kimi K3
+          contextWindow: 1048576
+          maxTokens: 131072
+        - id: moonshotai/kimi-k2.6
+          name: Kimi K2.6
+          contextWindow: 262144
+          maxTokens: 262144
+        - id: nvidia/nemotron-3-ultra-550b-a55b
+          name: Nemotron 3 Ultra 550B
+          contextWindow: 1000000
+          maxTokens: 65536
+        - id: nvidia/nemotron-3-super-120b-a12b
+          name: Nemotron 3 Super 120B
+          contextWindow: 262144
+          maxTokens: 262144
+        - id: nvidia/nemotron-3.5-lightning-30b-a3b
+          name: Nemotron 3.5 Lightning 30B
+          contextWindow: 262144
+          maxTokens: 262144
+        - id: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+          name: Nemotron 3 Nano Omni (reasoning)
+          contextWindow: 256000
+          maxTokens: 65536
+        - id: deepseek-ai/deepseek-v4.1-flash
+          name: DeepSeek V4.1 Flash
+          contextWindow: 131072
+          maxTokens: 32768
+        - id: openai/gpt-oss-20b
+          name: GPT OSS 20B
+          contextWindow: 131072
+          maxTokens: 32768
+        - id: nvidia/llama-3.1-nemotron-ultra-253b-v1
+          name: Nemotron Ultra 253B
+          contextWindow: 128000
+          maxTokens: 16384
+
+    # ------------------------------------------------------------------
+    # 5) GOOGLE  —  élő próbával ellenőrizve: 50 modell
+    # ------------------------------------------------------------------
+    # Kulcs: https://aistudio.google.com/apikey
+    #
+    # FONTOS: a Google-kulcs API-kulcs (x-goog-api-key), NEM OAuth token.
+    # A pi-ai a hivatalos Google SDK-t használja, ami ezt a fejlécet küldi
+    # — ellenőrizve: HTTP 200. Ugyanez a kulcs Bearer tokenként 401-et ad,
+    # tehát ne keverd össze.
+    #
+    # FIGYELEM: ezen a napon nem létezett a gemini-3.1-flash-live-preview.
+    google:
+      displayName: Google
+      apiKeyEnv: GOOGLE_API_KEY
+      models:
+        - id: gemini-3.8-flash
+          name: Gemini 3.8 Flash
+          contextWindow: 1048576
+          maxTokens: 65536
+        - id: gemini-3.7-flash
+          name: Gemini 3.7 Flash
+          contextWindow: 1048576
+          maxTokens: 65536
+        - id: gemini-3.6-flash
+          name: Gemini 3.6 Flash
+          contextWindow: 1048576
+          maxTokens: 65536
+        - id: gemini-3.5-flash
+          name: Gemini 3.5 Flash
+          contextWindow: 1048576
+          maxTokens: 65536
+        - id: gemini-3.5-flash-lite
+          name: Gemini 3.5 Flash Lite
+          contextWindow: 1048576
+          maxTokens: 65536
+        - id: gemini-3.1-pro-preview
+          name: Gemini 3.1 Pro Preview
+          contextWindow: 1048576
+          maxTokens: 65536
+        - id: gemini-2.5-flash
+          name: Gemini 2.5 Flash
+          contextWindow: 1048576
+          maxTokens: 65536
+        - id: gemini-flash-latest
+          name: Gemini Flash Latest
+          contextWindow: 1048576
+          maxTokens: 65536
+        - id: gemma-4-31b-it
+          name: Gemma 4 31B IT
+          contextWindow: 262144
+          maxTokens: 32768
+
+    # ------------------------------------------------------------------
+    # 6) HELYI FALLBACK PROXY (a proxy/config.json láncát tükrözi)
+    # ------------------------------------------------------------------
+    # A proxy egyetlen OpenAI-kompatibilis végpontot ad, és a belső lánc
+    # szerint próbálkozik. A DSH számára ez EGY provider.
+    #
+    # Indítás:  .\start-fallback-proxy.ps1
+    # Ellenőrzés: curl http://127.0.0.1:4123/v1/models
+    local-fallback:
+      displayName: Helyi fallback proxy
+      apiKeyEnv: LOCAL_FALLBACK_API_KEY    # placeholder: ertek = "local"
+      api: openai-completions
+      baseURL: http://127.0.0.1:4123/v1
+      defaultContextWindow: 131072
+      defaultMaxTokens: 8192
+      models:
+        - id: deepseek-chat
+          name: "deepseek-chat (proxy: lanc)"
+          contextWindow: 131072
+          maxTokens: 16384
+        - id: fast-chat
+          name: "fast-chat (proxy: gyors lanc)"
+          contextWindow: 32768
+          maxTokens: 8192
+        - id: local-only
+          name: "local-only (proxy: csak helyi Ollama)"
+          contextWindow: 32768
+          maxTokens: 16384

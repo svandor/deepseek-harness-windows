@@ -1,0 +1,33 @@
+# Teszt-patch a headless profilhoz: ugyanaz az automatikus subagent-uzem,
+# mint a web profilban, hogy a lánc élesben ellenőrizhető legyen.
+#
+# A `subagent-worker` egy helyi proxyra mutat, ami a `worker` route-ot
+# (NVIDIA -> Groq -> OpenRouter -> Ollama) szolgálja ki.
+
+- insert:
+    - id: llm-pi-ai-subagent-worker
+      name: '@deepseek-ai/dsh-llm-pi-ai'
+      config:
+        providers:
+          subagent-worker:
+            displayName: Subagent worker (ingyenes fallback lanc)
+            apiKeyEnv: SUBAGENT_WORKER_API_KEY
+            api: openai-completions
+            baseURL: http://127.0.0.1:4123/v1
+            defaultContextWindow: 131072
+            defaultMaxTokens: 32768
+            models:
+              - id: worker
+                name: Worker (NVIDIA -> Groq -> OpenRouter -> Ollama)
+                contextWindow: 131072
+                maxTokens: 32768
+
+- id: tool-subagent
+  config:
+    provider: spawn
+    toolName: subagent
+    backgroundMode: continuable
+    agentOptions:
+      provider: subagent-worker
+      model: worker
+      maxTokens: 32768

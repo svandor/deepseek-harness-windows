@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Ezüst gépember — a "Clouds Across the Moon" (The Rah Band) videóklip
+  robot-utánzó táncosának ihletett változata: emberi alak, ezüstfestés,
+  hengeres sisakfej, kémcső-antenna, ízületes végtagok.
+
+  Mozgás: disco-ütemű csípőrizálás és karlendítés, a felületen csillanás fut
+  végig, a rivaldafény rózsaszín-kék.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 320" width="240" height="320" role="img" aria-label="Ezüst gépember">
+  <defs>
+    <linearGradient id="ez-test" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6f7a8a"/>
+      <stop offset="22%" stop-color="#cdd6e2"/>
+      <stop offset="50%" stop-color="#f4f8fc"/>
+      <stop offset="78%" stop-color="#b6c1cf"/>
+      <stop offset="100%" stop-color="#68727f"/>
+    </linearGradient>
+    <linearGradient id="ez-tag" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#93a0b0"/>
+      <stop offset="30%" stop-color="#eef3f8"/>
+      <stop offset="100%" stop-color="#a4b0bf"/>
+    </linearGradient>
+    <linearGradient id="ez-feny" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#ff9ecb" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#ffe0ef" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#8fd8ff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="ez-lagy" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <style>
+    .lebeg { animation: lebeg 3.4s ease-in-out infinite; }
+    @keyframes lebeg { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+    .szem { transform-box: fill-box; transform-origin: center; animation: pislog 5.2s ease-in-out infinite; }
+    @keyframes pislog { 0%,92%,100% { transform: scaleY(1); } 95% { transform: scaleY(0.08); } }
+
+    .ez-tanc { transform-box: view-box; transform-origin: 120px 284px; animation: ez-tanc 1.15s cubic-bezier(.36,0,.64,1) infinite; }
+    @keyframes ez-tanc { 0%,100% { transform: rotate(-3.4deg); } 50% { transform: rotate(3.4deg); } }
+
+    .ez-kar-jobb { transform-box: view-box; transform-origin: 152px 128px; animation: ez-jobb 1.15s ease-in-out infinite; }
+    @keyframes ez-jobb { 0%,100% { transform: rotate(8deg); } 50% { transform: rotate(-58deg); } }
+
+    .ez-kar-bal { transform-box: view-box; transform-origin: 88px 128px; animation: ez-bal 1.15s ease-in-out infinite; }
+    @keyframes ez-bal { 0%,100% { transform: rotate(-8deg); } 50% { transform: rotate(44deg); } }
+
+    .ez-lab-bal { transform-box: view-box; transform-origin: 104px 214px; animation: ez-lab 1.15s ease-in-out infinite; }
+    @keyframes ez-lab { 0%,100% { transform: rotate(-4.5deg); } 50% { transform: rotate(5.5deg); } }
+
+    .ez-fej { transform-box: view-box; transform-origin: 120px 100px; animation: ez-fej 2.3s ease-in-out infinite; }
+    @keyframes ez-fej { 0%,100% { transform: rotate(-4deg); } 50% { transform: rotate(5deg); } }
+
+    .ez-csillan { animation: ez-csillan 2.6s linear infinite; }
+    @keyframes ez-csillan { 0% { transform: translateX(-90px); opacity: 0; } 12% { opacity: .95; } 42% { transform: translateX(90px); opacity: 0; } 100% { opacity: 0; } }
+  </style>
+
+  <!-- talajárnyék -->
+  <ellipse cx="120" cy="292" rx="58" ry="10" fill="#000" opacity="0.28"/>
+
+  <g class="lebeg">
+    <g class="ez-tanc">
+      <!-- bal láb (tánclépés) -->
+      <g class="ez-lab-bal">
+        <rect x="96" y="210" width="18" height="58" rx="9" fill="url(#ez-test)" stroke="#6d7887" stroke-width="1.4"/>
+        <rect x="90" y="264" width="28" height="15" rx="7" fill="#dde5ee" stroke="#6d7887" stroke-width="1.4"/>
+      </g>
+      <!-- jobb láb -->
+      <rect x="127" y="210" width="18" height="58" rx="9" fill="url(#ez-test)" stroke="#6d7887" stroke-width="1.4"/>
+      <rect x="122" y="264" width="28" height="15" rx="7" fill="#dde5ee" stroke="#6d7887" stroke-width="1.4"/>
+
+      <!-- csípő és törzs -->
+      <rect x="94" y="194" width="52" height="24" rx="11" fill="url(#ez-tag)" stroke="#6d7887" stroke-width="1.4"/>
+      <rect x="88" y="118" width="64" height="84" rx="19" fill="url(#ez-test)" stroke="#6d7887" stroke-width="1.4"/>
+      <circle cx="120" cy="150" r="15" fill="#2a3542"/>
+      <circle cx="120" cy="150" r="8" fill="#8fd8ff" filter="url(#ez-lagy)"/>
+      <rect x="100" y="176" width="40" height="9" rx="4.5" fill="#8a95a3"/>
+      <circle cx="120" cy="140" r="2.4" fill="#6d7887"/><circle cx="120" cy="160" r="2.4" fill="#6d7887"/>
+      <rect class="ez-csillan" x="98" y="126" width="18" height="62" fill="url(#ez-feny)"/>
+
+      <!-- karok -->
+      <g class="ez-kar-jobb">
+        <rect x="145" y="120" width="16" height="50" rx="8" fill="url(#ez-test)" stroke="#6d7887" stroke-width="1.4"/>
+        <rect x="145" y="164" width="16" height="44" rx="8" fill="url(#ez-tag)" stroke="#6d7887" stroke-width="1.4"/>
+        <circle cx="153" cy="212" r="9" fill="#dde5ee" stroke="#6d7887" stroke-width="1.4"/>
+      </g>
+      <g class="ez-kar-bal">
+        <rect x="79" y="120" width="16" height="50" rx="8" fill="url(#ez-test)" stroke="#6d7887" stroke-width="1.4"/>
+        <rect x="79" y="164" width="16" height="44" rx="8" fill="url(#ez-tag)" stroke="#6d7887" stroke-width="1.4"/>
+        <circle cx="87" cy="212" r="9" fill="#dde5ee" stroke="#6d7887" stroke-width="1.4"/>
+      </g>
+
+      <!-- nyak -->
+      <rect x="110" y="100" width="20" height="22" rx="6" fill="#9aa5b3"/>
+
+      <!-- fej: hengeres sisak -->
+      <g class="ez-fej">
+        <rect x="97" y="42" width="46" height="60" rx="21" fill="url(#ez-tag)" stroke="#6d7887" stroke-width="1.5"/>
+        <rect x="103" y="58" width="34" height="27" rx="11" fill="#1b2430"/>
+        <ellipse class="szem" cx="113" cy="71" rx="5" ry="6.5" fill="#8fd8ff" filter="url(#ez-lagy)"/>
+        <ellipse class="szem" cx="127" cy="71" rx="5" ry="6.5" fill="#8fd8ff" filter="url(#ez-lagy)"/>
+        <rect x="90" y="58" width="8" height="20" rx="4" fill="#c3ccd8" stroke="#6d7887" stroke-width="1"/>
+        <rect x="142" y="58" width="8" height="20" rx="4" fill="#c3ccd8" stroke="#6d7887" stroke-width="1"/>
+        <rect x="108" y="90" width="24" height="6" rx="3" fill="#8a95a3"/>
+        <!-- kémcső-antenna -->
+        <line x1="120" y1="42" x2="120" y2="24" stroke="#9aa5b3" stroke-width="2.6"/>
+        <circle cx="120" cy="19" r="6" fill="#ff9ecb" filter="url(#ez-lagy)"/>
+      </g>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,51 @@
+{
+  "_comment": "TESZT konfiguráció: szándékosan rossz első provider + valódi helyi Ollama a lánc végén, hogy a fallback és a streaming éles körülmények között legyen ellenőrizhető.",
+
+  "host": "127.0.0.1",
+  "port": 4123,
+  "defaultRoute": "teszt-fallback",
+  "connectTimeoutMs": 20000,
+  "stallTimeoutMs": 60000,
+
+  "providers": {
+    "halott": {
+      "label": "Szándékosan halott végpont",
+      "baseURL": "http://127.0.0.1:59999/v1",
+      "apiKeyEnv": "NEM_LETEZO_KULCS",
+      "optionalKey": true,
+      "timeoutMs": 3000
+    },
+    "hibas-kulcs": {
+      "label": "Élő szerver, de 401",
+      "baseURL": "https://api.groq.com/openai/v1",
+      "apiKey": "szandekosan-hibas-kulcs"
+    },
+    "ollama": {
+      "label": "Ollama (helyi)",
+      "baseURL": "http://127.0.0.1:11434/v1",
+      "apiKeyEnv": "OLLAMA_LOCAL_API_KEY",
+      "optionalKey": true,
+      "timeoutMs": 300000
+    }
+  },
+
+  "routes": {
+    "teszt-fallback": {
+      "targets": [
+        "halott/nincs-ilyen-modell",
+        "hibas-kulcs/llama-3.3-70b-versatile",
+        "ollama/qwen2.5:7b-instruct"
+      ]
+    },
+    "teszt-stream": {
+      "targets": [
+        "ollama/qwen2.5:7b-instruct"
+      ]
+    },
+    "teszt-perjel": {
+      "targets": [
+        "hibas-kulcs/deepseek/deepseek-chat-v3.1:free"
+      ]
+    }
+  }
+}
