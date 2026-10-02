@@ -1,6 +1,6 @@
 {
   "name": "dsh-ui-extras",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "DeepSeek Harness UI extras: statistics panel (and later git/ssh/terminal panels).",
   "type": "module",

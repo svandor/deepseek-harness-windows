@@ -24,6 +24,10 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 
 const NO_HISTORY = process.argv.includes("--no-history");
+// Alapból a MOSTANI ág előzményét vizsgáljuk (azt, ami publikálásra kerül). A
+// `--all` a helyi, nem publikált ágakat (pl. egy megtartott privát előzményt) is
+// belevesz — ilyenkor a jelentés zajosabb, de teljes körű.
+const HISTORY_ALL = process.argv.includes("--all");
 
 /** A vizsgált minták. A `leiras` a jelentésben jelenik meg. */
 const PATTERNS = [
@@ -104,7 +108,7 @@ if (!NO_HISTORY) {
   const seenBlobs = new Set();
   let objects;
   try {
-    objects = git(["rev-list", "--objects", "--all"]).split(/\r?\n/u).filter(Boolean);
+    objects = git(["rev-list", "--objects", HISTORY_ALL ? "--all" : "HEAD"]).split(/\r?\n/u).filter(Boolean);
   } catch {
     objects = [];
   }
@@ -146,7 +150,7 @@ const current = [...unique.values()].filter((f) => !f.where.startsWith("előzmé
 const history = [...unique.values()].filter((f) => f.where.startsWith("előzmény "));
 
 console.log(`Vizsgált követett fájl: ${files.length}`);
-console.log(`Minta: ${PATTERNS.length}; előzmény vizsgálva: ${NO_HISTORY ? "nem" : "igen"}`);
+console.log(`Minta: ${PATTERNS.length}; előzmény: ${NO_HISTORY ? "nem vizsgálva" : (HISTORY_ALL ? "minden helyi ág (--all)" : "a mostani ág (HEAD)")}`);
 console.log(`Találat a MOSTANI fában: ${current.length}; a git-ELŐZMÉNYBEN: ${history.length}`);
 console.log("");
 
