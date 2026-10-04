@@ -1311,34 +1311,44 @@ namespace DshWindow
             "}catch(e){return 'error';}})();";
 
         /// <summary>
-        /// Célzott újrarajzolás a fókusz visszaadása UTÁN.
+        /// A karéta helyreállítása és ELLENŐRZÉSE a fókusz visszaadása után.
         ///
-        /// MIÉRT KELL: a napló szerint a mező fókuszban van (`caret:true`), a
-        /// karéta mégsem látszik — a beágyazott WebView2 renderelője a
-        /// visszaaktiválás után nem rajzolja újra a karétát. Ezért a lapon a
-        /// meglévő fókuszt MEGTARTVA „megmozdítjuk" a DOM-ot (kijelölés
-        /// visszaírása + kényszerű újratördelés + egy ismételt fókusz-esemény),
-        /// ami újrarajzolásra készteti a szerkesztőt. Egyszeri és idempotens:
-        /// nem blur-el és nem ciklusol, ezért nem tudja elrejteni a karétát
-        /// vagy az egérkurzort (azt a korábbi, ismétlődő blur/focus tette).
+        /// MIÉRT: a WebView2 renderelője a visszaaktiválás után nem rajzolja újra
+        /// a karétát, és a lap a fókusz elvesztésekor újraépítheti a szerkesztőt.
+        /// Ezért a meglévő fókuszt megtartva visszaírjuk a kijelölést, küldünk egy
+        /// ismételt fókusz-eseményt, majd 600/1200/2000 ms-mal később
+        /// ELLENŐRIZZÜK, hogy a mező még mindig fókuszban van-e — ha nem, újra
+        /// fókuszáljuk.
+        ///
+        /// MIÉRT NINCS BENNE display-kapcsolás: a `display:none` + visszaállítás
+        /// maga is elvehette a fókuszt, és a lap emiatt építette újra a
+        /// szerkesztőt (mért hiba: gépelés után eltűnt a karéta).
         /// </summary>
         public const string ResyncScript =
             "(function(){try{" +
-            "if(!window.__dshFocusKeeperLast)return;" +
-            "var el=window.__dshFocusKeeperLast;" +
-            "if(!document.contains(el)||document.activeElement!==el)return;" +
-            "var n=0,before=null;" +
-            "try{if(el.tagName==='TEXTAREA'||el.tagName==='INPUT'){n=(el.value||'').length;}" +
-            "else{var w=window.getSelection();if(w&&w.rangeCount>0)before=w.getRangeAt(0).cloneRange();}}" +
-            "catch(e){}" +
-            "try{el.focus();}catch(e){}" +
-            "try{var disp=el.style.display;el.style.display='none';" +
-            "void el.offsetHeight;el.style.display=disp;}catch(e){}" +
-            "try{if(el.tagName==='TEXTAREA'||el.tagName==='INPUT'){el.setSelectionRange(n,n);}" +
-            "else{var w2=window.getSelection();if(w2){w2.removeAllRanges();" +
-            "if(before){w2.addRange(before);}else{" +
-            "var r=document.createRange();r.selectNodeContents(el);r.collapse(false);w2.addRange(r);}}}}catch(e){}" +
-            "try{el.dispatchEvent(new FocusEvent('focus'));}catch(e){}" +
+            "function ok(e){return !!(e&&e.nodeType===1&&document.contains(e)&&e.getBoundingClientRect);}" +
+            "function pick(){var e=window.__dshFocusKeeperLast;" +
+            "if(!ok(e))e=document.activeElement;" +
+            "if(!ok(e)||e===document.body||e===document.documentElement)e=null;" +
+            "if(!e){var c=document.querySelectorAll('textarea,[contenteditable=\"true\"],input[type=\"text\"]');" +
+            "var best=0;for(var i=0;i<c.length;i++){var r=c[i].getBoundingClientRect(),a=r.width*r.height;" +
+            "if(ok(c[i])&&a>best){best=a;e=c[i];}}}" +
+            "return e;}" +
+            "function caret(e){try{return !!(e&&document.contains(e)&&document.activeElement===e);}catch(x){return false;}}" +
+            "function place(e){try{if(e.tagName==='TEXTAREA'||e.tagName==='INPUT'){" +
+            "var n=(e.value||'').length;e.setSelectionRange(n,n);return;}" +
+            "var w=window.getSelection();if(!w)return;w.removeAllRanges();" +
+            "var r=document.createRange();r.selectNodeContents(e);r.collapse(false);w.addRange(r);" +
+            "}catch(x){}}" +
+            "function attempt(el){try{el.focus();}catch(x){}place(el);" +
+            "try{el.dispatchEvent(new FocusEvent('focus'));}catch(x){}}" +
+            "var verify=function(){try{" +
+            "var e=pick();if(!e)return;" +
+            "if(caret(e)){window.__dshFocusKeeperLast=e;return;}" +
+            "attempt(e);" +
+            "}catch(x){}};" +
+            "var first=pick();if(first)attempt(first);" +
+            "setTimeout(verify,600);setTimeout(verify,1200);setTimeout(verify,2000);" +
             "}catch(e){}})();";
 
         public static void RegisterPane(int index, DshWebViewHost host)
@@ -1844,15 +1854,12 @@ namespace DshWindow
 
                 // Az egérmutató „beragadhat": a WebView2 a visszaaktiválás után
                 // nem rajzolja újra a kurzort, ezért eltűnik a panel fölött.
-                // Egy 1 képpontos mozdítás és vissza WM_SETCURSOR-t vált ki,
-                // amitől a kurzor újrarajzolódik — kattintás és kijelölés nélkül.
-                Win32.POINT cursor;
-                if (Win32.GetCursorPos(out cursor))
-                {
-                    Win32.SetCursorPos(cursor.X + 1, cursor.Y);
-                    System.Threading.Thread.Sleep(15);
-                    Win32.SetCursorPos(cursor.X, cursor.Y);
-                }
+                // MOZGATÁS NÉLKÜL kérünk kurzor-újraszámolást: a WM_SETCURSOR
+                // üzenet hatására a WebView2 újra kiírja a kurzort. (A korábbi
+                // 1 képpontos SetCursorPos épp maga billentette el a kurzor
+                // állapotát — mért hiba: gépelés közben eltűnt a mutató.)
+                Win32.SendMessage(child, Win32.WM_SETCURSOR, child,
+                    (IntPtr)((Win32.HTCLIENT << 16) | Win32.WM_MOUSEMOVE));
             }
             catch (Exception ex)
             {
@@ -2036,6 +2043,9 @@ namespace DshWindow
         public const int WM_NCACTIVATE = 0x0086;
         public const int WM_PARENTNOTIFY = 0x0210;
         public const int WM_LBUTTONDOWN = 0x0201;
+        public const int WM_SETCURSOR = 0x0020;
+        public const int WM_MOUSEMOVE = 0x0200;
+        public const int HTCLIENT = 1;
         public const uint GA_ROOT = 2;
 
         [DllImport("user32.dll")]
