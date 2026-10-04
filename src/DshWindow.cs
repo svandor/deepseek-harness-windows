@@ -75,6 +75,22 @@ namespace DshWindow
             Logger.Init(opts.LogFile);
             Logger.Info("launcher start: pid=" + Process.GetCurrentProcess().Id + " args=" + string.Join(" ", args));
 
+            // A futo peldany kora: a hibakeresesnel ez donti el, hogy a javitott
+            // vagy egy korabbi exe fut-e (a talca "Megnyitas" gombja ugyanis a
+            // MAR futo ablakot hozza eloterbe, uj ablakot nem nyit).
+            try
+            {
+                string own = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                if (!string.IsNullOrEmpty(own) && File.Exists(own))
+                {
+                    Logger.Info("build: " + File.GetLastWriteTime(own).ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
+                        + " (" + own + ")");
+                }
+            }
+            catch
+            {
+            }
+
             try
             {
                 return Run(opts);
@@ -265,6 +281,8 @@ namespace DshWindow
 
                 var pane = new DshWebViewHost(paneUrl, opts, OnHarnessUrlAnnounced, i, isHarnessPane);
                 hosts.Add(pane);
+                FocusKeeper.RegisterPane(i, pane);
+                if (opts.FocusProbe) Probe.RegisterPane(i, pane);
                 Grid.SetColumn(pane, i * 2);
                 content.Children.Add(pane);
 
@@ -369,6 +387,80 @@ namespace DshWindow
                 IntPtr hwnd = new WindowInteropHelper(window).Handle;
                 try { DarkTitleBar.Apply(hwnd); }
                 catch (Exception ex) { Logger.Info("dark title bar not applied: " + ex.Message); }
+
+                // A WPF saját aktiválás-eseménye: minden visszatérésnél megjön
+                // (a WM_ACTIVATE hook néha nem fut le — mért eset), ezért innen
+                // is elindítjuk a fókusz helyreállítását.
+                window.Activated += (ws, we) =>
+                {
+                    try
+                    {
+                        DshWebViewHost target = FocusKeeper.PendingPane;
+                        Logger.Info("window activated (WPF): target="
+                            + (target == null ? "-" : (target.PaneIndex + 1).ToString(CultureInfo.InvariantCulture)));
+                        // Csak késleltetve állítunk vissza: a korai (0 ms-os) próba
+                        // egybeesik a WPF saját fókusz-áthelyezésével, ezért az
+                        // mindig felülírta (mért hiba).
+                        FocusKeeper.RestoreTargetSoon(target, "window activated (WPF)");
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Info("focus restore on Activated failed: " + ex.Message);
+                    }
+                };
+                window.Deactivated += (ws, we) =>
+                {
+                    FocusKeeper.Freeze();
+                    if (Probe.Enabled) Probe.Note("window deactivated (WPF)", IntPtr.Zero);
+                };
+
+                // Amikor a felhasználó visszatér az ablakhoz (Alt+Tab, tálca),
+                // a WebView2 gyermekablak nem biztos, hogy visszakapja a
+                // fókuszt — a kurzor ezért tűnt el a chat mezőből. Itt adjuk
+                // vissza, még az aktiválás feldolgozása előtt.
+                try
+                {
+                    var source = HwndSource.FromHwnd(hwnd);
+                    if (source != null)
+                    {
+                        source.AddHook((IntPtr h, int msg, IntPtr wParam, IntPtr lParam, ref bool handled) =>
+                        {
+                            // A lap azt jelezte, hogy visszaaktiválás után is
+                            // veszített fókuszt; ez a sor mondja meg, hogy az
+                            // ABLAK szintjén történt-e (WM_ACTIVATE 0 = inaktív).
+                            if ((msg == Win32.WM_ACTIVATE || msg == Win32.WM_NCACTIVATE) && Probe.Enabled)
+                            {
+                                Probe.Note("top " + Probe.MsgName(msg) + " wparam="
+                                    + wParam.ToInt64().ToString(CultureInfo.InvariantCulture), IntPtr.Zero);
+                            }
+                            if (msg == Win32.WM_ACTIVATE
+                                && (wParam.ToInt64() & 0xFFFF) != 0)
+                            {
+                                // AKTIVÁLÁS: a cél a fókuszvesztés pillanatában
+                                // rögzített panel. A zár csak később oldódik,
+                                // mert a WPF az aktiválás közben az ELSŐ panelre
+                                // teszi a fókuszt, és annak jelzése felülírná a
+                                // célunkat (mért hiba).
+                                DshWebViewHost target = FocusKeeper.PendingPane;
+                                Logger.Info("window activated (hook): target="
+                                    + (target == null ? "-" : (target.PaneIndex + 1).ToString(CultureInfo.InvariantCulture)));
+                                FocusKeeper.RestoreTargetSoon(target, "window activated");
+                                if (Probe.Enabled) Probe.ScheduleDump();
+                            }
+                            else if (msg == Win32.WM_KILLFOCUS || msg == Win32.WM_NCACTIVATE
+                                || msg == Win32.WM_ACTIVATE)
+                            {
+                                // DEAKTIVÁLÁS: lezárjuk a célt.
+                                FocusKeeper.Freeze();
+                            }
+                            return IntPtr.Zero;
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Info("focus hook not installed: " + ex.Message);
+                }
             };
 
             ScheduleAutoClose(window, opts.CloseAfterSeconds);
@@ -450,6 +542,24 @@ namespace DshWindow
         private System.Windows.Threading.DispatcherTimer _tokenWatch;
         private DateTime _tokenWatchSince;
 
+        /// <summary>The child HWND WebView2 renders into (focus target).</summary>
+        internal IntPtr ChildHandle { get { return _child; } }
+
+        /// <summary>The pane's root window in its own OS window tree.</summary>
+        internal IntPtr RootHandle
+        {
+            get { return _child == IntPtr.Zero ? IntPtr.Zero : Win32.GetAncestor(_child, Win32.GA_ROOT); }
+        }
+
+        /// <summary>The pane's WebView2 core, or null before it is ready.</summary>
+        internal CoreWebView2 Core
+        {
+            get { return _controller == null ? null : _controller.CoreWebView2; }
+        }
+
+        /// <summary>The pane's controller, or null before it is ready.</summary>
+        internal CoreWebView2Controller Controller { get { return _controller; } }
+
         /// <summary>Zero-based pane position; it selects this pane's profile folder.</summary>
         public int PaneIndex { get { return _paneIndex; } }
 
@@ -491,6 +601,11 @@ namespace DshWindow
             if (msg == Win32.WM_SIZE || msg == Win32.WM_DPICHANGED)
             {
                 Resize();
+            }
+
+            if (Probe.Enabled && msg != Win32.WM_SIZE && msg != Win32.WM_DPICHANGED)
+            {
+                Probe.Note("pane " + (_paneIndex + 1) + " host-proc " + Probe.MsgName(msg), _child);
             }
             return IntPtr.Zero;
         }
@@ -587,6 +702,37 @@ namespace DshWindow
 
                 var core = _controller.CoreWebView2;
                 Configure(core);
+                FocusKeeper.Attach(this, core);
+
+                // A vezérlő saját fókusz-eseményei: a WebView2 hivatalos jelzése
+                // arról, hogy ez a panel vette át a billentyűzet-fókuszt.
+                try
+                {
+                    _controller.GotFocus += (s, e) =>
+                    {
+                        // A WebView2 saját jelzése: ez a panel vette át a
+                        // fókuszt. Ebből tartunk nyilván EGY aktív panelt, és a
+                        // visszatéréskor ide adjuk vissza — nincs kérdezősködés,
+                        // nincs koordináta-számítás, nincs versenyhelyzet.
+                        FocusKeeper.NoteActive(this);
+                        Logger.Info("controller focus: pane " + (_paneIndex + 1) + " got focus");
+                    };
+                    _controller.LostFocus += (s, e) =>
+                    {
+                        FocusKeeper.NoteLost(this);
+                        Logger.Info("controller focus: pane " + (_paneIndex + 1) + " lost focus");
+                    };
+                    _controller.MoveFocusRequested += (s, e) =>
+                    {
+                        Logger.Info("controller focus: pane " + (_paneIndex + 1)
+                            + " requests move (" + e.Reason + ")");
+                    };
+                }
+                catch (Exception ex)
+                {
+                    Logger.Info("controller focus events not attached: " + ex.Message);
+                }
+
                 _controller.BoundsMode = CoreWebView2BoundsMode.UseRawPixels;
 
                 // The surface WebView2 paints before (and outside) the page
@@ -1029,12 +1175,921 @@ namespace DshWindow
         }
     }
 
+    // ----------------------------------------------------------- focus keeper
+
+    /// <summary>
+    /// Keeps the text cursor in the field the user was typing in.
+    ///
+    /// MIÉRT KELL: a beépített WebView2 ablak elveszti a lap szintű fókuszt, ha
+    /// a felhasználó átvált egy másik programra, majd visszatér. A panel
+    /// HwndHost-gyermekablaka a visszaaktiváláskor már fókuszt kap, ezért a
+    /// natív `SetFocus` önmagában NEM hozza vissza a kurzort: a böngésző a
+    /// DOM-szintű fókuszt nem állítja vissza, és a chat beviteli mezőjébe újra
+    /// bele kell kattintani. A javítás a lapon jegyzi meg az utolsó
+    /// szövegbeviteli elemet, és amikor az ablak visszakapja a fókuszt
+    /// (miközben semmi mást nem jelölt ki a felhasználó), visszaadja neki a
+    /// fókuszt — pontosan úgy, mintha odakattintott volna.
+    ///
+    /// WHY: switching to another Windows task and back lost the caret in the
+    /// chat input; the pane's child HWND regains focus but the page-level focus
+    /// is not restored, so the user had to click the field again. This layer
+    /// remembers the last text-editable element per pane and restores it when
+    /// the window regains activation.
+    /// </summary>
+    internal static class FocusKeeper
+    {
+        private static readonly List<DshWebViewHost> Panes = new List<DshWebViewHost>();
+        private static readonly object Sync = new object();
+        private static DshWebViewHost _lastPane;
+
+        /// <summary>
+        /// A fókusz elvesztésének pillanatában fókuszban lévő panel. Ezt kell
+        /// visszakapnia a fókusznak — NEM a lap oldaláról jelentett „aktív"
+        /// panelt, mert az megbízhatatlan (mért hiba: a robot panel és a
+        /// munka-panelek is jelentkeztek, és a visszatérés mindig az 1. panelre
+        /// ment).
+        /// </summary>
+        private static DshWebViewHost _pendingPane;
+
+        /// <summary>Az aktiválási zaj ablaka: eddig nem írja felül a fókusz-jelzés a célt.</summary>
+        private static DateTime _freezeAt = DateTime.MinValue;
+
+        /// <summary>A fókuszvesztés pillanatában rögzített célpanel.</summary>
+        private static DshWebViewHost _frozenPane;
+
+        /// <summary>Az utolsó „nálad van-e a fókusz?" kérdésre válaszoló panel.</summary>
+        private static DshWebViewHost _queryPane;
+
+        /// <summary>Turns the restore layer off (--no-focus-restore).</summary>
+        public static bool Enabled = true;
+
+        /// <summary>Set once the command line has been read.</summary>
+        public static void Disable() { Enabled = false; }
+
+        /// <summary>
+        /// A lap figyelője: megjegyzi az utolsó szövegbeviteli elemet, és
+        /// jelenti a lap fókusz-eseményeit. Beavatkozás NINCS benne — a fókusz
+        /// visszaadása a natív oldal dolga, mert az a megbízható forrás.
+        ///
+        /// MIÉRT NINCS BENNE blur/focus ciklus: a korábbi változat másodpercenként
+        /// ismételte, és elrejtette a karétát meg az egérkurzort a felület fölött
+        /// (mért hiba, 2026-10-04).
+        /// </summary>
+        public const string Script =
+            "(function(){try{" +
+            "if(window.__dshFocusKeeper)return;window.__dshFocusKeeper=1;" +
+            "var last=null;" +
+            "function ident(el){try{return {tag:el.tagName,ce:el.contentEditable,id:el.id||''," +
+            "cls:(el.className&&el.className.toString?el.className.toString():'').slice(0,80)," +
+            "ph:(el.getAttribute&&el.getAttribute('placeholder'))||''};}catch(e){return null;}}" +
+            "function send(o){try{if(window.chrome&&window.chrome.webview)window.chrome.webview.postMessage(JSON.stringify(o));}catch(e){}}" +
+            "function editable(el){try{if(!el||el.nodeType!==1)return false;" +
+            "var t=el.tagName;if(t==='TEXTAREA')return true;if(t==='INPUT'){" +
+            "var ty=(el.type||'text').toLowerCase();" +
+            "return ty!=='checkbox'&&ty!=='radio'&&ty!=='button'&&ty!=='submit'&&ty!=='file'&&ty!=='range';}" +
+            "return el.isContentEditable===true;}catch(e){return false;}}" +
+            "function hasCaret(el){try{return !!(el&&document.contains(el)&&document.activeElement===el);}catch(e){return false;}}" +
+            "function docOn(){try{return !!document.hasFocus();}catch(e){return false;}}" +
+            "document.addEventListener('focusin',function(e){try{" +
+            "if(editable(e.target)&&e.target!==last){last=e.target;window.__dshFocusKeeperLast=last;send({k:'remember',el:ident(last)});}" +
+            "}catch(x){}},true);" +
+            "window.addEventListener('focus',function(){try{" +
+            "send({k:'win-focus',doc:docOn(),caret:hasCaret(last),el:last?ident(last):null});" +
+            "}catch(x){}});" +
+            "window.addEventListener('blur',function(){try{send({k:'win-blur'});}catch(x){}});" +
+            // A mező pozíciója a lapon (CSS-pixelben): a natív oldal ebből
+            // számolja ki, hova küldje a szintetikus kattintást.
+            "window.__dshFocusKeeperRect=function(){try{" +
+            "function ok(e){return !!(e&&e.nodeType===1&&document.contains(e)&&e.getBoundingClientRect);}" +
+            "function area(e){var r=e.getBoundingClientRect();return r.width*r.height;}" +
+            "var el=window.__dshFocusKeeperLast;" +
+            // Ha nincs megjegyzett mező (friss betöltésnél nem volt focusin
+            // esemény), az éppen fókuszált elemet használjuk.
+            "if(!ok(el))el=document.activeElement;" +
+            "if(!ok(el)||el===document.body||el===document.documentElement){" +
+            // Végső eset: a legnagyobb területű szerkeszthető mező.
+            "el=null;var cands=document.querySelectorAll('textarea,[contenteditable=\"true\"],input[type=\"text\"]');" +
+            "var best=0;for(var i=0;i<cands.length;i++){var a=area(cands[i]);" +
+            "if(ok(cands[i])&&a>best){best=a;el=cands[i];}}}" +
+            "if(!ok(el))return '{\"w\":0,\"why\":\"nincs mezo\"}';" +
+            "var r=el.getBoundingClientRect();" +
+            "return JSON.stringify({x:r.left,y:r.top,w:r.width,h:r.height,dpr:window.devicePixelRatio||1});" +
+            "}catch(e){return '{\"w\":0,\"why\":\"hiba\"}';}};" +
+            "send({k:'ready'});" +
+            "}catch(e){}})();";
+
+        /// <summary>Az aktiváláskor futtatott, ártalmatlan jelzés a lapnak.</summary>
+        public const string ApproachScript =
+            "(function(){try{window.__dshFocusKeeperPing=(window.__dshFocusKeeperPing||0)+1;}catch(e){}})();";
+
+        /// <summary>Lekérdezi a lapról az utolsó beviteli mező pozícióját (JSON).</summary>
+        public const string MeasureScript =
+            "(function(){try{return (typeof window.__dshFocusKeeperRect==='function')?window.__dshFocusKeeperRect():'{\"w\":0}';}catch(e){return '{\"w\":0}';}})();";
+
+        /// <summary>
+        /// A kattintás utáni helyreállítás a lapon: a karéta a mező végére
+        /// kerül, és a kijelölést megszüntetjük.
+        ///
+        /// MIÉRT KELL: a szintetikus kattintás néhány mezőben (pl. a robot panel
+        /// `input id="msg"` mezőjében) KIJELÖLI a meglévő szöveget, amitől a
+        /// következő gépelés felülírná azt. Ugyanazt tesszük, amit egy
+        /// sor-végi kattintás tenne.
+        /// </summary>
+        public const string CollapseCaretScript =
+            "(function(){try{" +
+            "var el=window.__dshFocusKeeperLast;" +
+            "function ok(e){return !!(e&&e.nodeType===1&&document.contains(e)&&e.getBoundingClientRect);}" +
+            "if(!ok(el))el=document.activeElement;" +
+            "if(!ok(el)||el===document.body)return 'none';" +
+            "try{el.focus();}catch(e){}" +
+            "try{if(el.tagName==='TEXTAREA'||el.tagName==='INPUT'){" +
+            "var n=(el.value||'').length;el.setSelectionRange(n,n);}" +
+            "else{var w=window.getSelection();if(w){w.removeAllRanges();" +
+            "var r=document.createRange();r.selectNodeContents(el);r.collapse(false);w.addRange(r);}}" +
+            "}catch(e){}" +
+            "return 'collapsed';" +
+            "}catch(e){return 'error';}})();";
+
+        /// <summary>
+        /// Célzott újrarajzolás a fókusz visszaadása UTÁN.
+        ///
+        /// MIÉRT KELL: a napló szerint a mező fókuszban van (`caret:true`), a
+        /// karéta mégsem látszik — a beágyazott WebView2 renderelője a
+        /// visszaaktiválás után nem rajzolja újra a karétát. Ezért a lapon a
+        /// meglévő fókuszt MEGTARTVA „megmozdítjuk" a DOM-ot (kijelölés
+        /// visszaírása + kényszerű újratördelés + egy ismételt fókusz-esemény),
+        /// ami újrarajzolásra készteti a szerkesztőt. Egyszeri és idempotens:
+        /// nem blur-el és nem ciklusol, ezért nem tudja elrejteni a karétát
+        /// vagy az egérkurzort (azt a korábbi, ismétlődő blur/focus tette).
+        /// </summary>
+        public const string ResyncScript =
+            "(function(){try{" +
+            "if(!window.__dshFocusKeeperLast)return;" +
+            "var el=window.__dshFocusKeeperLast;" +
+            "if(!document.contains(el)||document.activeElement!==el)return;" +
+            "var n=0,before=null;" +
+            "try{if(el.tagName==='TEXTAREA'||el.tagName==='INPUT'){n=(el.value||'').length;}" +
+            "else{var w=window.getSelection();if(w&&w.rangeCount>0)before=w.getRangeAt(0).cloneRange();}}" +
+            "catch(e){}" +
+            "try{el.focus();}catch(e){}" +
+            "try{var disp=el.style.display;el.style.display='none';" +
+            "void el.offsetHeight;el.style.display=disp;}catch(e){}" +
+            "try{if(el.tagName==='TEXTAREA'||el.tagName==='INPUT'){el.setSelectionRange(n,n);}" +
+            "else{var w2=window.getSelection();if(w2){w2.removeAllRanges();" +
+            "if(before){w2.addRange(before);}else{" +
+            "var r=document.createRange();r.selectNodeContents(el);r.collapse(false);w2.addRange(r);}}}}catch(e){}" +
+            "try{el.dispatchEvent(new FocusEvent('focus'));}catch(e){}" +
+            "}catch(e){}})();";
+
+        public static void RegisterPane(int index, DshWebViewHost host)
+        {
+            lock (Sync)
+            {
+                while (Panes.Count <= index) Panes.Add(null);
+                Panes[index] = host;
+            }
+        }
+
+        public static void Attach(DshWebViewHost host, CoreWebView2 core)
+        {
+            RegisterPane(host.PaneIndex, host);
+            if (!Enabled) return;
+            try
+            {
+                core.WebMessageReceived += (s, e) =>
+                {
+                    string json = null;
+                    try { json = e.TryGetWebMessageAsString(); }
+                    catch { }
+                    if (string.IsNullOrEmpty(json)) return;
+                    Logger.Info("focus keeper (pane " + (host.PaneIndex + 1) + "): " + json);
+                    if (Probe.Enabled) Probe.Note("focus keeper " + json, host.ChildHandle);
+                };
+                core.AddScriptToExecuteOnDocumentCreatedAsync(Script);
+                Logger.Info("focus keeper installed (pane " + (host.PaneIndex + 1) + ")");
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("focus keeper not installed (pane " + (host.PaneIndex + 1) + "): " + ex.Message);
+            }
+        }
+
+        /// <summary>The pane whose child window last received focus.</summary>
+        public static void NotePane(DshWebViewHost host)
+        {
+            lock (Sync) { _lastPane = host; }
+        }
+
+        /// <summary>
+        /// A WebView2 jelezte, hogy ez a panel vette át a fókuszt: ez a
+        /// visszatérés célja. Ez a jelzés a napló szerint minden panelváltásnál
+        /// megjön, ezért nem kell semmit kérdezni vagy számítani.
+        /// </summary>
+        public static void NoteActive(DshWebViewHost host)
+        {
+            if (!Enabled || host == null) return;
+            bool changed = false;
+            lock (Sync)
+            {
+                // A CÉL SOHA NEM LEHET ÜRES: az első jelzés beállítja, különben a
+                // helyreállításnak nincs hova mennie (mért hiba: `target=-` maradt,
+                // és a visszatéréskor semmi nem történt).
+                if ((object)_pendingPane == null)
+                {
+                    _pendingPane = host;
+                    changed = true;
+                }
+                else if (NoiseFromActivation())
+                {
+                    // A WPF az aktiválás után az ELSŐ panelre teszi a fókuszt; az
+                    // abból származó jelzés nem a felhasználó választása, ezért
+                    // rövid ideig nem írja felül a célt.
+                }
+                else if (!ReferenceEquals(_pendingPane, host))
+                {
+                    _pendingPane = host;
+                    changed = true;
+                }
+            }
+            if (changed)
+            {
+                Logger.Info("focus target: pane " + (host.PaneIndex + 1));
+            }
+        }
+
+        /// <summary>
+        /// Igaz, ha az aktiválás utáni rövid ablakban vagyunk: ilyenkor a
+        /// fókusz-jelzések a WPF saját fókusz-áthelyezéséből származnak, nem a
+        /// felhasználó választásából.
+        /// </summary>
+        private static bool NoiseFromActivation()
+        {
+            return _freezeAt != DateTime.MinValue
+                && (DateTime.UtcNow - _freezeAt).TotalMilliseconds < 1500;
+        }
+
+        /// <summary>Az ablak deaktiválásakor elindul az aktiválási zaj ablaka.</summary>
+        public static void Freeze()
+        {
+            lock (Sync) { _freezeAt = DateTime.UtcNow; }
+        }
+
+        /// <summary>Az ablak aktiválásakor nincs teendő: az időzített zár lejár.</summary>
+        public static void Unfreeze()
+        {
+            lock (Sync) { _freezeAt = DateTime.MinValue; }
+        }
+
+        /// <summary>
+        /// A panel elvesztette a fókuszt. A meglévő cél MEGMARAD (az ablak
+        /// deaktiválásakor is ez a helyes cél); új cél csak `NoteActive`-ból
+        /// születik.
+        /// </summary>
+        public static void NoteLost(DshWebViewHost host)
+        {
+            // Szándékosan nem írunk semmit: a fókusz elvesztése nem változtatja
+            // meg, hova kell visszatérni.
+        }
+
+        public static DshWebViewHost LastPane
+        {
+            get { lock (Sync) { return _lastPane; } }
+        }
+
+        /// <summary>Minden panel, hogy egy másik panelhoz tartozó fókuszt fel lehessen ismerni.</summary>
+        public static DshWebViewHost[] AllPanes
+        {
+            get { lock (Sync) { return Panes.ToArray(); } }
+        }
+
+        /// <summary>
+        /// A késleltetett helyreállítás: az aktiválás után a WPF/Windows maga is
+        /// oszt fókuszt, méghozzá jellemzően az ELSŐ panelra (mért eset:
+        /// „focus restore skipped ... native focus is elsewhere" — a fókusz a
+        /// 2. panel helyett az 1.-en kötött ki). Ezért itt NEM lépünk vissza
+        /// akkor sem, ha a fókusz épp egy MÁSIK panelre került: az aktiválás
+        /// utáni helyreállítás a felhasználó legutóbb használt paneljéé.
+        /// </summary>
+        public static void RestoreTarget(string reason)
+        {
+            if (!Enabled) return;
+            try
+            {
+                DshWebViewHost root = PendingPane;
+                if (root == null) return;
+                DshWebViewHost pane = PaneOf(root);
+                IntPtr child = pane.ChildHandle;
+                if (child == IntPtr.Zero) return;
+
+                Logger.Info("focus restore at " + (pane.PaneIndex + 1) + ". panel (" + reason + ")"
+                    + " focused=" + Win32.Describe(Win32.GetFocus())
+                    + " target=" + Win32.Describe(child));
+
+                IntPtr previous = Win32.SetFocus(child);
+                Logger.Info("focus restore took pane " + (pane.PaneIndex + 1)
+                    + " previous=" + Win32.Describe(previous)
+                    + " now=" + Win32.Describe(Win32.GetFocus()));
+
+                try
+                {
+                    CoreWebView2 core = pane.Core;
+                    if (core != null) core.ExecuteScriptAsync(ApproachScript);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Info("focus restore script: " + ex.Message);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("focus restore (target) failed: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// A megadott panel önmaga.
+        ///
+        /// MÉRT HIBA VOLT: ez a függvény a `RootHandle`-t hasonlította össze, de
+        /// az MINDEN panelnél ugyanaz a főablak (`HwndWrapper[DshWindow.exe…]`),
+        /// ezért mindig az első találatot — az 1. panelt — adta vissza. Így a
+        /// helyesen rögzített cél (`target=3`) ellenére a fókusz mindig az 1.
+        /// panelre ment.
+        /// </summary>
+        public static DshWebViewHost PaneOf(DshWebViewHost host)
+        {
+            return host;
+        }
+
+        /// <summary>A rögzített célpanel, vagy a régi jelzés, ha nincs rögzített.</summary>
+        public static DshWebViewHost PendingPane
+        {
+            get
+            {
+                lock (Sync)
+                {
+                    if ((object)_frozenPane != null) return _frozenPane;
+                    return (object)_pendingPane != null ? _pendingPane : _lastPane;
+                }
+            }
+        }
+
+        /// <summary>
+        /// A fókusz elvesztésének pillanatában rögzíti a fókuszban lévő panelt.
+        /// Ekkor az OS pontosan tudja, melyik gyermekablak van fókuszban — a
+        /// panelek ablaka igennel válaszol a kérdésre, és a válaszoló lesz a
+        /// visszatérés célja. Ez a pillanat az egyetlen írási pont, ezért az
+        /// aktiválás közbeni események nem tudják felülírni (mért hiba volt,
+        /// hogy a cél mindig az 1. panelre váltott).
+        /// </summary>
+        public static void FreezeTarget()
+        {
+            if (!Enabled) return;
+            try
+            {
+                DshWebViewHost owner = IdentifyFocus();
+                if (owner == null) return;
+                bool changed;
+                lock (Sync)
+                {
+                    changed = !ReferenceEquals(_frozenPane, owner);
+                    _frozenPane = owner;
+                }
+                if (changed)
+                {
+                    Logger.Info("focus target frozen: pane " + (owner.PaneIndex + 1));
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("focus target freeze failed: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Megkérdezi az ÖSSZES panel ablakát, hogy melyiküknél van a fókusz.
+        /// A válasz a `_queryPane`-be kerül; ha egyik panel sem válaszol, a
+        /// korábbi rögzítés marad érvényben.
+        /// </summary>
+        public static DshWebViewHost IdentifyFocus()
+        {
+            if (!Enabled) return null;
+            try
+            {
+                bool any = false;
+                foreach (DshWebViewHost pane in AllPanes)
+                {
+                    if (pane == null) continue;
+                    IntPtr child = pane.ChildHandle;
+                    if (child == IntPtr.Zero) continue;
+                    any = true;
+                    IntPtr unused;
+                    Win32.SendMessageTimeout(child, Win32.WM_DSH_WHO_HAS_FOCUS,
+                        IntPtr.Zero, IntPtr.Zero, Win32.SMTO_ABORTIFHUNG, 300, out unused);
+                }
+                if (!any) return null;
+                lock (Sync) { return _queryPane; }
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("focus identification failed: " + ex.Message);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Az egyik panel ablaka igennel válaszolt a „nálad van-e a fókusz?"
+        /// kérdésre: ez az aktív panel.
+        /// </summary>
+        public static void ReportFocusOwner(DshWebViewHost host)
+        {
+            if (!Enabled || host == null) return;
+            try
+            {
+                lock (Sync) { _queryPane = host; }
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("focus owner report failed: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Re-focuses the WebView2 child of the pane that last had focus, so the
+        /// page sees activation. Harmless when the OS already restored it, and
+        /// the web-side keeper decides whether the caret itself must come back.
+        /// </summary>
+        public static void Restore(string reason)
+        {
+            if (!Enabled) return;
+            try
+            {
+                DshWebViewHost pane = PaneOf(PendingPane);
+                if (pane == null) return;
+
+                IntPtr focused = Win32.GetFocus();
+                IntPtr child = pane.ChildHandle;
+                if (child == IntPtr.Zero) return;
+
+                Logger.Info("focus restore (" + reason + "): target=" + (pane.PaneIndex + 1)
+                    + " focused=" + Win32.Describe(focused));
+
+                // CSAK akkor lépünk vissza, ha a fókusz egy NEM panelhez tartozó
+                // natív felületen van. A 300/800 ms-os próbák ezt a védőfeltételt
+                // már nem használják (RestoreTo), mert a WPF aktiváláskor az első
+                // panelra teszi a fókuszt, és azt felül kell írni.
+                IntPtr root = Win32.GetAncestor(child, Win32.GA_ROOT);
+                bool ours = focused == IntPtr.Zero
+                    || focused == child
+                    || focused == root
+                    || Win32.IsChild(child, focused);
+                if (!ours)
+                {
+                    Logger.Info("focus restore skipped (" + reason + "): native focus is elsewhere (0x"
+                        + focused.ToInt64().ToString("X", CultureInfo.InvariantCulture) + ")");
+                    return;
+                }
+
+                IntPtr previous = Win32.SetFocus(child);
+                Logger.Info("focus restore (window activated): " + (pane.PaneIndex + 1) + ". panel"
+                    + " child=" + Win32.Describe(child)
+                    + " previous=" + Win32.Describe(previous)
+                    + " fg=" + Win32.Describe(Win32.GetForegroundWindow()));
+
+                // A karéta kirajzolásának kényszerítése: a mező fókuszban van, de
+                // a WebView2 renderelője nem rajzolja újra a karétát (mért hiba).
+                try
+                {
+                    CoreWebView2 core0 = pane.Core;
+                    if (core0 != null) core0.ExecuteScriptAsync(ResyncScript);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Info("focus resync: " + ex.Message);
+                }
+
+                // A WebView2-nek szóló, dokumentált "vedd át a fókuszt" hívás:
+                // a SetFocus a gyermekablakot fókuszálná, de a vezérlő ettől
+                // még nem biztos, hogy aktívnak látja a lapot (mért eset:
+                // doc=false maradt egy sikeres SetFocus után is).
+                try
+                {
+                    CoreWebView2Controller controller = pane.Controller;
+                    if (controller != null) controller.MoveFocus(CoreWebView2MoveFocusReason.Programmatic);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Info("focus restore MoveFocus: " + ex.Message);
+                }
+
+                try
+                {
+                    CoreWebView2 core = pane.Core;
+                    if (core != null)
+                    {
+                        core.ExecuteScriptAsync(ApproachScript);
+                        core.ExecuteScriptAsync(ResyncScript);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Info("focus restore script: " + ex.Message);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("focus restore failed: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// A rögzített célpanelt állítja vissza 300 ms és 800 ms múlva.
+        ///
+        /// MIÉRT RÖGZÍTETT CÉLLAL: az aktiválás pillanatában a Windows/WPF maga
+        /// is oszt fókuszt, és a közben befutó lapoldali jelzések átírják a
+        /// „legutolsó panelt" — mért hiba volt, hogy a késleltetett próba ezért
+        /// mindig az 1. panelre ment, hiába volt a 2. az aktív.
+        /// </summary>
+        public static void RestoreTargetSoon(DshWebViewHost target, string reason)
+        {
+            if (!Enabled || target == null) return;
+            int[] delays = new int[] { 400, 1200 };
+            foreach (int delay in delays)
+            {
+                try
+                {
+                    var timer = new System.Windows.Threading.DispatcherTimer
+                    {
+                        Interval = TimeSpan.FromMilliseconds(delay)
+                    };
+                    timer.Tick += (s, e) =>
+                    {
+                        timer.Stop();
+                        RestoreTo(target, reason);
+                        if (delay == 1200)
+                        {
+                            // Egér NÉLKÜL adjuk át a fókuszt (a szintetikus
+                            // kattintás kijelölte a szöveget és elrontotta az
+                            // egérmutatót).
+                            FocusAtPoint(target);
+                            Unfreeze();
+                        }
+                    };
+                    timer.Start();
+                }
+                catch (Exception ex)
+                {
+                    Logger.Info("focus restore (delayed) not scheduled: " + ex.Message);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Ugyanaz, rövid késleltetéssel: az aktiválás pillanatában a Windows
+        /// még maga is fókuszt oszt (és a WPF is beállíthatja a sajátját), ezért
+        /// a korai SetFocus-t felülírhatja. A késleltetett második próba a
+        /// végleges állapotot állítja be.
+        /// </summary>
+        public static void RestoreSoon(string reason)
+        {
+            if (!Enabled) return;
+            try
+            {
+                var timer = new System.Windows.Threading.DispatcherTimer
+                {
+                    Interval = TimeSpan.FromMilliseconds(300)
+                };
+                timer.Tick += (s, e) =>
+                {
+                    timer.Stop();
+                    RestoreTarget(reason);
+                };
+                timer.Start();
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("focus restore (delayed) not scheduled: " + ex.Message);
+            }
+        }
+
+        /// <summary>Fókusz visszaadása egy KONKRÉT panelnek, ellenőrzés nélkül.</summary>
+        public static void RestoreTo(DshWebViewHost host, string reason)
+        {
+            if (!Enabled || host == null) return;
+            try
+            {
+                DshWebViewHost pane = PaneOf(host);
+                IntPtr child = pane.ChildHandle;
+                if (child == IntPtr.Zero) return;
+
+                Logger.Info("focus restore at " + (pane.PaneIndex + 1) + ". panel (" + reason + ")"
+                    + " focused=" + Win32.Describe(Win32.GetFocus())
+                    + " target=" + Win32.Describe(child));
+
+                IntPtr previous = Win32.SetFocus(child);
+                Logger.Info("focus restore took pane " + (pane.PaneIndex + 1)
+                    + " previous=" + Win32.Describe(previous)
+                    + " now=" + Win32.Describe(Win32.GetFocus()));
+
+                try
+                {
+                    CoreWebView2 core = pane.Core;
+                    if (core != null) core.ExecuteScriptAsync(ApproachScript);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Info("focus restore script: " + ex.Message);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("focus restore (to pane) failed: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Egér nélküli fókusz-adás a panelnek.
+        ///
+        /// MIÉRT NEM KATTINTÁS: a szintetikus kattintás kétszeresen ártott — a
+        /// robot panelben kijelölte a meglévő szöveget, és az egérmutató
+        /// eltűnését/megbízhatatlanságát okozta. Ezért a WebView2 saját,
+        /// dokumentált mechanizmusát használjuk: a legutóbbi egérpozícióra
+        /// rákérdezünk (`HitTest`), és ha az a lap tartalma, a vezérlőtől kérünk
+        /// fókuszt (`MoveFocus`).
+        /// </summary>
+        public static void FocusAtPoint(DshWebViewHost host)
+        {
+            if (!Enabled || host == null) return;
+            try
+            {
+                DshWebViewHost pane = PaneOf(host);
+                CoreWebView2Controller controller = pane.Controller;
+                IntPtr child = pane.ChildHandle;
+                if (controller == null || child == IntPtr.Zero) return;
+
+                IntPtr previous = Win32.SetFocus(child);
+                string moved = "nem";
+                try
+                {
+                    controller.MoveFocus(CoreWebView2MoveFocusReason.Programmatic);
+                    moved = "igen";
+                }
+                catch (Exception ex)
+                {
+                    moved = "hiba: " + ex.Message;
+                }
+                Logger.Info("focus handover: pane " + (pane.PaneIndex + 1)
+                    + " previous=" + Win32.Describe(previous)
+                    + " now=" + Win32.Describe(Win32.GetFocus())
+                    + " MoveFocus=" + moved);
+
+                // Az egérmutató „beragadhat": a WebView2 a visszaaktiválás után
+                // nem rajzolja újra a kurzort, ezért eltűnik a panel fölött.
+                // Egy 1 képpontos mozdítás és vissza WM_SETCURSOR-t vált ki,
+                // amitől a kurzor újrarajzolódik — kattintás és kijelölés nélkül.
+                Win32.POINT cursor;
+                if (Win32.GetCursorPos(out cursor))
+                {
+                    Win32.SetCursorPos(cursor.X + 1, cursor.Y);
+                    System.Threading.Thread.Sleep(15);
+                    Win32.SetCursorPos(cursor.X, cursor.Y);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("focus handover failed: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// A lapról kapott JSON (CSS-pixel) átváltása képernyő-koordinátára. A
+        /// lap JSON-ként, idézőjelek között jön vissza, ezért a számokat
+        /// kiolvassuk belőle.
+        /// </summary>
+        private static bool TryParseFieldRect(string json, DshWebViewHost pane, out Win32.POINT point)
+        {
+            point = new Win32.POINT();
+            if (string.IsNullOrEmpty(json)) return false;
+
+            // Az ExecuteScriptAsync a visszatérési értéket JSON-ként adja vissza,
+            // ezért a beágyazott JSON idézőjelei escape-elve jönnek
+            // (\"x\":...). Ezt visszaalakítjuk, hogy egységesen olvashassuk.
+            string text = json.Replace("\\\"", "\"").Replace("\\\\", "\\");
+            if (text.IndexOf("\"w\"", StringComparison.Ordinal) < 0) return false;
+
+            Match match = Regex.Match(text,
+                "\\{\"x\":([-0-9.]+),\"y\":([-0-9.]+),\"w\":([-0-9.]+),\"h\":([-0-9.]+),\"dpr\":([-0-9.]+)");
+            if (!match.Success) return false;
+
+            double x = double.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
+            double y = double.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture);
+            double w = double.Parse(match.Groups[3].Value, CultureInfo.InvariantCulture);
+            double h = double.Parse(match.Groups[4].Value, CultureInfo.InvariantCulture);
+            double dpr = double.Parse(match.Groups[5].Value, CultureInfo.InvariantCulture);
+            if (w <= 0 || h <= 0 || dpr <= 0) return false;
+
+            IntPtr child = pane.ChildHandle;
+            if (child == IntPtr.Zero) return false;
+
+            // A panel kliens-területének bal felső sarka képernyőn.
+            Win32.POINT origin = new Win32.POINT();
+            if (!Win32.ClientToScreen(child, ref origin)) return false;
+
+            // A mező közepe, fizikai képpontban (a lap CSS-pixelben mér).
+            point.X = origin.X + (int)Math.Round((x + w / 2.0) * dpr);
+            point.Y = origin.Y + (int)Math.Round((y + h / 2.0) * dpr);
+            return true;
+        }
+    }
+
+    // ------------------------------------------------------------- focus probe
+
+    /// <summary>
+    /// Diagnostic only (--focus-probe): writes every OS-level and DOM-level
+    /// focus transition to `state\focus-probe\probe-*.log`, so a lost caret can
+    /// be told apart from a lost HWND focus without guessing.
+    /// </summary>
+    internal static class Probe
+    {
+        private static readonly List<DshWebViewHost> Panes = new List<DshWebViewHost>();
+        private static readonly object Sync = new object();
+        private static string _path;
+        private static bool _enabled;
+
+        public static bool Enabled { get { return _enabled; } }
+
+        public static void Init(bool enabled)
+        {
+            _enabled = enabled;
+            if (!enabled) return;
+            try
+            {
+                string dir = Path.Combine(DshPaths.ResolveStateDir(), "focus-probe");
+                Directory.CreateDirectory(dir);
+                _path = Path.Combine(dir, "probe-" + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + ".log");
+                Note("probe start", IntPtr.Zero);
+            }
+            catch
+            {
+                _path = null;
+            }
+        }
+
+        public static void RegisterPane(int index, DshWebViewHost host)
+        {
+            if (!_enabled) return;
+            lock (Sync)
+            {
+                while (Panes.Count <= index) Panes.Add(null);
+                Panes[index] = host;
+            }
+        }
+
+        public static string MsgName(int msg)
+        {
+            switch (msg)
+            {
+                case Win32.WM_ACTIVATE: return "WM_ACTIVATE";
+                case Win32.WM_NCACTIVATE: return "WM_NCACTIVATE";
+                case Win32.WM_SETFOCUS: return "WM_SETFOCUS";
+                case Win32.WM_KILLFOCUS: return "WM_KILLFOCUS";
+                default: return "msg-0x" + msg.ToString("X", CultureInfo.InvariantCulture);
+            }
+        }
+
+        /// <summary>One line per event: the message plus the whole focus picture.</summary>
+        public static void Note(string what, IntPtr hwnd)
+        {
+            if (!_enabled || _path == null) return;
+            try
+            {
+                IntPtr fg = Win32.GetForegroundWindow();
+                IntPtr focus = Win32.GetFocus();
+                var text = new StringBuilder();
+                text.Append(DateTime.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture));
+                text.Append(" | ").Append(what);
+                text.Append(" | hwnd=0x").Append(hwnd.ToInt64().ToString("X", CultureInfo.InvariantCulture));
+                text.Append(" fg=0x").Append(fg.ToInt64().ToString("X", CultureInfo.InvariantCulture));
+                text.Append(" (").Append(Win32.ClassName(fg)).Append(")");
+                text.Append(" focus=0x").Append(focus.ToInt64().ToString("X", CultureInfo.InvariantCulture));
+                text.Append(" (").Append(Win32.ClassName(focus)).Append(")");
+                lock (Sync)
+                {
+                    text.Append(" lastPane=");
+                    text.Append(FocusKeeper.LastPane == null
+                        ? "-"
+                        : (FocusKeeper.LastPane.PaneIndex + 1).ToString(CultureInfo.InvariantCulture));
+                }
+                text.Append(" children=");
+                lock (Sync)
+                {
+                    foreach (DshWebViewHost pane in Panes)
+                    {
+                        text.Append(pane == null
+                            ? "-"
+                            : pane.ChildHandle.ToInt64().ToString("X", CultureInfo.InvariantCulture));
+                        text.Append(',');
+                    }
+                }
+                lock (Sync)
+                {
+                    try { File.AppendAllText(_path, text.ToString() + Environment.NewLine, new UTF8Encoding(false)); }
+                    catch { }
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        /// <summary>Dumps the focus picture again shortly after activation settles.</summary>
+        public static void ScheduleDump()
+        {
+            if (!_enabled) return;
+            try
+            {
+                var timer = new System.Windows.Threading.DispatcherTimer
+                {
+                    Interval = TimeSpan.FromMilliseconds(700)
+                };
+                timer.Tick += (s, e) =>
+                {
+                    timer.Stop();
+                    Note("post-activate dump", IntPtr.Zero);
+                };
+                timer.Start();
+            }
+            catch
+            {
+            }
+        }
+    }
+
     // ------------------------------------------------------------- native helpers
 
     internal static class Win32
     {
         public const int WM_SIZE = 0x0005;
         public const int WM_DPICHANGED = 0x02E0;
+        public const int WM_SETFOCUS = 0x0007;
+        public const int WM_KILLFOCUS = 0x0008;
+        public const int WM_ACTIVATE = 0x0006;
+        public const int WM_NCACTIVATE = 0x0086;
+        public const int WM_PARENTNOTIFY = 0x0210;
+        public const int WM_LBUTTONDOWN = 0x0201;
+        public const uint GA_ROOT = 2;
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetFocus();
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr SetFocus(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
+
+        // FONTOS: a visszatérési típus LRESULT (IntPtr), NEM BOOL. Hibás
+        // deklarációval a hívás csendben elhalt — mért hiba: egyetlen panel sem
+        // válaszolt a „nálad van-e a fókusz?" kérdésre.
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr SendMessageTimeout(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam,
+            uint flags, uint timeout, out IntPtr result);
+
+        /// <summary>Ne várjunk egy nem válaszoló panelra.</summary>
+        public const uint SMTO_ABORTIFHUNG = 0x0002;
+
+        /// <summary>
+        /// Saját kérdés a panelek ablakaihoz: „nálad van-e a fókusz?" A
+        /// válaszoló panel az aktív.
+        /// </summary>
+        public const int WM_DSH_WHO_HAS_FOCUS = 0x8037;   // WM_APP + 55
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool IsChild(IntPtr hWndParent, IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+        public static string ClassName(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return "0";
+            var buffer = new StringBuilder(256);
+            GetClassName(hwnd, buffer, buffer.Capacity);
+            return buffer.ToString();
+        }
+
+        /// <summary>Rövid, naplózható leírás egy ablakfogantyúról.</summary>
+        public static string Describe(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return "null";
+            return "0x" + hwnd.ToInt64().ToString("X", CultureInfo.InvariantCulture) + "(" + ClassName(hwnd) + ")";
+        }
 
         public const int WS_CHILD = 0x40000000;
         public const int WS_VISIBLE = 0x10000000;
@@ -1073,6 +2128,39 @@ namespace DshWindow
             public int Right;
             public int Bottom;
         }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct POINT
+        {
+            public int X;
+            public int Y;
+        }
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool ScreenToClient(IntPtr hWnd, ref POINT lpPoint);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetCursorPos(out POINT lpPoint);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetCursorPos(int x, int y);
+
+        public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+        public const uint MOUSEEVENTF_LEFTUP = 0x0004;
+
+        [DllImport("user32.dll")]
+        public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, UIntPtr dwExtraInfo);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -1149,10 +2237,12 @@ namespace DshWindow
         public bool RestartIfStale;     // on 401, restart the harness to get a fresh token
         public bool IgnoreSavedGeometry; // always use the given/default size and position
         public int CloseAfterSeconds;   // test hook: close the window after N seconds
+        public bool FocusProbe;         // diagnostic: log every focus transition
 
         public static Options Parse(string[] args)
         {
             var o = new Options();
+            bool noFocusRestore = false;
             for (int i = 0; i < args.Length; i++)
             {
                 string a = args[i];
@@ -1162,6 +2252,8 @@ namespace DshWindow
                     case "--port": o.Port = ParseInt(next, o.Port); i++; break;
                     case "--url": o.Url = next; i++; break;
                     case "--no-boot": o.NoBoot = true; break;
+                    case "--no-focus-restore": noFocusRestore = true; break;
+                    case "--focus-probe": o.FocusProbe = true; break;
                     case "--panes": o.Panes = ParseInt(next, o.Panes); i++; break;
                     case "--pane-url": ParsePaneUrl(o, next); i++; break;
                     case "--boot-timeout": o.BootTimeoutSeconds = ParseInt(next, o.BootTimeoutSeconds); i++; break;
@@ -1183,6 +2275,8 @@ namespace DshWindow
                     case "--close-after": o.CloseAfterSeconds = ParseInt(next, 0); i++; break;
                 }
             }
+
+            if (noFocusRestore) FocusKeeper.Disable();
 
             if (string.IsNullOrEmpty(o.LogFile))
             {

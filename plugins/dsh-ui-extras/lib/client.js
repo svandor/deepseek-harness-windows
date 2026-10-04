@@ -1414,7 +1414,11 @@ window.__ModuleLoader__.load({
       "gitRelease": "Kiadás",
       "gitReleaseHint": "Kiadás: verzióemelés + commit + tag + push + GitHub Release. A tools\\release.ps1 fut le, kérdés nélkül (patch verzió). Parancssorból: tools\\release.cmd",
       "gitCommitPlaceholder": "Commit üzenet (üresen automatikus)",
-      "gitAheadBehind": "állapot:",
+      "gitAheadBehindHint": "↑ = hány commit vár feltolásra (Push), ↓ = hány commit van a távoli ágon, ami nálad még nincs meg. Ez commitok száma, nem fájloké.",
+      "gitCommitFiles": "commitra:",
+      "gitChangedHint": "A commit a munkaterület MINDEN változását viszi (git add -A): a fenti szám a commitba kerülő fájlok mennyisége.",
+      "gitCommitLangToggle": "A commit üzenete most {lang} nyelven születik. Kattints a váltáshoz.",
+      "gitStatusTooltip": "↑ commit feltolásra vár\n↓ commit a távoli ágon\n\nEz a szám commitokat jelent, nem fájlokat. A „commitra” szám mutatja, hány fájl kerül a következő commitba.",
       "langEnglish": "Angol nyelv",
       "ghTitle": "GitHub",
       "ghNotInstalled": "A GitHub CLI (gh) nincs telepítve a gépen.",
@@ -1631,7 +1635,11 @@ window.__ModuleLoader__.load({
       "gitRelease": "Release",
       "gitReleaseHint": "Release: version bump + commit + tag + push + GitHub Release. Runs tools\\release.ps1 without asking (patch bump). From a shell: tools\\release.cmd",
       "gitCommitPlaceholder": "Commit message (empty = automatic)",
-      "gitAheadBehind": "state:",
+      "gitAheadBehindHint": "↑ = how many commits are waiting to be pushed (Push), ↓ = how many commits exist on the remote branch that you do not have yet. These count commits, not files.",
+      "gitCommitFiles": "to commit:",
+      "gitChangedHint": "A commit takes EVERY change in the workspace (git add -A): the number above is how many files go into the commit.",
+      "gitCommitLangToggle": "The commit message is written in {lang} right now. Click to switch.",
+      "gitStatusTooltip": "↑ commits waiting to be pushed\n↓ commits on the remote branch\n\nThese are commit counts, not file counts. The \"to commit\" number shows how many files go into the next commit.",
       "langEnglish": "English language",
       "ghTitle": "GitHub",
       "ghNotInstalled": "The GitHub CLI (gh) is not installed on this machine.",
@@ -3571,6 +3579,9 @@ window.__ModuleLoader__.load({
               children: jsx.jsx(GitPanel, {
                 t: t,
                 root: workspaceRoot(),
+                // A commit-üzenet nyelvének alapértéke az aktív felületi nyelv;
+                // a panel saját HU/EN kapcsolója ezt felülírhatja.
+                localeId: localeId,
                 onClose: function () { setPanelOpen(false); }
               })
             })
@@ -3601,6 +3612,36 @@ window.__ModuleLoader__.load({
             : null
         ]
       });
+    }
+
+    /**
+     * Nyelv, amiben a GÉP által írt commit üzenet születik.
+     *
+     * MIÉRT KÜLÖN a felület nyelvétől: a felület lehet magyar, miközben a repó
+     * nyilvános, ezért angol commit üzenet kell. A választás ezért nem a globális
+     * nyelvet állítja, hanem csak ezt a panelt — és megjegyzi magának.
+     */
+    var GIT_COMMIT_LANG_KEY = "dsh-ui-extras.gitCommitLang";
+
+    function readGitCommitLang() {
+      try {
+        var raw = window.localStorage.getItem(GIT_COMMIT_LANG_KEY);
+        return raw === "hu" || raw === "en" ? raw : "auto";
+      } catch (error) {
+        return "auto";
+      }
+    }
+
+    function writeGitCommitLang(value) {
+      try {
+        window.localStorage.setItem(GIT_COMMIT_LANG_KEY, value === "hu" || value === "en" ? value : "auto");
+      } catch (error) { }
+    }
+
+    /** A tényleges nyelv, amiben a host az automatikus üzenetet írja. */
+    function resolveGitCommitLang(choice, localeId) {
+      if (choice === "hu" || choice === "en") return choice;
+      return isHungarianLocaleId(localeId) ? "hu" : "en";
     }
 
     /**
@@ -3665,6 +3706,24 @@ window.__ModuleLoader__.load({
       var messageState = react.useState("");
       var commitMessage = messageState[0];
       var setCommitMessage = messageState[1];
+
+      // Commit üzenet nyelve (HU/EN/Automatikus): a felület nyelvétől független
+      // választás, mert egy nyilvános repóhoz angol üzenet kell akkor is, ha a
+      // felület magyar. Alapérték: az aktív felületi nyelv.
+      var commitLangState = react.useState(function () { return readGitCommitLang(); });
+      var commitLangChoice = commitLangState[0];
+      var setCommitLangChoice = commitLangState[1];
+      // Csak a KIVÁLASZTOTT nyelv látszik (a gomb felirata HU vagy EN); minden
+      // további nyelv egy kattintásra van. Amíg nincs kézi választás, a felület
+      // nyelvét követi — ezt a tooltip mondja meg.
+      var commitLang = resolveGitCommitLang(commitLangChoice, props.localeId);
+      var commitLangLabel = commitLang.toUpperCase();
+
+      function toggleCommitLang() {
+        var next = commitLang === "hu" ? "en" : "hu";
+        writeGitCommitLang(next);
+        setCommitLangChoice(next);
+      }
 
       // Local repositories below the workspace root.
       function loadGit() {
@@ -3768,6 +3827,28 @@ window.__ModuleLoader__.load({
             style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" },
             children: [
               jsx.jsx("strong", { children: t("gitTitle") }),
+              // A ✕ mellett, attól BALRA: a commit üzenet nyelvének választója.
+              // Egyszerre mindig csak a kiválasztott nyelv látszik; a másik
+              // nyelv egy kattintásra van (a gomb a kettő között vált).
+              jsx.jsx("button", {
+                type: "button",
+                title: t("gitCommitLangToggle", { lang: commitLang.toUpperCase() }),
+                "aria-label": t("gitCommitLangToggle", { lang: commitLang.toUpperCase() }),
+                onClick: toggleCommitLang,
+                style: {
+                  marginLeft: "auto",
+                  marginRight: "8px",
+                  border: "1px solid var(--dsw-alias-border-l3, rgba(255,255,255,0.35))",
+                  borderRadius: "6px",
+                  background: "var(--dsw-alias-interactive-bg-hover-solid, rgba(255,255,255,0.10))",
+                  color: "inherit",
+                  cursor: "pointer",
+                  font: "inherit",
+                  fontWeight: 600,
+                  padding: "1px 8px"
+                },
+                children: commitLangLabel
+              }),
               jsx.jsx("button", {
                 type: "button",
                 onClick: props.onClose,
@@ -3802,7 +3883,7 @@ window.__ModuleLoader__.load({
                     onClick: function () {
                       // The message is cleared only once the commit actually
                       // succeeded, so a failed commit does not lose what was typed.
-                      runGithubAction({ action: "commit", root: props.root, message: commitMessage }, function () { setCommitMessage(""); });
+                      runGithubAction({ action: "commit", root: props.root, message: commitMessage, lang: commitLang }, function () { setCommitMessage(""); });
                     },
                     style: { border: "1px solid var(--dsw-alias-border-l3, rgba(255,255,255,0.25))", borderRadius: "7px", background: canCommit ? "var(--dsw-alias-interactive-bg-hover-solid, rgba(255,255,255,0.08))" : "transparent", color: "inherit", opacity: canCommit ? 1 : 0.45, cursor: canCommit ? "pointer" : "not-allowed", font: "inherit", padding: "2px 10px" },
                     children: t("gitCommit")
@@ -3826,7 +3907,16 @@ window.__ModuleLoader__.load({
                     children: t("gitRelease")
                   }),
                   primary.ok === true
-                    ? jsx.jsx("span", { style: { opacity: 0.6 }, children: t("gitAheadBehind") + " ↑" + primary.ahead + " ↓" + primary.behind })
+                    ? jsx.jsx("span", {
+                      // Az „állapot” eddig csak ennyi volt: „↑0 ↓0”. Ez két
+                      // COMMIT-szám (feltolásra váró, illetve a távoli ágon
+                      // lévő commitok), nem fájlszám — ezért most ki van írva,
+                      // mennyi megy commitra és mennyi pushra.
+                      style: { opacity: 0.7 },
+                      title: t("gitStatusTooltip"),
+                      children: "↑" + primary.ahead + " ↓" + primary.behind
+                        + " · " + t("gitCommitFiles") + " " + (primary.changed + primary.untracked)
+                    })
                     : null,
                   // Operation feedback: the two buttons look identical before and
                   // after a push, so without this the only evidence is the output
@@ -3862,10 +3952,11 @@ window.__ModuleLoader__.load({
                       : null,
                     repository.ok ? jsx.jsx("span", {
                       style: { opacity: 0.8 },
+                      title: t("gitChangedHint"),
                       children: t("gitChanged") + repository.changed + " · " + t("gitUntracked") + repository.untracked
                     }) : null,
                     repository.ok && (repository.ahead > 0 || repository.behind > 0)
-                      ? jsx.jsx("span", { style: { opacity: 0.8 }, children: "↑" + repository.ahead + " ↓" + repository.behind })
+                      ? jsx.jsx("span", { style: { opacity: 0.8 }, title: t("gitAheadBehindHint"), children: "↑" + repository.ahead + " ↓" + repository.behind })
                       : null
                   ]
                 }),

@@ -463,6 +463,24 @@ function Get-WindowProcesses {
   return @(Get-Process DshWindow -ErrorAction SilentlyContinue)
 }
 
+# A natív ablak programjának build-azonosítója (a bin\DshWindow.exe irásának
+# ideje). Az állapot-panelre kerül, mert ez dönti el, hogy a javított vagy egy
+# korábbi példány fut-e: a tálca "Megnyitás" gombja ugyanis a MÁR futó ablakot
+# hozza előtérbe, új ablakot nem nyit.
+function Get-WindowBuildStamp {
+  try {
+    $exe = Join-Path $script:Root 'bin\DshWindow.exe'
+    if (-not (Test-Path $exe)) { return 'nincs bin\DshWindow.exe' }
+    $stamp = (Get-Item $exe).LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
+    $running = @(Get-Process DshWindow -ErrorAction SilentlyContinue)
+    if ($running.Count -eq 0) { return "$stamp (nem fut)" }
+    $started = $running[0].StartTime.ToString('HH:mm:ss')
+    return "$stamp (futó példány indult: $started)"
+  } catch {
+    return '?'
+  }
+}
+
 function Test-HarnessRunning {
   param([int]$Port)
   if (Test-PortListening -Port $Port) { return $true }
@@ -1260,6 +1278,7 @@ function Show-Status {
     "Belépési token : $(if ($tokenUrl) { $tokenUrl } else { 'nincs mentett token' })",
     "dsh CLI        : $(if ($dshBin) { $dshBin } else { 'nem található' })",
     "DSH_HOME       : $env:DSH_HOME",
+    "Ablak build    : $(Get-WindowBuildStamp)",
     "Állapotkönyvtár: $script:StateDir"
   )
   [System.Windows.Forms.MessageBox]::Show(($lines -join "`r`n"), 'DSH Harness állapot',
@@ -1452,7 +1471,12 @@ function Show-Tray {
   $script:RobotOnlyMenuItem.add_Click({ param($sender, $e) Set-RobotOnly -Config $script:Config -Enabled ([bool]$sender.Checked) })
   $miPanes.DropDownItems.Add($script:RobotOnlyMenuItem) | Out-Null
   $miStart.Add_Click({ Start-Harness -Config $script:Config -EnsureToken | Out-Null })
-  $miStop.Add_Click({ Stop-Harness -Config $script:Config })
+  # Leallitas megerosito ablak NELKUL: a menu kivalasztasa maga a dontes, es a
+  # kettos megerosites (menu + felugro kerdes) csak lassitotta a munkat.
+  $miStop.Add_Click({
+    Write-TrayLog "háttér-GUI leállítása (menüből)"
+    Stop-Harness -Config $script:Config
+  })
   # Az "Újraindítás" a TELJES hatteret ujrainditja: harness + robot panel.
   #
   # MIERT A PANEL IS: a robot panel (4180) kulon folyamat az orfolyamaval, ezert
@@ -1483,21 +1507,13 @@ function Show-Tray {
   })
   # A "Kilépés" a TELJES leallast jelenti: ablak + hatter-GUI + talca.
   #
-  # MERT HIBA: korabban ez a menupont csak a talcat bontotta le (a felirat is
-  # "Kilépés (a GUI fut marad)" volt), a harness szerver pedig tovabb futott a porton. A felhasznalo ezert ugy erezte, hogy a Bezaras gomb hibas:
-  # a talca eltunt, de a GUI es a szerver meg mindig allt, es a kovetkezo
-  # inditasnal a REGI peldany szolgalta ki a feluletet (a regi, memoriabeli
-  # nyilvantartassal). Most a Stop-Harness is lefut, tehat a kovetkezo inditas
-  # biztos friss folyamatot es friss munkaterulet-nyilvantartast kap.
+  # MIERT NINCS MEGEROSITO ABLAK: a menupont maga a megerosites (a felhasznalo
+  # kifejezetten a "Kilepes"-re kattintott), es a felugro kerdes csak lassitotta
+  # a munkat. A muvelet a talcanaploba kerul.
   $miExit.Add_Click({
     try {
-      $answer = [System.Windows.Forms.MessageBox]::Show(
-        "Leállítom a DeepSeek Harness-t?`n`nA bezárt ablakok és a háttér-GUI is leáll, a munkamenetek megmaradnak.",
-        'Kilépés', [System.Windows.Forms.MessageBoxButtons]::YesNo,
-        [System.Windows.Forms.MessageBoxIcon]::Question)
-      if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) { return }
-
       try { $script:timer.Stop() } catch { }
+      Write-TrayLog "kilépés kérve a menüből"
 
       # 1) Az ablakok szabalyos bezarasa elobb, hogy a panel-aranyok es az
       #    ablakgeometria mentodjenek (a Stop-Process nem ad ra eselyt).

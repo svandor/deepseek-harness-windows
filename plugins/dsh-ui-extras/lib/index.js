@@ -710,6 +710,11 @@ async function handleGithubAction(req, res) {
         return;
       }
       const message = url.searchParams.get("message") ?? "";
+      // A commit üzenetének nyelve: a felület nyelve nem feltétlenül azonos a
+      // repó nyelvével (nyilvános projektnél angol üzenet kell). A kliens ezért
+      // külön `lang` paramétert küld; minden ismeretlen érték angolra esik
+      // vissza, ami egy nyilvános repónál a biztonságos irány.
+      const lang = url.searchParams.get("lang") === "hu" ? "hu" : "en";
       const staged = await run("git", ["-C", root, "add", "-A"]);
       if (!staged.ok) {
         sendJson(res, { ok: false, error: staged.stderr.split(/\r?\n/u)[0] || "git add failed" });
@@ -721,9 +726,14 @@ async function handleGithubAction(req, res) {
         return;
       }
       // Default message: date plus the first changed path, so a one-click commit
-      // is still self-describing.
+      // is still self-describing. The language follows the panel's HU/EN switch,
+      // so a public repository can be committed in English while the interface
+      // stays Hungarian.
       const firstPath = pending.stdout.split(/\r?\n/u)[0].slice(3).trim();
-      const auto = "Update " + firstPath + " (" + new Date().toISOString().slice(0, 10) + ")";
+      const date = new Date().toISOString().slice(0, 10);
+      const auto = lang === "hu"
+        ? "Frissítés " + firstPath + " (" + date + ")"
+        : "Update " + firstPath + " (" + date + ")";
       const text = message.trim().length > 0 ? message.trim() : auto;
       const committed = await run("git", ["-C", root, "commit", "-m", text]);
       sendJson(res, committed.ok
@@ -3149,6 +3159,13 @@ export { apply, inject };
  * port. The check spawns a real shell with a real child and calls this.
  */
 export { killRun };
+
+/**
+ * Exported for `tools/check-git-commit-lang.mjs`: the commit action's
+ * automatic message depends on the `lang` parameter, and that has to be
+ * provable against a throw-away repository instead of the real one.
+ */
+export { handleGithubAction };
 
 /**
  * Exported for `tools/check-approvals.mjs`: the type derivation and the rule
