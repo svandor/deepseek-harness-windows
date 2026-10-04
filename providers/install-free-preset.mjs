@@ -22,7 +22,11 @@
  *      `tool-subagent` sor configjába pedig beírja az `agentOptions` blokkot:
  *      a gyermek a `subagent-worker/worker` (ingyenes fallback lánc) route-on
  *      indul, a fő szál a fizetős route-on marad.
- *   2) `--default` esetén a `settings.yaml`-ba beírja
+ *   2) A `persona` sor suffixébe beírja a DELEGÁLÁSI IRÁNYELVET (lásd lent):
+ *      a route önmagában nem delegál — meg kell mondani a fő modellnek, hogy a
+ *      szeparálható munkát adja le a gyermeknek, különben a nap nagy részében
+ *      egyetlen ingyenes kérés sem keletkezik (mért ok, FELJEGYZES 12.).
+ *   3) `--default` esetén a `settings.yaml`-ba beírja
  *      `agent-presets: default: standard-free`-et (mentéssel).
  *
  *   A másolat új id-t kap, mert a beépített (shipped) gyökér nyeri a duplikált
@@ -100,6 +104,92 @@ if (sourceDir === undefined) {
 }
 
 /**
+ * A DELEGÁLÁSI IRÁNYELV — a persona suffixébe kerül, ezért minden kérés
+ * rendszerpromptjában ott van az ezen a preseten induló beszélgetésekben.
+ *
+ * MIÉRT KELL: az `agentOptions` csak a gyermek ROUTE-ját állítja be. Azt nem,
+ * hogy egyáltalán legyen gyermek: a `subagent` eszközt a fő modell hívja, és
+ * ha erre nincs útmutatás, a napot végigdolgozza a fizetős fő szálon — pontosan
+ * ez volt a „befagyott az ingyenes delegálás" tünet 2026-10-03/04-én (a 30 napos
+ * statisztikában ingyenes kérés 10-01 után csak elvétve jelent meg).
+ *
+ * A szöveg angol, mert a preset többi prompt-szövege is az; a modell-követés
+ * így mérhetően stabilabb, mint a magyar utasításnál. A korlátok szándékosak:
+ * a gyermek GYENGÉBB, ingyenes modell, ezért a döntés, a fájlmódosítás és a
+ * felhasználónak szóló válasz a fő szálon marad.
+ */
+const DELEGATION_MARKER = 'DELEGALAS-IRANYELV';
+const DELEGATION_ANCHOR = 'Your working directory is {{cwd}}.';
+const DELEGATION_GUIDANCE = [
+  '',
+  'Subagent delegation in this deployment runs on a FREE model chain: the',
+  '`subagent` tool\'s default route is subagent-worker/worker (free providers,',
+  'no metered cost), while the main thread is the paid route. Delegating costs',
+  'nothing, so treat it as your default way of doing separable work instead of',
+  'doing every step inline.',
+  '',
+  'Delegate with `subagent` when a piece of the work is self-contained and can',
+  'come back as a summary: surveying the repository, searching across many',
+  'files, scanning logs or data, verifying a claim, independent review,',
+  'drafting, or running a command and reading its output. Run independent',
+  'pieces as parallel children.',
+  '',
+  'Keep on the main thread: anything that needs the user\'s answer or a',
+  'decision; a step you can finish in one or two calls; edits to the user\'s',
+  'files, unless writing IS the delegated task; and any result you cannot',
+  'verify from the child\'s summary.',
+  '',
+  'The child does not see this conversation and runs a weaker free model. Give',
+  'it a complete standalone prompt — goal, exact paths or inputs, the shape of',
+  'the deliverable, and the instruction to report a concise summary with',
+  'evidence — scope it narrowly, and check load-bearing findings yourself.',
+  '',
+  'When you delegate, say so in your reply and note that the delegated work ran',
+  'on the free chain, so the saving stays visible in the statistics.'
+];
+
+/**
+ * A delegálási irányelv beszúrása a `persona` sor suffixébe.
+ *
+ * Ugyanaz a szerződés, mint a `tool-subagent` patchnél: szigorúan a `persona`
+ * blokkra szűkített, ellenőrzött beszúrás. Ha a forrás suffixe nem egyszerű
+ * (plain) skalár, hibát dob — nem ír félkonfigurált presetet.
+ */
+function patchPersona(text) {
+  const lines = text.split('\n');
+  const idIndex = lines.findIndex((line) => /^\s*- id: persona\s*$/.test(line));
+  if (idIndex === -1) throw new Error('nincs `- id: persona` sor a forras-presetben');
+  const indent = lines[idIndex].match(/^\s*/)[0];
+  let end = lines.length;
+  for (let i = idIndex + 1; i < lines.length; i += 1) {
+    if (/^\s*- /.test(lines[i]) && lines[i].match(/^\s*/)[0].length <= indent.length) { end = i; break; }
+  }
+  const block = lines.slice(idIndex, end);
+  if (!block.some((line) => /^\s*name: '@deepseek-ai\/dsh-persona'\s*$/.test(line))) {
+    throw new Error('a persona blokk nem a dsh-persona modult nevezi meg');
+  }
+  if (block.some((line) => line.includes(DELEGATION_MARKER))) return { text, changed: false };
+  const suffixIndex = lines.findIndex((line, index) => index >= idIndex && index < end && /^\s*suffix:/.test(line));
+  if (suffixIndex === -1) throw new Error('nincs `suffix:` sor a persona blokkban');
+  const match = lines[suffixIndex].match(/^(\s*)suffix:\s*(.*)$/);
+  const suffixIndent = match[1];
+  const suffixValue = match[2].trim();
+  if (suffixValue === '' || /^[|>]/.test(suffixValue)) {
+    throw new Error(`a persona suffixe nem plain scalar ('${suffixValue}') — kezi ellenorzes kell`);
+  }
+  const contentIndent = `${suffixIndent}  `;
+  const inserted = [
+    `${suffixIndent}# ${DELEGATION_MARKER} — a fenti route csak lehetoseg: ez a szoveg`,
+    `${suffixIndent}# mondja meg a fo modellnek, hogy adja le a szeparalhato munkat.`,
+    `${suffixIndent}suffix: |-`,
+    `${contentIndent}${suffixValue}`,
+    ...DELEGATION_GUIDANCE.map((line) => (line === '' ? '' : `${contentIndent}${line}`))
+  ];
+  lines.splice(suffixIndex, 1, ...inserted);
+  return { text: lines.join('\n'), changed: true };
+}
+
+/**
  * Az `agentOptions` beszúrása a `tool-subagent` sor configjába.
  *
  * Szöveges, de SZIGORÚAN blokkra szűkített beszúrás: a horgony a sor saját
@@ -144,14 +234,29 @@ function verifyComposition(text) {
   const optionLines = lines.filter((line) => /^\s*agentOptions:\s*$/.test(line));
   const provider = lines.some((line) => /^\s*provider: subagent-worker\s*$/.test(line));
   const model = lines.some((line) => /^\s*model: worker\s*$/.test(line));
+  const personaIndex = lines.findIndex((line) => /^\s*- id: persona\s*$/.test(line));
+  const guidance = text.includes(DELEGATION_MARKER) && text.includes(DELEGATION_ANCHOR);
+  const delegation = guidance && /subagent-worker\/worker/.test(text);
   return {
-    ok: idIndex !== -1 && optionLines.length === 1 && provider && model,
-    detail: `tool-subagent sor: ${idIndex !== -1 ? 'megvan' : 'HIANYZIK'}, agentOptions: ${optionLines.length} db, subagent-worker: ${provider}, worker: ${model}`
+    ok: idIndex !== -1 && optionLines.length === 1 && provider && model && personaIndex !== -1 && delegation,
+    detail: `tool-subagent sor: ${idIndex !== -1 ? 'megvan' : 'HIANYZIK'}, agentOptions: ${optionLines.length} db, subagent-worker: ${provider}, worker: ${model}, persona sor: ${personaIndex !== -1 ? 'megvan' : 'HIANYZIK'}, delegalasi iranyelv: ${delegation}`
+  };
+}
+
+/** A két patch egymás után; a `changed` akkor igaz, ha bármelyik írt. */
+function patchPreset(text) {
+  const subagent = patchComposition(text);
+  const persona = patchPersona(subagent.text);
+  return {
+    text: persona.text,
+    changed: subagent.changed || persona.changed,
+    subagentChanged: subagent.changed,
+    personaChanged: persona.changed
   };
 }
 
 const sourceComposition = readFileSync(join(sourceDir, 'agent.cordis.yml'), 'utf8');
-const patched = patchComposition(sourceComposition);
+const patched = patchPreset(sourceComposition);
 const verification = verifyComposition(patched.text);
 
 console.log('');
@@ -159,15 +264,16 @@ console.log(`Ingyenes delegálású preset: ${ID}`);
 console.log('=======================================');
 console.log(`Forras:  ${sourceDir}`);
 console.log(`Cel:     ${TARGET}`);
-console.log(`Modositas: ${patched.changed ? 'agentOptions beszurva' : 'mar tartalmazza (nem irjuk ujra)'}`);
+console.log(`Modositas: agentOptions: ${patched.subagentChanged ? 'beszurva' : 'mar tartalmazza'}, delegalasi iranyelv: ${patched.personaChanged ? 'beszurva' : 'mar tartalmazza'}`);
 console.log(`Ellenorzes: ${verification.ok ? 'OK' : 'HIBA'} — ${verification.detail}`);
 if (!verification.ok) {
   console.error('A patchelt kompozicio nem megy át az ellenőrzésen, nem írok semmit.');
   process.exit(1);
 }
 
-// `--verbose`: a beszúrt blokk kiírása, hogy a változás szemmel is ellenőrizhető
-// legyen (a preset-fájl kommentjei miatt a diff amúgy is nagy zajos lenne).
+// `--verbose`: a beszúrt blokkok kiírása, hogy a változás szemmel is
+// ellenőrizhető legyen (a preset-fájl kommentjei miatt a diff amúgy is nagy
+// zajos lenne).
 if (has('--verbose')) {
   const lines = patched.text.split('\n');
   const at = lines.findIndex((line) => /^\s*- id: tool-subagent\s*$/.test(line));
@@ -175,6 +281,13 @@ if (has('--verbose')) {
   console.log('--- a tool-subagent blokk a patchelt kompozicioban ---');
   for (const line of lines.slice(at, at + 16)) console.log(line);
   console.log('-----------------------------------------------------');
+  const personaAt = lines.findIndex((line) => /^\s*- id: persona\s*$/.test(line));
+  let personaEnd = personaAt + 1;
+  while (personaEnd < lines.length && !/^\s*- id: /.test(lines[personaEnd])) personaEnd += 1;
+  console.log('');
+  console.log('--- a persona blokk a patchelt kompozicioban ---');
+  for (const line of lines.slice(personaAt, personaEnd)) console.log(line);
+  console.log('-----------------------------------------------');
 }
 
 /** A forrás-preset teljes másolása (a kompozíciót a patchelt szöveg adja). */
@@ -196,7 +309,7 @@ function copyPreset() {
   writeFileSync(join(TARGET, 'agent.cordis.yml'), patched.text, 'utf8');
   writeFileSync(join(TARGET, 'preset.yml'), [
     'name: Standard (ingyenes delegálás)',
-    'description: A standard preset másolata; a gyermekek a subagent-worker (ingyenes fallback lánc) route-on indulnak, a fő szál a fizetős route-on marad.',
+    'description: A standard preset másolata; a gyermekek a subagent-worker (ingyenes fallback lánc) route-on indulnak, a fő szál a fizetős route-on marad, és a persona delegálási irányelvet kap, hogy a szeparálható munka tényleg a gyermekre kerüljön.',
     ''
   ].join('\n'), 'utf8');
 }
@@ -265,3 +378,6 @@ console.log('');
 console.log('Ellenőrzés (új beszélgetésben): a gyermek session naplójában a modell');
 console.log('  worker / subagent-worker  -> ingyenes lánc;');
 console.log('  deepseek-flash            -> még mindig a szülő route-ja.');
+console.log('A delegálási irányelv a persona-sávban van: csak az UTÁNA indított');
+console.log('beszélgetésekben érvényes (a futó beszélgetések a saját promptjukon maradnak).');
+console.log('Mérés: node providers\\check-delegation-route.mjs --hours 24');

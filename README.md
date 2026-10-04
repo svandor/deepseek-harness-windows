@@ -383,13 +383,20 @@ Utolsó delegálás: 2026. 09. 29. 12:44
 - Az **utolsó delegálás** ideje azért van a sorok között, hogy egy régi adat ne
   tűnjön beégett számnak: ha hetek óta nincs delegálás, a panel ezt kimondja.
 - A szám akkor mozdul, ha **tényleg történik delegálás**: a lánc önmagában nem
-  indít munkát (nincs automatikus delegáló; az ütemezett retune/watchdog
-  scripts nem hívnak `subagent` toolt). A gyermekek route-ját a
+  indít munkát (az ütemezett retune/watchdog szkriptek nem hívnak `subagent`
+  toolt). Ezért a `standard-free` preset **delegálási irányelvet** kap a
+  persona-sávban: a fő modell feladata, hogy a szeparálható munkát (felmérés,
+  többfájlos keresés, napló/adat-pásztázás, állítás ellenőrzése, független
+  review, párhuzamosítható darabok) leadja a gyermeknek. Enélkül a felület
+  egész napos használata is **nulla ingyenes kérést** termelhet (mért eset:
+  FELJEGYZES 12.). A gyermekek route-ját a
   `providers\check-delegation-route.mjs` mutatja meg napra/hétre visszamenőleg.
 - **Fontos:** a GUI-ból indított gyermek csak akkor megy az ingyenes láncra, ha
   a beszélgetés a `standard-free` preseten fut (a web profilban a `tool-subagent`
   sor a presetből jön, és a standard presetben nincs `agentOptions` — ilyenkor a
-  gyermek a szülő fizetős route-ját örökli). Telepítés és alapértelmezetté tétel:
+  gyermek a szülő fizetős route-ját örökli). A delegálási irányelv a persona-sáv
+  része, ezért **csak a telepítés után indított beszélgetésekben** érvényes.
+  Telepítés és alapértelmezetté tétel:
   `node providers\install-free-preset.mjs --apply --default`; részletek:
   `providers\README.md`.
 

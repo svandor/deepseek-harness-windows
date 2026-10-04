@@ -508,12 +508,29 @@ Copy-Item "$env:USERPROFILE\.dsh\settings.yaml.bak-<időbélyeg>" `
 
 - A szkript a `standard` presetet másolja `standard-free` id-val a
   `<DSH_HOME>\.agent-presets` alá (a beépített gyökér nyeri a duplikált id-t,
-  ezért felülírni nem lehet, csak másolni), és a `tool-subagent` sorba beírja:
-  `agentOptions: { provider: subagent-worker, model: worker, maxTokens: 32768 }`.
+  ezért felülírni nem lehet, csak másolni), és **két** dolgot ír bele
+  (mindkettő ellenőrzötten; `--verbose` kiírja a patchelt blokkokat):
+  1. a `tool-subagent` sorba
+     `agentOptions: { provider: subagent-worker, model: worker, maxTokens: 32768 }`
+     — ez a gyermek **route**-ja;
+  2. a `persona` sor `suffix`-ébe a **delegálási irányelvet** — ez mondja meg a
+     fő modellnek, hogy a szeparálható munkát adja le a gyermeknek, és a
+     döntés/fájlmódosítás/felhasználónak szóló válasz maradjon a fő szálon.
+- **A route önmagában nem delegál.** Mért eset (2026-10-03/04.): a felület
+  egész napos használata ~1,8k fizetős kérést termelt, de **egyetlen** ingyenes
+  kérést sem, mert a `subagent` toolt senki nem hívta — a statisztika ilyenkor
+  helyesen áll, mégis „befagyottnak" látszik. Az irányelv ezt hivatott
+  megfordítani; a részletes mérés és a bizonyíték: `FELJEGYZES.md` 12. pont.
+- A delegálási irányelv a **persona-sáv** része, ezért csak a telepítés után
+  indított beszélgetésekben érvényes (a futó beszélgetések a saját
+  promptjukon/presetjükön maradnak).
 - **Nem kell újraindítás:** a preset-roster hívásonként olvasódik, az
-  alapértelmezett a hot-reloadolt settings-ből jön. A futó beszélgetések a saját
-  presetjükön maradnak; az **új** beszélgetések indulnak a `standard-free`-en.
+  alapértelmezett a hot-reloadolt settings-ből jön. Az **új** beszélgetések
+  indulnak a `standard-free`-en.
 - **Kockázat:** a `worker` route a helyi proxyra mutat, és a DSH-retry nem vált
   providert — ha a proxy áll, a gyermek hívása elhal (nem esik vissza fizetősre).
   A watchdog figyeli (`reports\proxy-watchdog.log`); ellenőrzés:
   `node providers\verify-subagent-chain.mjs`.
+- **Visszaállítás:** a telepítő nem menti a preset-mappát, ezért csere előtt
+  készíts mentést (`Copy-Item -Recurse` a `.agent-presets\standard-free`-ról);
+  a `persona`-patch a `DELEGALAS-IRANYELV` jelölőnél keresve távolítható el.

@@ -1070,3 +1070,95 @@ melyik gyermek melyik úton futott. A várt eredmény egy új beszélgetésben:
 retry nem vált providert — ha a proxy áll, a gyermek hívása **elhal** (nem esik
 vissza fizetősre). A watchdog 5 másodpercenként figyeli; a kiesés a
 `providers\reports\proxy-watchdog.log`-ban látszik.
+
+---
+
+## 12. „Megint befagyott az ingyenes delegálás" — a route nem viselkedés (2026-10-04)
+
+**A bejelentés:** „megint befagyott az ingyenes delegálás. hiába használtam a
+felületet egész nap, egy napja nem jelent meg rá adat."
+
+### 12.1 A mérés — semmi nem fagyott be
+
+Minden érték 2026-10-04 06:46 (helyi) körül mérve:
+
+| Mit néztem | Mért érték |
+|---|---|
+| Proxy `/healthz` | `ok: true`, `usable: true`, `workerUsable: true`, mind a 4 provider kulccsal |
+| `worker` lánc | nvidia gpt-oss-20b → nvidia nemotron-3-super → groq gpt-oss-120b → openrouter qwen3.8-27b:free → ollama |
+| Watchdog | fut (PID 48004); utolsó kiesés **2026-10-01 17:39** |
+| Chain-doctor (10-03 09:01) | minden felhős cél OK, valódi tool-hívással (305–964 ms) |
+| `/ui-extras/usage?days=30` | élő: 13 564 kérés, delegated 366 — ebből ingyenes **91 kérés / 23 session** |
+| Utolsó ingyenes delegálás | **2026-10-03 07:53** (helyi) |
+| `subagent` tool-hívás az utolsó 24 órában | **0** (a 07:53-as után egy sem) |
+| Gyermek-session az utolsó 24 órában | 1 db (a 07:53-as, 3 kéréssel) |
+| Session-presetek (72 óra, 34 session) | 33× `standard-free`, 1× `standard` (09-29-i) |
+
+A statisztika tehát élő volt, csak nem volt mit számolnia: a felület használata
+a **fizetős fő szálat** hajtja (10-03: 1 810 kérés, $3.21), az ingyenes lánc
+pedig kizárólag akkor számol, ha a modell meghívja a `subagent` eszközt.
+
+**Bizonyíték arra, hogy a lánc él:** a vizsgálat közben egy próbadelegálás futott
+ebből a GUI-session-ből (2026-10-04 06:48:43). A gyermek
+`f6e4e7cd-a510-46c6-8d0e-aa8fa1344acb` 3 kérést tett meg a `worker` route-on,
+$0.0000-ért, a `/ui-extras/usage` válasza pedig **91 → 94** ingyenes kérésre,
+`lastAt`-ja 2026-10-04 06:49:04-re lépett. A panel 60 s-enként kérdez, a host
+120 s-enként szkennel, tehát a késleltetés legfeljebb ~2 perc — „befagyásról"
+szó sincs.
+
+### 12.2 A gyökér-ok — a route csak lehetőség, nem viselkedés
+
+A 11.4-ben telepített `standard-free` preset helyesen állítja be a gyermek
+route-ját (`agentOptions: subagent-worker/worker`), és a 10-01-i mérések
+bizonyítják, hogy a lánc ingyen dolgozik (81 kérés / 18 gyermek). Azt viszont
+**semmi nem mondta meg a fő modellnek, hogy egyáltalán delegáljon**: a nap
+nagy részében minden munka a fő szálon fut, ezért nem keletkezik ingyenes adat.
+Ez a második eset ugyanarra a bejelentésre (vö. 11.1), ezért a javítás ezúttal
+nem a megjelenítést, hanem a **viselkedést** célozza.
+
+### 12.3 A javítás — delegálási irányelv a persona-sávban
+
+`providers\install-free-preset.mjs` a `tool-subagent` patch mellé egy második,
+ugyanolyan szigorúan ellenőrzött patchet kapott: a preset `persona` sorának
+`suffix`-ébe bekerül a `DELEGALAS-IRANYELV` szöveg (a `{{cwd}}` sor
+megtartásával, `|-` block scalarként; ha a forrás suffixe nem plain skalár, a
+szkript hibát dob és nem ír). A szöveg:
+
+- mi az ingyenes lánc, és miért érdemes rá delegálni (a fő szál a fizetős),
+- **mikor** delegáljon: felmérés, többfájlos keresés, napló/adat-pásztázás,
+  állítás ellenőrzése, független review, párhuzamosítható darabok,
+- **mi maradjon a fő szálon**: a felhasználó döntése, 1–2 hívásos lépés,
+  fájlmódosítás, és amit a gyermek összefoglalójából nem lehet ellenőrizni,
+- hogyan adja meg a feladatot (teljes, önálló prompt — a gyermek nem látja a
+  beszélgetést, és gyengébb, ingyenes modellen fut),
+- a válaszban jelezze, hogy a munka az ingyenes láncon ment.
+
+A telepítő ellenőrzése kiterjedt rá (`persona sor: megvan`,
+`delegalasi iranyelv: true`), a `--verbose` pedig kiírja a patchelt persona
+blokkot.
+
+**Élesítés (2026-10-04 06:54):** mentés
+(`~\.dsh\.agent-presets\standard-free.bak-20261004-065408`), majd
+`node providers\install-free-preset.mjs --apply --force`. A generált YAML-t a
+DSH saját `yaml` csomagjával parse-olva ellenőriztem: a persona blokk külön
+dokumentumként is és a teljes kompozíció is hibátlan (a `suffix` 1 361
+karakteres string, a `prefix` érintetlen).
+
+**Amit tudni kell:** a persona-sáv a rendszerprompt része, ezért az irányelv
+csak a telepítés **után indított** beszélgetésekben érvényes; a futó
+beszélgetések a saját promptjukon maradnak. A szöveg egy helyen, a
+`providers\install-free-preset.mjs` `DELEGATION_GUIDANCE` tömbjében
+szerkeszthető, majd `--apply --force`-szal újratelepíthető.
+
+### 12.4 Ami továbbra is igaz
+
+- A lánc **nem esik vissza fizetősre**: ha a proxy áll, a gyermek hívása elhal.
+  Ezért a delegálás növelése a proxy függőségét is növeli — a watchdog és a
+  `verify-subagent-chain.mjs` marad az ellenőrzés.
+- A `check-delegation-route.mjs --hours 24` a mérőeszköz: ha egy nap végén itt
+  nincs ingyenes gyermek, akkor vagy nem történt delegálás, vagy a proxy/lánc
+  hibás. A kettőt a `verify-subagent-chain.mjs` és a
+  `reports\proxy-watchdog.log` választja szét.
+- Az irányelv **nem** kényszerít delegálást minden lépésre: a döntés, a
+  fájlmódosítás és a felhasználónak szóló válasz szándékosan a fő szálon marad,
+  mert a gyermek gyengébb (ingyenes) modellen fut.

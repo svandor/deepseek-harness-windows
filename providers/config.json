@@ -62,9 +62,9 @@
       "targets": [
         "groq/openai/gpt-oss-120b",
         "nvidia/nvidia/nemotron-3-super-120b-a12b",
+        "openrouter/qwen/qwen3.8-27b:free",
         "nvidia/openai/gpt-oss-20b",
-        "ollama/qwen2.5-coder:14b",
-        "openrouter/qwen/qwen3.8-27b:free"
+        "ollama/qwen2.5-coder:14b"
       ]
     },
     "deepseek-chat": {
@@ -73,8 +73,8 @@
       "targets": [
         "groq/openai/gpt-oss-120b",
         "nvidia/nvidia/nemotron-3-super-120b-a12b",
-        "ollama/gpt-oss:20b",
-        "openrouter/qwen/qwen3.8-27b:free"
+        "openrouter/qwen/qwen3.8-27b:free",
+        "ollama/gpt-oss:20b"
       ]
     },
     "fast-chat": {
