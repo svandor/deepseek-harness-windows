@@ -1417,7 +1417,7 @@ window.__ModuleLoader__.load({
       "gitAheadBehindHint": "↑ = hány commit vár feltolásra (Push), ↓ = hány commit van a távoli ágon, ami nálad még nincs meg. Ez commitok száma, nem fájloké.",
       "gitCommitFiles": "commitra:",
       "gitChangedHint": "A commit a munkaterület MINDEN változását viszi (git add -A): a fenti szám a commitba kerülő fájlok mennyisége.",
-      "gitCommitLangToggle": "A commit üzenete most {lang} nyelven születik. Kattints a váltáshoz.",
+      "gitCommitLangToggle": "A commit üzenete most {lang} nyelven születik EBBEN a munkaterületben (munkaterületenként külön beállítás). Kattints a váltáshoz.",
       "gitStatusTooltip": "↑ commit feltolásra vár\n↓ commit a távoli ágon\n\nEz a szám commitokat jelent, nem fájlokat. A „commitra” szám mutatja, hány fájl kerül a következő commitba.",
       "langEnglish": "Angol nyelv",
       "ghTitle": "GitHub",
@@ -1638,7 +1638,7 @@ window.__ModuleLoader__.load({
       "gitAheadBehindHint": "↑ = how many commits are waiting to be pushed (Push), ↓ = how many commits exist on the remote branch that you do not have yet. These count commits, not files.",
       "gitCommitFiles": "to commit:",
       "gitChangedHint": "A commit takes EVERY change in the workspace (git add -A): the number above is how many files go into the commit.",
-      "gitCommitLangToggle": "The commit message is written in {lang} right now. Click to switch.",
+      "gitCommitLangToggle": "The commit message is written in {lang} in THIS workspace (the setting is per workspace). Click to switch.",
       "gitStatusTooltip": "↑ commits waiting to be pushed\n↓ commits on the remote branch\n\nThese are commit counts, not file counts. The \"to commit\" number shows how many files go into the next commit.",
       "langEnglish": "English language",
       "ghTitle": "GitHub",
@@ -3579,8 +3579,10 @@ window.__ModuleLoader__.load({
               children: jsx.jsx(GitPanel, {
                 t: t,
                 root: workspaceRoot(),
-                // A commit-üzenet nyelvének alapértéke az aktív felületi nyelv;
-                // a panel saját HU/EN kapcsolója ezt felülírhatja.
+                // A commit-üzenet nyelvének alapértéke az aktív felületi nyelv,
+                // de a tényleges választás a MUNKATERÜLETHEZ tartozik: a panel
+                // saját HU/EN kapcsolója munkaterületenként jegyzi meg, ezért
+                // lehet az egyik nyitott projekt angol, a másik magyar.
                 localeId: localeId,
                 onClose: function () { setPanelOpen(false); }
               })
@@ -3619,23 +3621,25 @@ window.__ModuleLoader__.load({
      *
      * MIÉRT KÜLÖN a felület nyelvétől: a felület lehet magyar, miközben a repó
      * nyilvános, ezért angol commit üzenet kell. A választás ezért nem a globális
-     * nyelvet állítja, hanem csak ezt a panelt — és megjegyzi magának.
+     * nyelvet állítja, hanem csak ezt a panelt.
+     *
+     * MIÉRT A MUNKATERÜLETHEZ TARTOZIK: a panel egyszerre több NYITOTT projekthez
+     * dolgozik, és a döntés a REPÓról szól, nem a felületről — az egyik projekt
+     * nyilvános (angol üzenet), a másik belső (magyar). Egyetlen közös érték ezért
+     * hibás: a nyelv a munkaterület saját beállítása, a panel-tördeléssel együtt
+     * (`state/panel-layout.json`, `/ui-extras/layout`). A böngésző tárolója erre
+     * alkalmatlan: minden ablakgeneráció friss WebView2-profilt kap, így a
+     * választás elveszne — ugyanaz a hiba, amiért a terminál-tördelés is a hostra
+     * került.
      */
-    var GIT_COMMIT_LANG_KEY = "dsh-ui-extras.gitCommitLang";
-
-    function readGitCommitLang() {
-      try {
-        var raw = window.localStorage.getItem(GIT_COMMIT_LANG_KEY);
-        return raw === "hu" || raw === "en" ? raw : "auto";
-      } catch (error) {
-        return "auto";
-      }
+    function readGitCommitLang(workspace) {
+      var stored = readTerminalPrefs(workspace).commitLang;
+      return stored === "hu" || stored === "en" ? stored : "auto";
     }
 
-    function writeGitCommitLang(value) {
-      try {
-        window.localStorage.setItem(GIT_COMMIT_LANG_KEY, value === "hu" || value === "en" ? value : "auto");
-      } catch (error) { }
+    /** A commit-nyelv mentése a MUNKATERÜLET panel-tördelésébe. */
+    function writeGitCommitLang(workspace, value) {
+      savePanelLayout(workspace, { commitLang: value === "hu" || value === "en" ? value : "auto" });
     }
 
     /** A tényleges nyelv, amiben a host az automatikus üzenetet írja. */
@@ -3675,12 +3679,32 @@ window.__ModuleLoader__.load({
       var pickedRepo = pickState[0];
       var setPickedRepo = pickState[1];
 
+      /**
+       * Whether the reader has picked a commit language BY HAND in this
+       * workspace. The host answers the layout fetch asynchronously, and a slow
+       * answer must not undo a click that happened while it was in flight.
+       */
+      var langTouched = react.useRef(false);
+
+      // Munkaterület-váltás: az új projekt a SAJÁT mentett nyelvét kapja, és a
+      // kézi érintés jelzője nullázódik — különben az új projekt örökölné a régit.
+      // (Az állapot lentebb deklarálódik, de az effekt a render UTÁN fut, ezért a
+      // `var`-ral hoistolt beállító itt is elérhető.)
+      react.useEffect(function () {
+        langTouched.current = false;
+        setCommitLangChoice(readGitCommitLang(props.root));
+      }, [props.root]);
+
       // One fetch of this workspace's layout, then the selection is applied.
       react.useEffect(function () {
         if (!props.root) return undefined;
         var alive = true;
         loadPanelLayout(props.root).then(function (layout) {
-          if (alive && layout && typeof layout.repo === "string" && layout.repo !== "") setPickedRepo(layout.repo);
+          if (!alive || !layout) return;
+          if (typeof layout.repo === "string" && layout.repo !== "") setPickedRepo(layout.repo);
+          // A host a munkaterület MENTETT commit-nyelvét is a válaszban adja; a
+          // közben kézzel átállított értéket egy lassú válasz nem írhatja felül.
+          if (!langTouched.current) setCommitLangChoice(readGitCommitLang(props.root));
         });
         return function () { alive = false; };
       }, [props.root]);
@@ -3709,8 +3733,11 @@ window.__ModuleLoader__.load({
 
       // Commit üzenet nyelve (HU/EN/Automatikus): a felület nyelvétől független
       // választás, mert egy nyilvános repóhoz angol üzenet kell akkor is, ha a
-      // felület magyar. Alapérték: az aktív felületi nyelv.
-      var commitLangState = react.useState(function () { return readGitCommitLang(); });
+      // felület magyar. A választás a MUNKATERÜLETHEZ tartozik (a nyitott
+      // projektenként más lehet), és a host tárolja a panel-tördeléssel együtt.
+      // Alapérték (amíg ehhez a munkaterülethez nincs mentett érték): az aktív
+      // felületi nyelv.
+      var commitLangState = react.useState(function () { return readGitCommitLang(props.root); });
       var commitLangChoice = commitLangState[0];
       var setCommitLangChoice = commitLangState[1];
       // Csak a KIVÁLASZTOTT nyelv látszik (a gomb felirata HU vagy EN); minden
@@ -3721,7 +3748,9 @@ window.__ModuleLoader__.load({
 
       function toggleCommitLang() {
         var next = commitLang === "hu" ? "en" : "hu";
-        writeGitCommitLang(next);
+        // A jelző a mentés ELŐTT áll be: a host válasza ne írja felül a kattintást.
+        langTouched.current = true;
+        writeGitCommitLang(props.root, next);
         setCommitLangChoice(next);
       }
 

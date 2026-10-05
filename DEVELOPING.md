@@ -23,8 +23,23 @@ a separate branch is created only when explicitly requested.
 A Git panel commit gombja üres üzenet esetén automatikusan nevez el
 (dátum + az első módosított útvonal). Kézzel is beírható szöveg a mezőbe.
 
+A commit üzenet **nyelve** a Git panel HU/EN gombjával váltható, és a
+**munkaterülethez** tartozik: a választás a munkaterület panel-tördelésében
+(`state/panel-layout.json`, `commitLang` kulcs) marad meg, ezért lehet az egyik
+nyílt projekté angol, a másiké magyar. Amíg egy munkaterülethez nincs mentett
+érték, a nyelv az aktív felületi nyelvét követi — a felület nyelve és a commit
+nyelve szándékosan két külön dolog.
+
 The Git panel's commit button generates a message automatically when the field
 is empty (date + the first changed path). A message can also be typed in.
+
+The **language** of the commit message is switched with the Git panel's HU/EN
+button and belongs to the **workspace**: the choice is remembered in the
+workspace's panel layout (`state/panel-layout.json`, key `commitLang`), so one
+open project can commit in English while another one commits in Hungarian.
+Until a workspace has a stored value, the language follows the active interface
+language — the interface language and the commit language are deliberately two
+separate things.
 
 ## Szerző / Author
 

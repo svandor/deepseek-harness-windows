@@ -144,6 +144,16 @@ Ez **soha nem nyúl az npx cache-hez**, és a beépített funkciókat nem érint
 - Az éles profilba telepítés **megtörtént** (a `cordis.patch.yml` tartalmazza a
   `ui-extras` bejegyzést); a host fél új verziója csak szerver-újraindítással
   töltődik be.
+- **A commit-üzenet nyelve munkaterületenként** (2026-10-05, javítva): a Git
+  panel HU/EN kapcsolója nem a felület nyelvét és nem is az egész Harness
+  beállítását állítja, hanem a **munkaterületét**: a választás a
+  panel-tördelésbe kerül (`state\panel-layout.json`, `commitLang` kulcs,
+  `/ui-extras/layout`), ezért ugyanabban a felületben az egyik nyílt projekt
+  angol, a másik magyar commit üzenetet kaphat. Korábban egyetlen `localStorage`
+  kulcs (`dsh-ui-extras.gitCommitLang`) tartotta — az minden munkaterületre
+  ugyanaz volt, ráadásul minden ablakgeneráció friss WebView2-profilt kap, ezért
+  a választás elveszett. Mentett érték nélkül a nyelv az aktív felületi nyelvet
+  követi (`auto`).
 - **Delegálás a statisztikában** (2026-09-30): a `/ui-extras/usage` válasz
   `delegated` blokkja két zsebre bomlik (`free` = nulla árú lánc, `paid` =
   delegálva is fizetős route), plusz `freeSavingsUsd`, `models` bontás és
