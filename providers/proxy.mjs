@@ -276,6 +276,13 @@ async function attempt(target, bodyObj, { stream }) {
   const timer = setTimeout(() => controller.abort(new Error('connect timeout')), connectTimeoutMs);
 
   const payload = { ...bodyObj, model };
+  // Helyi Ollama: rövid keep_alive, hogy a modell NE maradjon hosszan a VRAM-ban.
+  // MÉRT (2026-10-07): qwen2.5:7b-instruct = 6,14 GB VRAM a hívás alatt, és a
+  // keep_alive lejárta után a foglalás nullára esik vissza (9577 -> 3086 MiB).
+  // A gpt-oss:20b (12,85 GB) ezzel szemben gyakorlatilag kitöltené a 16 GB-ot.
+  if (provider.id === 'ollama' && payload.keep_alive === undefined) {
+    payload.keep_alive = provider.keepAlive ?? CONFIG.ollamaKeepAlive ?? '2m';
+  }
   const headers = { 'content-type': 'application/json', accept: stream ? 'text/event-stream' : 'application/json' };
   if (provider.apiKey) headers.authorization = `Bearer ${provider.apiKey}`;
   if (provider.headers) Object.assign(headers, provider.headers);
@@ -336,9 +343,68 @@ function makeStallWatcher(target, res, label) {
   return { arm, disarm };
 }
 
+// ── a válasz TARTALMÁNAK vizsgálata (mért hiba, javítva 2026-10-07) ───────
+/**
+ * MEGMÉRT HIBA, amit ez a szakasz megszüntet:
+ *
+ * A proxy eddig csak a KAPCSOLATOT nézte: ha az upstream 200-at adott és
+ * megindult a stream, az „HIT" volt. A DSH session-naplói viszont azt
+ * mutatják, hogy a szabad gpt-oss végpontok időnként SÉRÜLT harmony-streamet
+ * adnak vissza, és a delegált gyerek 4 lépés után elhal:
+ *
+ *   "unexpected tokens remaining in message header:
+ *      Some(\"to=functions.read <|constrain|>?? On next file?<|end|><|start|>assistant<|channel|>commentary\")"
+ *   "list index out of range"                    (mindkettő: PI_AI_ERROR)
+ *
+ * 8 nap alatt 46 delegálásból 21 így halt el, miközben a proxy naplójában
+ * ezek HIT-ként szerepeltek. Ugyanez a vizsgálat fogja meg a „tool-hívást
+ * content-szövegként" esetet is (a qwen2.5-coder:14b mért hibája): az sem
+ * valódi `tool_calls`, tehát a DSH számára használhatatlan.
+ */
+const HARMONY_LEAK = /<\|(?:start|end|channel|constrain|message|call)\|>|to=functions\./;
+const FAKE_TOOL_JSON = /^\s*\{\s*"?(?:name|tool_calls|function)"?\s*:/;
+const SSE_PROBE_BYTES = 4096;   // ennyi byte után már nem gyanús, ha nincs sérülés
+
+/** Nem-stream válasz minősítése. */
+function assessJsonBody(text) {
+  let obj;
+  try { obj = JSON.parse(text); } catch { return { verdict: 'bad', why: 'a válasz nem JSON' }; }
+  if (obj?.error) {
+    return { verdict: 'bad', why: `upstream error: ${String(obj.error?.message ?? obj.error).slice(0, 160)}` };
+  }
+  const choice = obj?.choices?.[0];
+  const msg = choice?.message ?? {};
+  const content = typeof msg.content === 'string' ? msg.content : '';
+  if (choice?.finish_reason === 'error') return { verdict: 'bad', why: 'finish_reason=error' };
+  if (HARMONY_LEAK.test(JSON.stringify(obj))) return { verdict: 'bad', why: 'sérült harmony-token a válaszban' };
+  if ((!msg.tool_calls || msg.tool_calls.length === 0) && FAKE_TOOL_JSON.test(content)) {
+    return { verdict: 'bad', why: 'tool-hívás content-szövegként (nincs valódi tool_calls)' };
+  }
+  return { verdict: 'ok' };
+}
+
+/** SSE-előtag minősítése: 'bad' (sérült), 'ok' (már látszik, hogy jó), 'wait'. */
+function assessSsePrefix(buffered) {
+  if (HARMONY_LEAK.test(buffered)) return { verdict: 'bad', why: 'sérült harmony-token a streamben' };
+  if (/"error"\s*:/.test(buffered)) return { verdict: 'bad', why: 'hiba a streamben' };
+  if (/"tool_calls"\s*:/.test(buffered)) return { verdict: 'ok' };
+  const finish = buffered.match(/"finish_reason"\s*:\s*"([^"]+)"/);
+  if (finish) {
+    return finish[1] === 'error'
+      ? { verdict: 'bad', why: "finish_reason=error a streamben" }
+      : { verdict: 'ok' };
+  }
+  if (/"content"\s*:\s*"(?:[^"\\]|\\.){12,}/.test(buffered)) return { verdict: 'ok' };
+  return { verdict: 'wait' };
+}
+
 /** A próba után eldöntjük: van-e értelme a következő providerre váltani? */
 function retriable(result) {
   if (result.kind === 'error') return true;
+  if (result.kind === 'json') {
+    const a = assessJsonBody(result.text);
+    if (a.verdict === 'bad') { result.reason = a.why; return true; }
+  }
   return false;
 }
 
@@ -385,15 +451,64 @@ async function handleChat(req, res, bodyObj) {
       continue;
     }
 
-    log(`${i === 0 ? 'HIT ' : 'FALLBACK '}${label}`);
-
     if (result.kind === 'json') {
+      const a = assessJsonBody(result.text);
+      if (a.verdict === 'bad') {
+        tried.push(`${label} (${a.why})`);
+        log(`FAIL ${label} -> ${a.why}`);
+        continue;
+      }
+      log(`${i === 0 ? 'HIT ' : 'FALLBACK '}${label}`);
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
       res.end(result.text);
       return;
     }
 
-    // ── SSE átvezetés ──
+    // ── SSE: ELŐBB a stream elejét vizsgáljuk, csak azután küldünk a kliensnek ──
+    // A kliens felé addig egy byte sem megy, amíg nem látszik, hogy a válasz ép:
+    // így egy sérült streamnél még vissza lehet lépni a következő célra.
+    const watcher = makeStallWatcher({ provider: target.provider, controller: result.abort }, res, label);
+    const onClientClose = () => {
+      watcher.disarm();
+      result.abort.abort(new Error('kliens lecsatlakozott'));
+    };
+    const iterator = result.upstream.body[Symbol.asyncIterator]();
+    let buffered = '';
+    let probe = { verdict: 'wait' };
+    let sawBytes = false;
+    try {
+      while (true) {
+        const step = await iterator.next();
+        if (step.done) break;
+        sawBytes = true;
+        watcher.arm();
+        buffered += Buffer.from(step.value).toString('utf8');
+        probe = assessSsePrefix(buffered);
+        if (probe.verdict !== 'wait') break;
+        if (buffered.length >= SSE_PROBE_BYTES) break;
+      }
+    } catch (err) {
+      watcher.disarm();
+      tried.push(`${label} (stream hiba: ${err?.message ?? err})`);
+      log(`FAIL ${label} -> stream hiba: ${err?.message ?? err}`);
+      continue;
+    }
+
+    if (probe.verdict === 'bad') {
+      watcher.disarm();
+      result.abort.abort(new Error('serult valasz'));
+      tried.push(`${label} (${probe.why})`);
+      log(`FAIL ${label} -> ${probe.why}`);
+      continue;
+    }
+    if (!sawBytes) {
+      watcher.disarm();
+      tried.push(`${label} (üres stream)`);
+      log(`FAIL ${label} -> üres stream`);
+      continue;
+    }
+
+    log(`${i === 0 ? 'HIT ' : 'FALLBACK '}${label}`);
     res.writeHead(200, {
       'content-type': 'text/event-stream; charset=utf-8',
       'cache-control': 'no-cache, no-transform',
@@ -401,24 +516,18 @@ async function handleChat(req, res, bodyObj) {
       'x-accel-buffering': 'no',
     });
     if (res.flushHeaders) res.flushHeaders();
-
-    const watcher = makeStallWatcher({ provider: target.provider, controller: result.abort }, res, label);
-
-    const onClientClose = () => {
-      watcher.disarm();
-      result.abort.abort(new Error('kliens lecsatlakozott'));
-    };
     res.on('close', onClientClose);
+    if (buffered) res.write(buffered);
 
-    let sawBytes = false;
     try {
-      for await (const chunk of result.upstream.body) {
-        sawBytes = true;
+      while (true) {
+        const step = await iterator.next();
+        if (step.done) break;
         watcher.arm();
-        res.write(chunk);
+        res.write(step.value);
       }
     } catch (err) {
-      // A stream már elindult: visszatekerni nem lehet, a hibát jelezzük.
+      // A stream már elindult a kliens felé: visszatekerni nem lehet, jelezzük.
       log(`STREAM-MEGSZAKADT ${label}: ${err?.message ?? err}`);
       if (!res.writableEnded) {
         res.write(`data: ${JSON.stringify({ error: { message: `upstream stream hiba: ${err?.message ?? err}`, type: 'upstream_stream_error' } })}\n\n`);
@@ -428,7 +537,6 @@ async function handleChat(req, res, bodyObj) {
       res.off('close', onClientClose);
       if (!res.writableEnded) res.end();
     }
-    if (!sawBytes) log(`WARN ${label}: a stream nulla byte-tal zarult`);
     return;
   }
 
@@ -480,6 +588,36 @@ function handleHealth(res) {
     dailyOverride: overrideState(),
     routes,
   });
+}
+
+// ── önteszt: node proxy.mjs --selftest ────────────────────────────────────
+// A tartalom-vizsgáló mintákon fut (a mért hibás válaszokkal), szerver nélkül.
+if (process.argv.includes('--selftest')) {
+  const samples = [
+    ['sérült harmony (mért, 2026-10-07)', 'data: {"choices":[{"delta":{"content":"to=functions.read <|constrain|>?? On next file?<|end|><|start|>assistant<|channel|>commentary"}}]}\n\n', 'bad'],
+    ['harmony start token', 'data: {"choices":[{"delta":{"content":"<|start|>assistant<|channel|>final"}}]}\n\n', 'bad'],
+    ['valódi tool_calls', 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"read_fs","arguments":"{\\"path\\":\\"C:\\\\\\\\Szerver\\"}"}}]}}]}\n\n', 'ok'],
+    ['sima szöveg', 'data: {"choices":[{"delta":{"content":"Elkészültem, itt a jelentés: a mappa 12 fájlt tartalmaz."}}]}\n\n', 'ok'],
+    ['hiba a streamben', 'data: {"error":{"message":"list index out of range","code":"PI_AI_ERROR"}}\n\n', 'bad'],
+    ['finish_reason=error', 'data: {"choices":[{"finish_reason":"error"}]}\n\n', 'bad'],
+  ];
+  let bad = 0;
+  for (const [name, sample, want] of samples) {
+    const got = assessSsePrefix(sample).verdict;
+    const ok = got === want;
+    if (!ok) bad++;
+    log(`${ok ? 'OK  ' : 'HIBA'} ${name}: várt=${want} kapott=${got}`);
+  }
+  const fake = JSON.stringify({ choices: [{ message: { role: 'assistant', content: '{"name": "read_fs", "arguments": {"path": "C:\\\\Szerver"}}' }, finish_reason: 'stop' }] });
+  const fakeVerdict = assessJsonBody(fake).verdict;
+  if (fakeVerdict !== 'bad') bad++;
+  log(`${fakeVerdict === 'bad' ? 'OK  ' : 'HIBA'} pszeudo-tool-hívás content-ben: várt=bad kapott=${fakeVerdict}`);
+  const real = JSON.stringify({ choices: [{ message: { role: 'assistant', content: '', tool_calls: [{ id: 'x', type: 'function', function: { name: 'read_fs', arguments: '{}' } }] }, finish_reason: 'tool_calls' }] });
+  const realVerdict = assessJsonBody(real).verdict;
+  if (realVerdict !== 'ok') bad++;
+  log(`${realVerdict === 'ok' ? 'OK  ' : 'HIBA'} valódi tool_calls JSON: várt=ok kapott=${realVerdict}`);
+  log(bad === 0 ? 'ÖNTESZT: minden eset rendben' : `ÖNTESZT: ${bad} eset hibás`);
+  process.exit(bad === 0 ? 0 : 1);
 }
 
 // ── szerver ────────────────────────────────────────────────────────────────

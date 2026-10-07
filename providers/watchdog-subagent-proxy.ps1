@@ -77,6 +77,30 @@ function Write-Log([string]$text) {
     Add-Content -Path $logFile -Value $line -Encoding utf8
 }
 
+# ── Ollama életjel ────────────────────────────────────────────────────────
+# MÉRT HIBA (2026-10-07): 2026-09-30-án és 10-05-én az Ollama nem futott, ezért
+# a lánc utolsó (helyi) eleme "halozat: fetch failed"-del esett el — a tartalék
+# így semmit nem ért. A helyi modell csak akkor segít, ha a szerver él.
+# A modellt NEM tartjuk bent: a proxy 2 perces keep_alive-ot kér (config.json
+# ollamaKeepAlive), így a VRAM a hívás után felszabadul.
+function Ensure-Ollama {
+    param([int]$OllamaPort = 11434)
+    try {
+        Invoke-RestMethod "http://127.0.0.1:$OllamaPort/api/version" -TimeoutSec 3 | Out-Null
+        return $true
+    } catch {
+        $exe = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama app.exe'
+        if (Test-Path $exe) {
+            Start-Process -FilePath $exe -WindowStyle Hidden -ErrorAction SilentlyContinue
+            Write-Log "OLLAMA INDITAS: nem valaszolt a $OllamaPort porton — 'ollama app.exe' elindítva (helyi tartalék)"
+            Say 'Az Ollama nem válaszolt — elindítottam (helyi tartalék).' 'Yellow'
+        } else {
+            Write-Log "FIGYELMEZTETES: az Ollama nem valaszol, es a futtathato nem talalhato: $exe"
+        }
+        return $false
+    }
+}
+
 function Get-ProxyHealth {
     try { return Invoke-RestMethod "http://127.0.0.1:$Port/healthz" -TimeoutSec 5 }
     catch { return $null }
@@ -92,8 +116,14 @@ function Get-WorkerCloud {
 
 $restarts = 0
 $chainWarned = $false
+$script:LastOllamaCheck = [datetime]::MinValue
 
 while ($true) {
+    # Ollama-eletjel 5 percenkent (a helyi tartalek csak el szerverrel er valamit)
+    if (((Get-Date) - $script:LastOllamaCheck).TotalSeconds -gt 300) {
+        $script:LastOllamaCheck = Get-Date
+        Ensure-Ollama | Out-Null
+    }
     $health = Get-ProxyHealth
 
     if (-not $health) {
