@@ -35,6 +35,12 @@
     Ne próbálja regisztrálni az ütemezett feladatot (csak a leválasztott
     ciklus + Startup parancsikon).
 
+.PARAMETER NoTerminalFix
+    Ne állítsa át az alapértelmezett terminált Windows konzol gazdagépre. Csak
+    akkor használd, ha kifejezetten a Windows Terminálban akarod futtatni a
+    kézzel indított konzolokat — ekkor viszont a rejtett konzolok ablakot
+    villanthatnak és elvehetik a fókuszta (lásd a [0/3] lépés mért hibáját).
+
 .PARAMETER Remove
     Leállítja az őrködő ciklust, törli az ütemezett feladatot és a Startup
     parancsikont.
@@ -55,6 +61,8 @@ param(
     [ValidateRange(15, 3600)][int]$IntervalSeconds = 60,
     [string]$TaskName = 'DSH subagent proxy watchdog',
     [switch]$NoTask,
+    # Ne nyúljon az alapértelmezett terminál beállításához (lásd a [0/3] lépést).
+    [switch]$NoTerminalFix,
     [switch]$Remove
 )
 
@@ -63,6 +71,7 @@ $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $watchdog = Join-Path $root 'watchdog-subagent-proxy.ps1'
 $starter = Join-Path $root 'start-watchdog.ps1'
+$vbsLauncher = Join-Path $root 'start-watchdog-hidden.vbs'
 $reportDir = Join-Path $root 'reports'
 $pidFile = Join-Path $reportDir 'proxy-watchdog.pid'
 $startupDir = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
@@ -97,14 +106,60 @@ if ($Remove) {
 Write-Host "Subagent proxy — önjavító üzem telepítése" -ForegroundColor Cyan
 Write-Host ""
 
+# ── 0. szint: a rejtett konzolok legyenek VALÓBAN rejtettek ───────────────
+# MÉRT HIBA (2026-10-07): ezen a gépen a Windows Terminál volt az
+# alapértelmezett terminál (HKCU:\Console\%%Startup → DelegationConsole /
+# DelegationTerminal a WT GUID-jaira állítva). Emiatt a `-WindowStyle Hidden`
+# és a CREATE_NO_WINDOW ellenére MINDEN rejtett konzolra megjelent egy WT-ablak,
+# majd a tálcára minimalizálódott, és elvette a fókuszta (a watchdog 5 percenként,
+# a robot 15 percenként, a tálca-őr pedig percenként indít ilyet). Conhost-
+# delegálással ugyanazok az indítások 50 ms-os mintavétellel mérve SEM ablakot,
+# SEM fókuszváltást nem okoztak.
+# Visszaállítás, ha valaki mégis WT-t akar:
+#   Set-ItemProperty 'HKCU:\Console\%%Startup' -Name DelegationConsole  -Value '{2EACA947-7F5F-4CFA-BA87-8F7FBEEFBE69}'
+#   Set-ItemProperty 'HKCU:\Console\%%Startup' -Name DelegationTerminal -Value '{E12CFF52-A866-4C77-9A90-F570A7AA2C6B}'
+$conhostClsid = '{B23D10C0-E52E-411E-9D5B-C09FDF709C7D}'
+if (-not $NoTerminalFix) {
+    try {
+        $dlgKey = 'HKCU:\Console\%%Startup'
+        if (-not (Test-Path $dlgKey)) { New-Item -Path $dlgKey -Force | Out-Null }
+        $curC = (Get-ItemProperty $dlgKey -Name DelegationConsole -ErrorAction SilentlyContinue).DelegationConsole
+        $curT = (Get-ItemProperty $dlgKey -Name DelegationTerminal -ErrorAction SilentlyContinue).DelegationTerminal
+        if ($curC -eq $conhostClsid -and $curT -eq $conhostClsid) {
+            Write-Host "[0/3] Alapértelmezett terminál: Windows konzol gazdagép — rendben." -ForegroundColor Green
+        } else {
+            Set-ItemProperty -Path $dlgKey -Name DelegationConsole -Value $conhostClsid
+            Set-ItemProperty -Path $dlgKey -Name DelegationTerminal -Value $conhostClsid
+            Write-Host "[0/3] Alapértelmezett terminál átállítva Windows konzol gazdagépre (rejtett konzol = valóban rejtett)." -ForegroundColor Green
+            Write-Host "      Előző értékek: Console=$curC  Terminal=$curT" -ForegroundColor DarkGray
+            Write-Host "      A már futó konzolokra nem hat, csak az új indításokra." -ForegroundColor DarkGray
+        }
+    } catch {
+        Write-Host "[0/3] A terminál-beállítást nem sikerült átállítani: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "      Kézzel: Gépház → Rendszer → Fejlesztőknek → Terminál → Windows konzol gazdagép" -ForegroundColor DarkYellow
+    }
+} else {
+    Write-Host "[0/3] Terminál-beállítás kihagyva (-NoTerminalFix)." -ForegroundColor DarkGray
+}
+
 # ── 1. szint: ütemezett feladat ───────────────────────────────────────────
 $taskOk = $false
 if (-not $NoTask) {
     # A PowerShell 5.1 szétdarabolja az idézőjeles natív argumentumokat, ezért a
     # schtasks-et cmd.exe-n keresztül hívjuk (mint a register-monthly-retune.ps1).
     #
-    # A -WindowStyle Hidden KELL: enélkül 5 percenként felvillanna egy ablak.
-    $inner = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$watchdog`" -Once"
+    # MÉRT HIBA (2026-10-07): a közvetlen `powershell.exe … -WindowStyle Hidden`
+    # indításra a Windows Terminál (ha az az alapértelmezett terminál) ablakot
+    # nyitott, majd a tálcára minimalizálta, és elvette a fókuszta. Ezért a
+    # feladat a rejtett VBS-burkolót indítja, ami `WshShell.Run …, 0, False`-szal
+    # indít, és maga ellenőrzi, hogy fut-e már ciklus (a wscript azonnal kilép,
+    # ezért az IgnoreNew nem védene a párhuzamos ciklusoktól).
+    if (Test-Path $vbsLauncher) {
+        $inner = "wscript.exe //nologo `"$vbsLauncher`""
+    } else {
+        Write-Host "[1/3] FIGYELEM: hiányzik a $(Split-Path $vbsLauncher -Leaf) — a task a régi (ablakot nyitó) módon regisztrálódik." -ForegroundColor Yellow
+        $inner = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$watchdog`" -Once"
+    }
     $tr = $inner -replace '"', '\"'
 
     $cmdLine = "schtasks.exe /Create /TN `"$TaskName`" /TR `"$tr`" /SC MINUTE /MO 5 /F"
@@ -142,8 +197,16 @@ if (Test-Path $oldLnk) {
 try {
     $sh = New-Object -ComObject WScript.Shell
     $lnk = $sh.CreateShortcut($lnkPath)
-    $lnk.TargetPath = 'powershell.exe'
-    $lnk.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$watchdog`" -Quiet -IntervalSeconds $IntervalSeconds"
+    # Ugyanaz a rejtett burkoló, mint a feladatnál: a parancsikon csak a
+    # gyakoriságot adja át (a -Quiet kapcsolót a VBS teszi be, és az is
+    # ellenőrzi, hogy ne induljon második ciklus).
+    if (Test-Path $vbsLauncher) {
+        $lnk.TargetPath = 'wscript.exe'
+        $lnk.Arguments = "//nologo `"$vbsLauncher`" $IntervalSeconds"
+    } else {
+        $lnk.TargetPath = 'powershell.exe'
+        $lnk.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$watchdog`" -Quiet -IntervalSeconds $IntervalSeconds"
+    }
     $lnk.WorkingDirectory = $root
     $lnk.WindowStyle = 7
     $lnk.Description = 'DSH subagent fallback proxy orokodes (onjavito ciklus)'

@@ -504,22 +504,31 @@ $script:LastRobotEnsureAt = [datetime]::MinValue
 
 function Test-HarnessHealthy {
   param([int]$Port)
+  # MÉRT HIBA (javítva 2026-10-07): a PowerShell a .NET WebExceptiont
+  # MethodInvocationExceptionbe csomagolja, ezért a korábbi
+  # `catch [System.Net.WebException]` ág SOHA nem futott le. A gyökér-végpont
+  # 401-e (auth fence = a szerver ÉL) így a külső catch-be esett, a tálca
+  # „szerver=False"-ot naplózott, és két egymás utáni kör után újraindította a
+  # harness-t. Ez okozta a percenkénti újraindítási hullámot és a felület
+  # ismétlődő újratöltéseit (window.log: „fresh sign-in token appeared").
   try {
     $req = [System.Net.HttpWebRequest]::Create("http://127.0.0.1:$Port/")
     $req.Method = 'GET'
     $req.Timeout = 5000
     $req.AllowAutoRedirect = $false
-    try {
-      $resp = $req.GetResponse()
-      $code = [int]$resp.StatusCode
-      $resp.Close()
-      # 401 (auth fence) es 200 egyarant azt jelentik, hogy a szerver el.
-      return ($code -eq 401 -or $code -eq 200 -or $code -eq 303)
-    } catch [System.Net.WebException] {
-      if ($_.Exception.Response) { return $true }   # HTTP valasz erkezett: figyel
-      return $false
-    }
+    $req.Proxy = $null   # loopback: soha ne menjen a rendszer-proxyn át
+    $resp = $req.GetResponse()
+    $code = [int]$resp.StatusCode
+    $resp.Close()
+    # Bármilyen HTTP-válasz (401 auth fence, 200, 303, 404) azt jelenti: él.
+    return ($code -lt 500)
   } catch {
+    # A HTTP-válasz a beágyazott (InnerException) WebExceptionön van.
+    $ex = $_.Exception
+    while ($ex) {
+      if ($ex -is [System.Net.WebException] -and $ex.Response) { return $true }
+      $ex = $ex.InnerException
+    }
     return $false
   }
 }
