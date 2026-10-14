@@ -90,15 +90,37 @@ function envValue(name) {
   return v && v.length > 0 ? v : undefined;
 }
 
+/**
+ * Tartalek feloldas a DSH credential-store `refs:` szakaszabol (2026-10-14).
+ *
+ * Miert kell: a fiókspecifikus ertekek (pl. ALIBABA_EU_BASE_URL) nem a
+ * repoban elnek, es a futo peldany kornyezete attol fugg, MELYIK indito
+ * (run-proxy-service.ps1, watchdog, kezi) hozta letre. MERVE: a watchdog altal
+ * inditott peldany kornyezetebol hianyzott a ket vegpont, ezert a proxy ures
+ * baseURL-lel indult es az Alibaba-celok hasznalhatatlanok voltak. Ez a
+ * kozvetlen olvasas ezt fuggetleniti az inditotol.
+ */
+function credentialRef(name) {
+  if (!name) return undefined;
+  try {
+    const home = process.env.DSH_HOME ?? path.join(process.env.USERPROFILE ?? '', '.dsh');
+    const text = readFileSync(path.join(home, '.credentials.yaml'), 'utf8');
+    const m = new RegExp(`^\\s{2}${name}:\\s*(\\S+)\\s*$`, 'm').exec(text);
+    return m ? m[1] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** A config.json providers szekciója + a kornyezeti valtozok feloldasa. */
 function resolveProviders() {
   const providers = {};
   for (const [id, def] of Object.entries(CONFIG.providers ?? {})) {
-    const apiKey = envValue(def.apiKeyEnv) ?? def.apiKey;
+    const apiKey = envValue(def.apiKeyEnv) ?? credentialRef(def.apiKeyEnv) ?? def.apiKey;
     providers[id] = {
       id,
       label: def.label ?? id,
-      baseURL: (def.baseURLEnv ? envValue(def.baseURLEnv) : undefined) ?? def.baseURL,
+      baseURL: (def.baseURLEnv ? (envValue(def.baseURLEnv) ?? credentialRef(def.baseURLEnv)) : undefined) ?? def.baseURL,
       apiKey,
       apiKeyEnv: def.apiKeyEnv,
       // Helyi szerver (Ollama) placeholder kulccsal is megy.
