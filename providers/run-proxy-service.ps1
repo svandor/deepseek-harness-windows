@@ -59,7 +59,7 @@ if (-not $existing) {
 # Kulcsok a credential store-ból
 if (Test-Path $creds) {
     $text = Get-Content $creds -Raw
-    foreach ($name in @('GROQ_API_KEY', 'NVIDIA_API_KEY', 'OPENROUTER_API_KEY', 'OLLAMA_LOCAL_API_KEY', 'ALIBABA_API_KEY', 'DASHSCOPE_API_KEY', 'DEEPSEEK_API_KEY')) {
+    foreach ($name in @('GROQ_API_KEY', 'NVIDIA_API_KEY', 'OPENROUTER_API_KEY', 'OLLAMA_LOCAL_API_KEY', 'ALIBABA_API_KEY', 'DASHSCOPE_API_KEY', 'DEEPSEEK_API_KEY', 'ALIBABA_EU_BASE_URL', 'ALIBABA_SG_BASE_URL', 'ALIBABA_CLOUD_ACCESS_KEY_ID', 'ALIBABA_CLOUD_ACCESS_KEY_SECRET')) {
         if ($text -match "(?m)^\s{2}${name}:\s*(\S+)\s*$") {
             Set-Item -Path "env:$name" -Value $Matches[1]
         }

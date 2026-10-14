@@ -156,7 +156,10 @@ function credKey(name) {
 async function checkProvider(id, def) {
   const key = process.env[def.apiKeyEnv] ?? credKey(def.apiKeyEnv) ?? def.apiKey;
   if (!key && !def.optionalKey) return { id, ok: false, reason: `nincs kulcs (${def.apiKeyEnv})` };
-  const base = String(def.baseURL).replace(/\/+$/, "").replace(/\/v1$/, "");
+  // A fiókspecifikus cím a credential-store-ból/env-ből (baseURLEnv), nem a repóból.
+  const rawBase = (def.baseURLEnv ? (process.env[def.baseURLEnv] ?? credKey(def.baseURLEnv)) : undefined) ?? def.baseURL;
+  if (!rawBase) return { id, ok: false, reason: `nincs baseURL (${def.baseURLEnv ?? "baseURL"})` };
+  const base = String(rawBase).replace(/\/+$/, "").replace(/\/v1$/, "");
   try {
     const t0 = Date.now();
     const res = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(20000) });
@@ -262,7 +265,14 @@ async function scanAlibabaCycle(cycle) {
   };
 }
 
-const WORKSPACE_REGION = { "{EU-WorkspaceId}": "EU", "{SG-WorkspaceId}": "SG" };
+// A workspace-azonositok a credential-store-bol (env) szarmaznak, nem a repobol.
+const WORKSPACE_REGION = {};
+{
+  const eu = (/([a-z0-9-]+)\.eu-central-1\./i.exec(process.env.ALIBABA_EU_BASE_URL ?? credKey("ALIBABA_EU_BASE_URL") ?? "") ?? [])[1];
+  const sg = (/([a-z0-9-]+)\.ap-southeast-1\./i.exec(process.env.ALIBABA_SG_BASE_URL ?? credKey("ALIBABA_SG_BASE_URL") ?? "") ?? [])[1];
+  if (eu) WORKSPACE_REGION[eu] = "EU";
+  if (sg) WORKSPACE_REGION[sg] = "SG";
+}
 let invoice = null;
 try {
   const bss = await import(`file://${join(HERE, "bss-client.mjs").replace(/\\/g, "/")}`);

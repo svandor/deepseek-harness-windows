@@ -154,14 +154,14 @@
     },
     "alibaba": {
       "label": "Alibaba Model Studio EU (Qwen, Frankfurt)",
-      "baseURL": "https://{EU-WorkspaceId}.eu-central-1.maas.aliyuncs.com/compatible-mode/v1",
+      "baseURLEnv": "ALIBABA_EU_BASE_URL",
       "apiKeyEnv": "ALIBABA_API_KEY",
       "connectTimeoutMs": 30000
     },
     "alibaba-intl": {
       "_comment": "SZINGAPÚR — bekötve 2026-10-14 ({SG-WorkspaceId}, 99 modell, kulcs: DASHSCOPE_API_KEY). Az 1M token/modell gratis kvóta CSAK Szingapúrban él [D], ezért ez az ELSŐ fizetős szintű cél a láncokban (kvóta alatt ingyenes). Mért: qwen3.8-flash tools+kép 1,2 s, qwen3.7-flash tools 3,0 s (az EU-n ugyanez 12 s volt).",
       "label": "Alibaba Model Studio Szingapúr",
-      "baseURL": "https://{SG-WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+      "baseURLEnv": "ALIBABA_SG_BASE_URL",
       "apiKeyEnv": "DASHSCOPE_API_KEY",
       "connectTimeoutMs": 30000
     },
