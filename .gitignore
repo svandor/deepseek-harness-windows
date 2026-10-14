@@ -97,3 +97,7 @@ desktop.ini
 $RECYCLE.BIN/
 .DS_Store
 *.swp
+
+# --- futasideju proba-maradvanyok (ne keruljenek a repoba) ----------------------
+providers/tmp-*
+providers/*.out.txt
