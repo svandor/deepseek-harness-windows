@@ -1,6 +1,7 @@
 // SZINGAPÚR (ap-southeast-1) élő próba a CSV-ből olvasott kulccsal.
 // A kulcsot SOHA nem írjuk ki. Futtatás:
 //   node providers/probe-singapore.mjs "C:\...\默认业务空间-apiKey-1306045.csv"
+import { euBase, sgBase } from "./alibaba-endpoints.mjs";
 import { readFileSync } from "node:fs";
 
 const csvPath = process.argv[2];
@@ -8,7 +9,7 @@ const csv = readFileSync(csvPath, "utf8");
 const val = (k) => csv.split(/\r?\n/).find((l) => l.startsWith(k + ","))?.slice(k.length + 1).trim();
 const KEY = val("apiKey");
 const BASE = val("openAiCompatible").replace(/\/+$/, "");
-const EU_BASE = "https://{EU-WorkspaceId}.eu-central-1.maas.aliyuncs.com/compatible-mode/v1";
+const EU_BASE = "euBase()";
 const H = { "content-type": "application/json", authorization: `Bearer ${KEY}` };
 function out(n, ok, d) { console.log(`[${ok ? "OK  " : "FAIL"}] ${n} :: ${d}`); }
 console.log(`kulcs: ${KEY.slice(0, 6)}… (hossz ${KEY.length}) | workspace: ${val("workspaceId")} | base: ${BASE}`);

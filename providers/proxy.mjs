@@ -98,7 +98,7 @@ function resolveProviders() {
     providers[id] = {
       id,
       label: def.label ?? id,
-      baseURL: def.baseURL,
+      baseURL: (def.baseURLEnv ? envValue(def.baseURLEnv) : undefined) ?? def.baseURL,
       apiKey,
       apiKeyEnv: def.apiKeyEnv,
       // Helyi szerver (Ollama) placeholder kulccsal is megy.

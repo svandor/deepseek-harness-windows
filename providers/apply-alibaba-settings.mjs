@@ -8,6 +8,7 @@
 // vision-worker route-ot es az alibaba-compat/qwen3.7-flash gyermek-modellt.
 // Futas: node providers/apply-alibaba-settings.mjs            (dry-run)
 //        node providers/apply-alibaba-settings.mjs --apply    (ir + backup)
+import { euBase, sgBase } from "./alibaba-endpoints.mjs";
 import { readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -72,7 +73,7 @@ const entry = ([id, ctx, max, img], indent) => [
   `${indent}  maxTokens: ${max}`,
 ];
 
-const BASE = "https://{EU-WorkspaceId}.eu-central-1.maas.aliyuncs.com/compatible-mode/v1";
+const BASE = "euBase()";
 const block = [
   "    # 2026-10-14: MERES alapjan ujraszervezve. A /responses uton csak a",
   "    # mainline Qwen csalad megy (a qwen3-vl-* 400 'Unsupported model'), a",

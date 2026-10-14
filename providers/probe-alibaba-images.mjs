@@ -1,9 +1,10 @@
 // Képtámogatás élő próba: /chat/completions (image_url) és /responses (input_image).
+import { euBase, sgBase } from "./alibaba-endpoints.mjs";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const EU_BASE = "https://{EU-WorkspaceId}.eu-central-1.maas.aliyuncs.com/compatible-mode/v1";
+const EU_BASE = "euBase()";
 const key = readFileSync(join(homedir(), ".dsh", ".credentials.yaml"), "utf8").match(/^\s*ALIBABA_API_KEY:\s*(\S+)\s*$/m)[1];
 const H = { "content-type": "application/json", authorization: `Bearer ${key}` };
 const png = readFileSync(new URL("./vision-test.png", import.meta.url)).toString("base64");
