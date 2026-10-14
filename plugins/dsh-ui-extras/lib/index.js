@@ -76,6 +76,7 @@ import { fileURLToPath } from "node:url";
 import { execFile, spawnSync } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createZstdDecompress } from "node:zlib";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 
 /** Package root, used for the static asset directory. */
 const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -223,6 +224,112 @@ async function handleBalance(ctx, res) {
       cachedBalanceAt = now;
     }
     sendJson(res, cachedBalance);
+  } catch (error) {
+    sendJson(res, { ok: false, error: String(error?.message ?? error) });
+  }
+}
+
+// --------------------------------------------------- alibaba (BSS) szamla
+//
+// Az Alibaba pay-as-you-go: nincs elore feltoltott egyenleg (MERVE 2026-10-14:
+// AvailableAmount 0.00 USD), ezert a panel a HAVI FIZETENDO szamlat mutatja
+// "negativ egyenlegkent". A modell-API kulcs (sk-ws-...) szamlazast NEM tud
+// olvasni — RAM AccessKey kell (`AliyunBSSReadOnlyAccess` joggal), ACS3-HMAC-
+// SHA256 alairassal. MERVE: a nemzetkozi vegpont mukodik
+// (business.ap-southeast-1.aliyuncs.com; a kínai business.aliyuncs.com nem),
+// es a QueryAccountBill $0.221737-et adott a 2026-10 honapra — pontosan a
+// konzol osszeget. A DescribeInstanceBill 79 modell-szintu tetelt ad.
+const ALIBABA_BSS_HOST = "business.ap-southeast-1.aliyuncs.com";
+let cachedAlibabaBill = null;
+let cachedAlibabaBillAt = 0;
+
+/** Egy kulcs a DSH credential-store `refs:` szakaszabol. */
+function readCredentialRef(name) {
+  try {
+    const home = process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? "", ".dsh");
+    const text = readFileSync(join(home, ".credentials.yaml"), "utf8");
+    const m = new RegExp(`^\\s{2}${name}:\\s*(\\S+)\\s*$`, "m").exec(text);
+    return m === null ? null : m[1];
+  } catch {
+    return null;
+  }
+}
+
+const bssSha256 = (s) => createHash("sha256").update(s).digest("hex");
+const bssHmac = (k, s) => createHmac("sha256", k).update(s).digest("hex");
+const bssEnc = (s) => encodeURIComponent(s).replace(/[!'()*]/gu, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+
+/** ACS3-HMAC-SHA256 alairt BSS RPC hivas (ures torzs, query parameterek). */
+async function bssCall(action, version, params, keyId, keySecret) {
+  const query = { Action: action, Version: version, Format: "JSON", ...params };
+  const canonicalQuery = Object.keys(query).sort().map((k) => `${bssEnc(k)}=${bssEnc(String(query[k]))}`).join("&");
+  const hashedPayload = bssSha256("");
+  const headers = {
+    host: ALIBABA_BSS_HOST,
+    "x-acs-action": action,
+    "x-acs-version": version,
+    "x-acs-date": new Date().toISOString().replace(/\.\d{3}Z$/u, "Z"),
+    "x-acs-signature-nonce": randomUUID(),
+    "x-acs-content-sha256": hashedPayload
+  };
+  const securityToken = readCredentialRef("ALIBABA_CLOUD_SECURITY_TOKEN");
+  if (securityToken !== null) headers["x-acs-security-token"] = securityToken;
+  const signedHeaders = Object.keys(headers).sort().join(";");
+  const canonicalHeaders = Object.keys(headers).sort().map((k) => `${k}:${String(headers[k]).trim()}\n`).join("");
+  const canonicalRequest = ["POST", "/", canonicalQuery, canonicalHeaders, signedHeaders, hashedPayload].join("\n");
+  const signature = bssHmac(keySecret, `ACS3-HMAC-SHA256\n${bssSha256(canonicalRequest)}`);
+  const response = await fetch(`https://${ALIBABA_BSS_HOST}/?${canonicalQuery}`, {
+    method: "POST",
+    headers: { ...headers, authorization: `ACS3-HMAC-SHA256 Credential=${keyId},SignedHeaders=${signedHeaders},Signature=${signature}` }
+  });
+  return await response.json().catch(() => null);
+}
+
+/** A havi fizetendo szamla, az elerheto osszeg es a modell-szintu bontas. */
+async function queryAlibabaBilling() {
+  const keyId = readCredentialRef("ALIBABA_CLOUD_ACCESS_KEY_ID");
+  const keySecret = readCredentialRef("ALIBABA_CLOUD_ACCESS_KEY_SECRET");
+  if (keyId === null || keySecret === null) {
+    return { ok: false, error: "nincs ALIBABA_CLOUD_ACCESS_KEY_ID / _SECRET a hitelesitesi taroloban" };
+  }
+  const cycle = new Date().toISOString().slice(0, 7);
+  const [bill, balance, instances] = await Promise.all([
+    bssCall("QueryAccountBill", "2017-12-14", { BillingCycle: cycle, Granularity: "MONTHLY" }, keyId, keySecret),
+    bssCall("QueryAccountBalance", "2017-12-14", {}, keyId, keySecret).catch(() => null),
+    bssCall("DescribeInstanceBill", "2017-12-14", { BillingCycle: cycle, Granularity: "MONTHLY", MaxResults: "100" }, keyId, keySecret).catch(() => null)
+  ]);
+  const item = bill?.Data?.Items?.Item?.[0] ?? null;
+  const raw = instances?.Data?.Items?.Item ?? instances?.Data?.Items ?? [];
+  const list = Array.isArray(raw) ? raw : [];
+  const byModel = new Map();
+  for (const row of list) {
+    const parts = String(row?.InstanceID ?? "").split(";");
+    const model = parts[2] ?? "(ismeretlen)";
+    byModel.set(model, (byModel.get(model) ?? 0) + Number(row?.PretaxAmount ?? 0));
+  }
+  return {
+    ok: bill?.Success === true,
+    cycle,
+    currency: item?.Currency ?? "USD",
+    pretaxAmount: item?.PretaxAmount ?? null,
+    pretaxGrossAmount: item?.PretaxGrossAmount ?? null,
+    availableAmount: balance?.Data?.AvailableAmount ?? null,
+    availableCashAmount: balance?.Data?.AvailableCashAmount ?? null,
+    accountId: bill?.Data?.AccountID ?? null,
+    models: [...byModel.entries()].map(([model, costUsd]) => ({ model, costUsd })).sort((a, b) => b.costUsd - a.costUsd).slice(0, 12),
+    error: bill?.Success === true ? null : (bill?.Message ?? "a BSS valasz nem ertelmezheto")
+  };
+}
+
+/** Serve the Alibaba bill (rovid cache, mint az egyenleg). */
+async function handleAlibabaBilling(res) {
+  try {
+    const now = Date.now();
+    if (cachedAlibabaBill === null || now - cachedAlibabaBillAt > CACHE_MILLISECONDS) {
+      cachedAlibabaBill = await queryAlibabaBilling();
+      cachedAlibabaBillAt = now;
+    }
+    sendJson(res, cachedAlibabaBill);
   } catch (error) {
     sendJson(res, { ok: false, error: String(error?.message ?? error) });
   }
@@ -2160,6 +2267,33 @@ const MODEL_PRICES = {
   // Legacy routes, kept so an older session log still prices sensibly.
   "deepseek-chat": { hitPeak: 0.07, hitOff: 0.035, missPeak: 0.27, missOff: 0.135, outPeak: 1.1, outOff: 0.55 },
   "deepseek-reasoner": { hitPeak: 0.14, hitOff: 0.07, missPeak: 0.55, missOff: 0.275, outPeak: 2.19, outOff: 1.095 },
+  // SZINGAPÚR (ap-southeast-1) — "International" listaarak [D 2026-10-13].
+  // Az elso 1M token/modeLL INGYENES (90 nap, csak Szingapur), ezt a
+  // scanUsage kulon szamolja el (SG_FREE_TOKENS_PER_MODEL).
+  "alibaba-intl/qwen3.8-flash": { hitPeak: 0.015, hitOff: 0.015, missPeak: 0.15, missOff: 0.15, outPeak: 0.47, outOff: 0.47 },
+  "alibaba-intl/qwen3.8-max": { hitPeak: 0.2, hitOff: 0.2, missPeak: 2.0, missOff: 2.0, outPeak: 6.0, outOff: 6.0 },
+  "alibaba-intl/qwen3.7-plus": { hitPeak: 0.04, hitOff: 0.04, missPeak: 0.4, missOff: 0.4, outPeak: 1.6, outOff: 1.6 },
+  "alibaba-intl/qwen3.7-flash": { hitPeak: 0.003, hitOff: 0.003, missPeak: 0.03, missOff: 0.03, outPeak: 0.13, outOff: 0.13 },
+  "alibaba-intl/qwen3.5-flash": { hitPeak: 0.01, hitOff: 0.01, missPeak: 0.1, missOff: 0.1, outPeak: 0.4, outOff: 0.4 },
+  "alibaba-intl/qwen3-coder": { hitPeak: 0.03, hitOff: 0.03, missPeak: 0.3, missOff: 0.3, outPeak: 1.5, outOff: 1.5 },
+  // Ismeretlen szingapuri modell: a qwen3.8-flash International ara az alap.
+  "alibaba-intl/": { hitPeak: 0.015, hitOff: 0.015, missPeak: 0.15, missOff: 0.15, outPeak: 0.47, outOff: 0.47 },
+  // Alibaba Model Studio EU (Frankfurt) listaarak [D 2026-10-13], USD / 1M token.
+  // LAPOS arak: a Peak/Off mezok egyszinuek (a DeepSeek-fajta napi csucs-ablak
+  // nem letteznek). A kulcsok PROVIDER-elotaggesek, mert ugyanaz az id a
+  // szallitotol fuggoen lehet ingyenes (NVIDIA kimi-k3) es fizetosek
+  // (Alibaba kimi-k3) — a provdert a session-log `source.provider` adja.
+  // JAVITVA (2026-10-14): a korabbi "qwen3.8" kulcs substringkent a fizetosek
+  // qwen3.8-flash/max-at ingyenesnek minositette; szukul a "qwen3.8-27b"-re
+  // (OpenRouter/Groq :free cel), es a fizetosek sorok ELOLE kerulnek.
+  "alibaba/qwen3.8-flash": { hitPeak: 0.0113, hitOff: 0.0113, missPeak: 0.113, missOff: 0.113, outPeak: 0.382, outOff: 0.382 },
+  "alibaba/qwen3.8-max": { hitPeak: 0.165, hitOff: 0.165, missPeak: 1.65, missOff: 1.65, outPeak: 4.951, outOff: 4.951 },
+  "alibaba/qwen3.7-plus": { hitPeak: 0.0276, hitOff: 0.0276, missPeak: 0.276, missOff: 0.276, outPeak: 1.101, outOff: 1.101 },
+  "alibaba/qwen3.7-flash": { hitPeak: 0.0028, hitOff: 0.0028, missPeak: 0.028, missOff: 0.028, outPeak: 0.11, outOff: 0.11 },
+  "alibaba/qwen3-coder": { hitPeak: 0.0144, hitOff: 0.0144, missPeak: 0.144, missOff: 0.144, outPeak: 0.574, outOff: 0.574 },
+  // Ismeretlen alibaba modell (kimi/glm/vl/...): a flash ar a konzervativ
+  // belepteto alap — igy sosem a deepseek-flash fallbackre esnek.
+  "alibaba/": { hitPeak: 0.0113, hitOff: 0.0113, missPeak: 0.113, missOff: 0.113, outPeak: 0.382, outOff: 0.382 },
   // A helyi fallback-lanc route-jai: ezek INGYENESEK (Groq / NVIDIA NIM /
   // OpenRouter :free szint), ezert 0 arral kell szerepelniuk. Enelkul az
   // ismeretlen modell a Flash arat kapna, es a megtakaritas-szamitas
@@ -2169,7 +2303,7 @@ const MODEL_PRICES = {
   "worker": { hitPeak: 0, hitOff: 0, missPeak: 0, missOff: 0, outPeak: 0, outOff: 0 },
   "nemotron": { hitPeak: 0, hitOff: 0, missPeak: 0, missOff: 0, outPeak: 0, outOff: 0 },
   "gpt-oss": { hitPeak: 0, hitOff: 0, missPeak: 0, missOff: 0, outPeak: 0, outOff: 0 },
-  "qwen3.8": { hitPeak: 0, hitOff: 0, missPeak: 0, missOff: 0, outPeak: 0, outOff: 0 },
+  "qwen3.8-27b": { hitPeak: 0, hitOff: 0, missPeak: 0, missOff: 0, outPeak: 0, outOff: 0 },
   "gemini": { hitPeak: 0, hitOff: 0, missPeak: 0, missOff: 0, outPeak: 0, outOff: 0 },
   "gemma": { hitPeak: 0, hitOff: 0, missPeak: 0, missOff: 0, outPeak: 0, outOff: 0 },
   "kimi": { hitPeak: 0, hitOff: 0, missPeak: 0, missOff: 0, outPeak: 0, outOff: 0 },
@@ -2186,6 +2320,30 @@ function modelPrices(model) {
     }
   }
   return { key: "deepseek-flash", ...MODEL_PRICES["deepseek-flash"] };
+}
+
+// ── Szingapúr: ingyenes keret + provider-bontás (2026-10-14) ───────────────
+/**
+ * Az Alibaba Model Studio SZINGAPÚRI workspace új fiókhoz 1 000 000
+ * token/MODELL ingyenes keretet ad (90 napig, csak Szingapúrban) [D].
+ * A keret modellenként értendő, ezért a számítás modellenként vonja le: ami
+ * alatta van, az 0 USD; ami felette, az a szingapúri listaár.
+ *
+ * FONTOS: a DSH nem látja a számla oldali tényleges keret-állapotot — ez a
+ * számítás a SAJÁT naplóinkból becsül. Ha más eszköz is használja ugyanazt a
+ * kulcsot, a keret hamarabb elfogyhat, mint itt látszik.
+ */
+const SG_FREE_TOKENS_PER_MODEL = 1000000;
+const SG_FREE_WINDOW_DAYS = 90;
+
+/** Melyik szolgáltató-család szolgálta ki a modellt (provider-előtag alapján). */
+function providerFamily(model) {
+  const m = String(model ?? "").toLowerCase();
+  if (m.startsWith("alibaba-intl/")) return "alibabaSg";
+  if (m.startsWith("alibaba/") || m.startsWith("alibaba-compat/")) return "alibabaEu";
+  if (m.startsWith("deepseek-official/") || m.startsWith("deepseek/")) return "deepseek";
+  if (isFreeModel(model)) return "free";
+  return "other";
 }
 
 /**
@@ -2229,7 +2387,16 @@ function messageModel(data) {
   const source = (data.message !== undefined && data.message !== null ? data.message.source : undefined)
     ?? data.source
     ?? null;
-  if (source !== null && typeof source.model === "string") return source.model;
+  if (source !== null && typeof source.model === "string") {
+    // Provider-elotag (2026-10-14): ugyanaz a modell-id erkezhet INGYENES
+    // celrol (NVIDIA kimi-k3) es FIZETOSEKrol (Alibaba kimi-k3), ezert az
+    // ar-illesztes a providerrel egyutt tortenik, nem a csupasz id-vel.
+    const provider = typeof source.provider === "string" ? source.provider : "";
+    if (provider.length > 0 && provider !== "unknown" && !source.model.startsWith(`${provider}/`)) {
+      return `${provider}/${source.model}`;
+    }
+    return source.model;
+  }
   if (data.message !== undefined && data.message !== null && typeof data.message.model === "string") return data.message.model;
   return "";
 }
@@ -2366,6 +2533,19 @@ async function scanUsage(days, sessionId) {
   };
   /** Delegalt session-tokenek modellelkent: melyik ut mennyit vitt. */
   const delegatedModels = new Map();
+  // ── provider-bontas (2026-10-14) ────────────────────────────────────────
+  // A labléc "$DSH / $Alibaba" ertekéhez es a statisztika csalad-szintu
+  // bontasahoz. A `free` az ingyenes fallback-lanc (0 aron szamolt) munkaja.
+  const byProvider = {
+    deepseek: { family: "deepseek", label: "DeepSeek (közvetlen)", requests: 0, tokens: 0, costUsd: 0, freeUsd: 0 },
+    alibabaEu: { family: "alibabaEu", label: "Alibaba EU (Frankfurt)", requests: 0, tokens: 0, costUsd: 0, freeUsd: 0 },
+    alibabaSg: { family: "alibabaSg", label: "Alibaba Szingapúr", requests: 0, tokens: 0, costUsd: 0, freeUsd: 0 },
+    free: { family: "free", label: "Ingyenes lánc", requests: 0, tokens: 0, costUsd: 0, freeUsd: 0 },
+    other: { family: "other", label: "Egyéb", requests: 0, tokens: 0, costUsd: 0, freeUsd: 0 }
+  };
+  /** SG keret-elszamolashoz: modellenkent es (nap, modell) bontasban. */
+  const sgModels = new Map();
+  const sgDayModel = new Map();
   let scanned = 0;
   let skipped = 0;
 
@@ -2436,6 +2616,27 @@ async function scanUsage(days, sessionId) {
       totals.total += tokens;
       totals.costUsd += cost;
 
+      // Provider-csalad szerinti gyujtes (a labléc es a statisztika ehhez nyul).
+      const family = providerFamily(model);
+      const providerBucket = byProvider[family] ?? byProvider.other;
+      providerBucket.requests += 1;
+      providerBucket.tokens += tokens;
+      providerBucket.costUsd += cost;
+      if (family === "alibabaSg") {
+        const sg = sgModels.get(model) ?? { model, tokens: 0, costUsd: 0, requests: 0 };
+        sg.tokens += tokens;
+        sg.costUsd += cost;
+        sg.requests += 1;
+        sgModels.set(model, sg);
+        const sgDay = budapestDay(event.time);
+        const dayMap = sgDayModel.get(sgDay) ?? new Map();
+        const dayCell = dayMap.get(model) ?? { tokens: 0, costUsd: 0 };
+        dayCell.tokens += tokens;
+        dayCell.costUsd += cost;
+        dayMap.set(model, dayCell);
+        sgDayModel.set(sgDay, dayMap);
+      }
+
       if (delegatedFile) {
         // A baseline: ugyanezek a tokenek a fizetos DeepSeek-flash aron.
         const baseline = requestCost(usage, "deepseek-flash", event.time);
@@ -2500,6 +2701,45 @@ async function scanUsage(days, sessionId) {
     }
   }
 
+  // ── A SZINGAPURI INGYENES KERET elszamolasa (modellenkent) ───────────────
+  // A keret alatti resz 0 USD: levonjuk a totalbol, a modell-sorokbol es a
+  // napi sorokbol. A szamla oldali tenyleges keret-allapotot nem latjuk —
+  // ez a becsles a sajat naploinkbol szamol.
+  const sgQuotaModels = [];
+  let sgFreeUsd = 0;
+  let sgPaidUsd = 0;
+  for (const [sgModel, sg] of sgModels) {
+    const freeTokens = Math.min(sg.tokens, SG_FREE_TOKENS_PER_MODEL);
+    const ratio = sg.tokens > 0 ? freeTokens / sg.tokens : 0;
+    const freeUsd = sg.costUsd * ratio;
+    const paidUsd = sg.costUsd - freeUsd;
+    sgFreeUsd += freeUsd;
+    sgPaidUsd += paidUsd;
+    sgQuotaModels.push({
+      model: sgModel,
+      requests: sg.requests,
+      tokens: sg.tokens,
+      freeTokens,
+      paidTokens: sg.tokens - freeTokens,
+      grossUsd: sg.costUsd,
+      freeUsd,
+      paidUsd,
+      usedShare: Math.min(1, sg.tokens / SG_FREE_TOKENS_PER_MODEL)
+    });
+    const modelBucket = perModel.get(sgModel);
+    if (modelBucket !== undefined) modelBucket.costUsd = Math.max(0, modelBucket.costUsd - freeUsd);
+    for (const [dayKey, dayMap] of sgDayModel) {
+      const cell = dayMap.get(sgModel);
+      if (cell === undefined) continue;
+      const dayBucket = perDay.get(dayKey);
+      if (dayBucket === undefined) continue;
+      dayBucket.costUsd = Math.max(0, dayBucket.costUsd - cell.costUsd * ratio);
+    }
+  }
+  totals.costUsd = Math.max(0, totals.costUsd - sgFreeUsd);
+  byProvider.alibabaSg.costUsd = sgPaidUsd;
+  byProvider.alibabaSg.freeUsd = sgFreeUsd;
+
   const days0 = [...perDay.values()].sort((a, b) => (a.day < b.day ? -1 : 1));
   return {
     ok: true,
@@ -2531,13 +2771,46 @@ async function scanUsage(days, sessionId) {
     },
     perDay: days0,
     perModel: [...perModel.values()].sort((a, b) => b.costUsd - a.costUsd),
+    // ── Szolgaltato-csalad bontas (2026-10-14) ────────────────────────────
+    // A labléc `$DSH / $Alibaba` erteke innen jon: deepseekUsd / alibabaUsd.
+    // A `free` csalad 0 USD (az ingyenes fallback-lanc), az `alibabaSg`
+    // costUsd-je a keret FELETTI resz, a freeUsd a keret alatti (0 USD).
+    byProvider: [
+      byProvider.deepseek,
+      byProvider.alibabaEu,
+      byProvider.alibabaSg,
+      byProvider.free,
+      byProvider.other
+    ],
+    spend: {
+      deepseekUsd: byProvider.deepseek.costUsd,
+      alibabaEuUsd: byProvider.alibabaEu.costUsd,
+      alibabaSgUsd: byProvider.alibabaSg.costUsd,
+      alibabaSgFreeUsd: byProvider.alibabaSg.freeUsd,
+      alibabaUsd: byProvider.alibabaEu.costUsd + byProvider.alibabaSg.costUsd,
+      freeUsd: byProvider.free.costUsd,
+      otherUsd: byProvider.other.costUsd,
+      totalUsd: totals.costUsd
+    },
+    // A szingapúri ingyenes keret allapota (modellenkent).
+    alibabaSg: {
+      quotaTokensPerModel: SG_FREE_TOKENS_PER_MODEL,
+      windowDays: SG_FREE_WINDOW_DAYS,
+      usedTokens: [...sgModels.values()].reduce((sum, sg) => sum + sg.tokens, 0),
+      freeUsd: sgFreeUsd,
+      paidUsd: sgPaidUsd,
+      grossUsd: sgFreeUsd + sgPaidUsd,
+      models: sgQuotaModels.sort((a, b) => b.tokens - a.tokens)
+    },
     activeDays: days0.length,
     session: wanted === null ? null : session,
     pricing: {
       note: "hivatalos DeepSeek listárák, csúcsidőben dupla",
       peakWindowUtc: "hétköznap 01:00-04:00 és 06:00-10:00 UTC",
       peakWindowNote: "hétvégén és kínai ünnepnapokon mindig völgyidőszak",
-      holidaysCovered: holidaysCovered()
+      holidaysCovered: holidaysCovered(),
+      alibabaNote: `Szingapúrban az első ${SG_FREE_TOKENS_PER_MODEL / 1000000}M token/modell ingyenes (${SG_FREE_WINDOW_DAYS} napig); a keret a saját naplóinkból becsült, a számla oldali állapotot nem látjuk. A proxy-útvonalon (worker/vision-worker/auto) futó kéréseknél a napló a route nevét rögzíti, ezért az ottani Alibaba-költség közelítés.`,
+      alibabaRows: "alibaba/ = EU Frankfurt, alibaba-intl/ = Szingapúr"
     }
   };
 }
@@ -3101,6 +3374,12 @@ function apply(ctx) {
     path: "/ui-extras/balance",
     handler: (_req, res) => handleBalance(ctx, res)
   }), "ui-extras: balance route");
+
+  ctx.effect(() => ctx.webServer.register({
+    kind: "exact",
+    path: "/ui-extras/alibaba",
+    handler: (_req, res) => handleAlibabaBilling(res)
+  }), "ui-extras: alibaba bill route");
 
   ctx.effect(() => ctx.webServer.register({
     kind: "exact",

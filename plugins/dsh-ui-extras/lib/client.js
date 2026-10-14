@@ -1266,6 +1266,23 @@ window.__ModuleLoader__.load({
       "balanceUnavailable": "nem elérhető",
       "balanceTitle": "Élő egyenleg a DeepSeek számláról, szerveroldali lekérdezéssel.",
       "balanceErrorTitle": "A szerveroldali egyenleg-lekérdezés nem sikerült: ",
+      "spendPair": "DSH / Alibaba",
+      "spendPairTitle": "Bal oldal: a DeepSeek számlán HÁTRALEVŐ egyenleg. Jobb oldal: az Alibaba-számla mínusz előjellel (pay-as-you-go, nincs előre feltöltött egyenleg).",
+      "spendPairBalance": "DeepSeek egyenleg: {balance} ({currency}) — hátralévő, nem költés.",
+      "spendPairBill": "Alibaba számla ({cycle}): {amount} {currency} fizetendő.",
+      "spendPairBillCycle": "Ciklus zárása: {close} — {daysLeft} nap; a terhelés a zárás után esedékes.",
+      "spendPairBillAvailable": "Elérhető egyenleg: {available} · {models} modell-tétel a számlán.",
+      "spendPairBillMissing": "Alibaba számla: nem elérhető ({error}).",
+      "spendPairBillHint": "A jobb oldali érték a DSH-naplóból becsült költés.",
+      "spendPairAlibaba": "Naplóból becsült költés: -{spent} (EU {eu} · Szingapúr {sg}, keretből {sgFree}).",
+      "spendPairWindow": "Ugyanezen {days} nap alatt a DeepSeek-költés {deepseek} volt · összesen {total}.",
+      "usageProviderHead": "Szolgáltatók szerint ({days} nap)",
+      "usageProviderLine": "{label}: {cost} · {requests} kérés · {tokens} zseton",
+      "usageProviderFree": "{label}: ingyenes · {requests} kérés · {tokens} zseton",
+      "usageAlibabaSgQuota": "Szingapúri ingyenes keret ({model}): {used} / {quota} zseton ({percent}) — jóváírva {free}, fizetve {paid}",
+      "usageAlibabaNote": "Alibaba-árak: EU (Frankfurt) és Szingapúr (International) listaár.",
+      "usageAlibabaNote2": "Proxy-útvonalon (worker/auto) a napló a route nevét rögzíti — ott a költség közelítés.",
+      "usageBalanceLine": "DeepSeek-egyenleg: {balance}",
       "costTitle": "Költség: a hivatalos ártáblából, kérésenként számolva (USD).",
       "rowTitle": "Használat és költség. A költség a hivatalos ártáblából becsült érték.",
       "usageTooltipHead": "Használat és költség (becslés a hivatalos ártáblával)",
@@ -1487,6 +1504,23 @@ window.__ModuleLoader__.load({
       "balanceUnavailable": "unavailable",
       "balanceTitle": "Live balance from the DeepSeek account, queried on the host.",
       "balanceErrorTitle": "The host-side balance query failed: ",
+      "spendPair": "DSH / Alibaba",
+      "spendPairTitle": "Left: the REMAINING balance on the DeepSeek account. Right: the Alibaba invoice with a minus sign (pay-as-you-go, no prepaid balance).",
+      "spendPairBalance": "DeepSeek balance: {balance} ({currency}) — remaining, not spend.",
+      "spendPairBill": "Alibaba invoice ({cycle}): {amount} {currency} payable.",
+      "spendPairBillCycle": "Cycle closes: {close} — {daysLeft} days; the charge is due after the close.",
+      "spendPairBillAvailable": "Available balance: {available} · {models} model line items.",
+      "spendPairBillMissing": "Alibaba invoice: unavailable ({error}).",
+      "spendPairBillHint": "The right-hand value is the spend estimated from the DSH logs.",
+      "spendPairAlibaba": "Estimated from logs: -{spent} (EU {eu} · Singapore {sg}, from quota {sgFree}).",
+      "spendPairWindow": "In the same {days} days DeepSeek spend was {deepseek} · total {total}.",
+      "usageProviderHead": "By provider ({days} days)",
+      "usageProviderLine": "{label}: {cost} · {requests} requests · {tokens} tokens",
+      "usageProviderFree": "{label}: free · {requests} requests · {tokens} tokens",
+      "usageAlibabaSgQuota": "Singapore free quota ({model}): {used} / {quota} tokens ({percent}) — credited {free}, paid {paid}",
+      "usageAlibabaNote": "Alibaba prices: EU (Frankfurt) and Singapore (International) list prices.",
+      "usageAlibabaNote2": "On proxy routes (worker/auto) the log stores the route name — cost there is an approximation.",
+      "usageBalanceLine": "DeepSeek balance: {balance}",
       "costTitle": "Cost: computed per request from the official price table (USD).",
       "rowTitle": "Usage and cost. The cost is an estimate from the official price table.",
       "usageTooltipHead": "Usage and cost (estimated with the official price table)",
@@ -1707,6 +1741,8 @@ window.__ModuleLoader__.load({
 
     /** Where the host half publishes the balance. */
     var BALANCE_ROUTE = "/ui-extras/balance";
+    /** Where the host half publishes the Alibaba BSS bill (RAM AccessKey). */
+    var ALIBABA_ROUTE = "/ui-extras/alibaba";
 
     /** Where the host half publishes the 30-day token and cost usage. */
     var USAGE_ROUTE = "/ui-extras/usage";
@@ -2122,6 +2158,13 @@ window.__ModuleLoader__.load({
       var balance = balanceState[0];
       var setBalance = balanceState[1];
 
+      // Az Alibaba VALODI havi szamlaja (BSS OpenAPI, RAM AccessKey-jel a
+      // hoston). Az Alibaba pay-as-you-go, ezert itt nincs "egyenleg": a
+      // fizetendo szamla a ertelmes szam, es azt negativ elojellel mutatjuk.
+      var alibabaState = react.useState({ status: "loading", data: null });
+      var alibabaBillState = alibabaState[0];
+      var setAlibabaBill = alibabaState[1];
+
       // The 30-day usage aggregate, computed and priced on the host from the
       // durable session logs. `status` distinguishes "still loading" from "the
       // host cannot answer" (an older host half has no /ui-extras/usage route),
@@ -2152,6 +2195,26 @@ window.__ModuleLoader__.load({
             });
         }
 
+        load();
+        var timer = setInterval(load, BALANCE_REFRESH_MILLISECONDS);
+        return function () { alive = false; clearInterval(timer); };
+      }, []);
+
+      // Az Alibaba-szamla ugyanazon az utemen, ugyanazzal a gyakorisaggal.
+      react.useEffect(function () {
+        var alive = true;
+        function load() {
+          fetch(ALIBABA_ROUTE, { headers: { Accept: "application/json" } })
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+              if (!alive) return;
+              if (data && data.ok === true) setAlibabaBill({ status: "ready", data: data });
+              else setAlibabaBill({ status: "error", data: data || null });
+            })
+            .catch(function (error) {
+              if (alive) setAlibabaBill({ status: "error", data: { error: String(error && error.message ? error.message : error) } });
+            });
+        }
         load();
         var timer = setInterval(load, BALANCE_REFRESH_MILLISECONDS);
         return function () { alive = false; clearInterval(timer); };
@@ -2219,6 +2282,12 @@ window.__ModuleLoader__.load({
       var tooltipLines = [t("usageTooltipHead")];
       var usageSummary = usageStatus.status === "ready" ? usageStatus.summary : null;
       var sessionFigures = usageSummary && usageSummary.session ? usageSummary.session : null;
+      // Koltseg-szolgaltato bontas (2026-10-14): a labléc "$DSH / $Alibaba"
+      // parja es a statisztika provider-sorai ehhez a host-mezohoz nyulnak.
+      // Regi host eseten mindez hianyzik, es minden a korabbi viselkedest
+      // követi (csak az egyenleg-pill marad).
+      var spend = usageSummary && usageSummary.spend ? usageSummary.spend : null;
+      var providerLines = [];
       if (sessionFigures !== null) {
         tooltipLines.push(t("usageSessionCost", { cost: formatUsd(sessionFigures.costUsd) }));
       } else if (usage) {
@@ -2302,6 +2371,57 @@ window.__ModuleLoader__.load({
             tooltipLines.push(t("usageSavingsNone"));
           }
         }
+
+        // ── Szolgaltato szerinti bontas (2026-10-14) ──────────────────────
+        // A statisztika eddig csak osszevont szamokat mutatott; itt latszik,
+        // mennyi ment DeepSeekre, az Alibaba EU-ra, a SZINGAPURI ingyenes
+        // keretre es az ingyenes fallback-lancra.
+        var providers = Array.isArray(usageSummary.byProvider) ? usageSummary.byProvider : [];
+        if (providers.length > 0) {
+          providerLines.push(t("usageProviderHead", { days: String(usageSummary.days) }));
+          for (var providerIndex = 0; providerIndex < providers.length; providerIndex++) {
+            var provider = providers[providerIndex];
+            if (!provider || (provider.requests || 0) === 0) continue;
+            if (provider.family === "free") {
+              providerLines.push(t("usageProviderFree", {
+                label: provider.label || provider.family,
+                requests: formatCount(provider.requests || 0),
+                tokens: formatCount(provider.tokens || 0)
+              }));
+            } else {
+              providerLines.push(t("usageProviderLine", {
+                label: provider.label || provider.family,
+                cost: formatUsd(provider.costUsd || 0),
+                requests: formatCount(provider.requests || 0),
+                tokens: formatCount(provider.tokens || 0)
+              }));
+            }
+          }
+          var sgInfo = usageSummary.alibabaSg;
+          if (sgInfo && (sgInfo.usedTokens || 0) > 0) {
+            var sgTop = Array.isArray(sgInfo.models) && sgInfo.models.length > 0 ? sgInfo.models[0] : null;
+            if (sgTop !== null) {
+              providerLines.push(t("usageAlibabaSgQuota", {
+                model: sgTop.model || t("unknown"),
+                used: formatCount(sgTop.tokens || 0),
+                quota: formatCount(sgInfo.quotaTokensPerModel || 0),
+                percent: Math.round((sgTop.usedShare || 0) * 1000) / 10 + "%",
+                free: formatUsd(sgInfo.freeUsd || 0),
+                paid: formatUsd(sgInfo.paidUsd || 0)
+              }));
+            }
+          }
+          providerLines.push(t("usageAlibabaNote"));
+          providerLines.push(t("usageAlibabaNote2"));
+          tooltipLines.push("");
+          for (var lineIndex = 0; lineIndex < providerLines.length; lineIndex++) {
+            tooltipLines.push(providerLines[lineIndex]);
+          }
+        }
+        if (balance.status === "ready" && spend !== null) {
+          // Az egyenleg nem tunik el: a koltseg-par tooltipjebe kerul.
+          tooltipLines.push(t("usageBalanceLine", { balance: balanceText }));
+        }
       } else if (usageStatus.status === "error") {
         tooltipLines.push(t("usageUnavailable"));
       } else {
@@ -2317,12 +2437,93 @@ window.__ModuleLoader__.load({
       if (stats && stats.steps > 0) pills.push({ label: "", value: stats.steps + " " + t("steps") });
       if (usage) pills.push({ label: t("token"), value: formatCount(totalTokensOf(usage)) });
       if (cacheHit !== null) pills.push({ label: t("cache"), value: cacheHit + "%" });
-      pills.push({
-        label: t("balance"),
-        value: balanceText,
-        strong: balance.status === "ready",
-        title: balance.status === "error" ? t("balanceErrorTitle") + balance.error : t("balanceTitle")
-      });
+      // 2026-10-14: a lablécben a DeepSeek-EGYENLEG helyett a tenyleges
+      // koltseg parja all — "$DeepSeek / $Alibaba" —, mert az egyenleg nem
+      // mondja meg, mennyi ment el melyik szolgaltatora. Az egyenleg nem
+      // vesz el: a pill tooltipjeben ott marad. Ha a host meg a regi (nincs
+      // `spend` mezo), valtozatlanul az egyenleg-pill jelenik meg.
+      if (spend !== null) {
+        // BAL oldal: a DeepSeek szamlan HATRALEVO egyenleg (a
+        // /ui-extras/balance valaszabol, a sajat penznemeben) — ez a kerdes
+        // targya: "a DSH-bol a hatralevot kell mutatni".
+        // JOBB oldal: az Alibaba-koltes az idoszakban, MINUSZ elojellel — az
+        // Alibaba pay-as-you-go, nincs elore feltoltott egyenlege, ezert ott
+        // a koltes a "negativ egyenleg".
+        var dshBalanceText = balance.status === "ready"
+          ? (formatMoney(balanceTotal, balanceCurrency) || t("balanceUnavailable"))
+          : (balance.status === "loading" ? t("balanceLoading") : t("balanceUnavailable"));
+        var alibabaBillData = alibabaBillState.status === "ready" ? alibabaBillState.data : null;
+        var aliAmount = alibabaBillData !== null && typeof alibabaBillData.pretaxAmount === "number"
+          ? alibabaBillData.pretaxAmount
+          : (spend.alibabaUsd || 0);
+        var aliSpendText = "-" + formatUsd(aliAmount);
+        // FORDULONAP: a szamla a ciklus (naptari honap) zarasa utan esedekes.
+        // A ciklus-vegat a cycle mezobol szamoljuk (a honap 0. napja = utolso nap).
+        var cycleClose = null;
+        var cycleDaysLeft = null;
+        if (alibabaBillData !== null) {
+          var cycleMatch = /^(\d{4})-(\d{2})$/.exec(String(alibabaBillData.cycle || ""));
+          if (cycleMatch !== null) {
+            var closeDate = new Date(Number(cycleMatch[1]), Number(cycleMatch[2]), 0, 23, 59, 59);
+            cycleClose = closeDate.getFullYear() + "-" + String(closeDate.getMonth() + 1).padStart(2, "0") + "-" + String(closeDate.getDate()).padStart(2, "0");
+            cycleDaysLeft = Math.max(0, Math.ceil((closeDate.getTime() - now.getTime()) / 86400000));
+          }
+        }
+        // A natív tooltip NEM tori a hosszu sorokat: a veguk a kepernyo szelen
+        // levagodik (merve). Ezert minden sor rovid, es a hosszu tartalom
+        // tobb sorra bontva megy — igy minden elfer.
+        var spendTitleLines = [
+          t("spendPairTitle"),
+          t("spendPairBalance", { balance: dshBalanceText, currency: balanceCurrency || "?" })
+        ];
+        if (alibabaBillData !== null) {
+          spendTitleLines.push(t("spendPairBill", {
+            cycle: String(alibabaBillData.cycle || ""),
+            amount: formatUsd(alibabaBillData.pretaxAmount || 0),
+            currency: String(alibabaBillData.currency || "USD")
+          }));
+          if (cycleClose !== null) {
+            spendTitleLines.push(t("spendPairBillCycle", { close: cycleClose, daysLeft: String(cycleDaysLeft) }));
+          }
+          spendTitleLines.push(t("spendPairBillAvailable", {
+            available: formatUsd(alibabaBillData.availableAmount || 0),
+            models: String((alibabaBillData.models || []).length)
+          }));
+        } else {
+          spendTitleLines.push(t("spendPairBillMissing", {
+            error: String((alibabaBillState.data && alibabaBillState.data.error) || "nincs adat")
+          }));
+          spendTitleLines.push(t("spendPairBillHint"));
+        }
+        spendTitleLines.push(t("spendPairAlibaba", {
+          spent: formatUsd(spend.alibabaUsd || 0),
+          eu: formatUsd(spend.alibabaEuUsd || 0),
+          sg: formatUsd(spend.alibabaSgUsd || 0),
+          sgFree: formatUsd(spend.alibabaSgFreeUsd || 0)
+        }));
+        spendTitleLines.push(t("spendPairWindow", {
+          days: String(usageSummary && usageSummary.days ? usageSummary.days : 30),
+          deepseek: formatUsd(spend.deepseekUsd || 0),
+          total: formatUsd(spend.totalUsd || 0)
+        }));
+        for (var spendLineIndex = 0; spendLineIndex < providerLines.length; spendLineIndex++) {
+          spendTitleLines.push(providerLines[spendLineIndex]);
+        }
+        if (balance.status === "error") spendTitleLines.push(t("balanceErrorTitle") + balance.error);
+        pills.push({
+          label: t("spendPair"),
+          value: dshBalanceText + " / " + aliSpendText,
+          strong: balance.status === "ready",
+          title: spendTitleLines.join("\n")
+        });
+      } else {
+        pills.push({
+          label: t("balance"),
+          value: balanceText,
+          strong: balance.status === "ready",
+          title: balance.status === "error" ? t("balanceErrorTitle") + balance.error : t("balanceTitle")
+        });
+      }
       pills.push({ label: offPeak ? t("offPeak") : t("peak"), value: switchText, title: t("usagePeakNote", { window: peakWindowLocal }) });
 
       // Every hook above has run: this early return is phase-only.

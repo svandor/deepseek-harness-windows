@@ -22,7 +22,7 @@
  */
 
 import http from 'node:http';
-import { readFileSync } from 'node:fs';
+import { readFileSync, watch as fsWatch } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -35,7 +35,18 @@ function arg(name, fallback) {
 }
 
 const CONFIG_PATH = path.resolve(HERE, arg('config', 'config.json'));
-const CONFIG = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+// HOT-RELOAD (2026-10-14): a korabbi "indulaskor olvassuk egyszer" helyett a
+// config.json valtozasat 800 ms debounce-al ujraolvassuk, es a route-ok a
+// KOVETKEZO keresre mar az uj tartalmat hasznaljak — restart nelkul.
+// (A port/host valtozasahoz tovabbra is restart kell.)
+let CONFIG = loadConfig();
+function loadConfig() {
+  // A BOM (U+FEFF) eltavolitasa: a PowerShell `Set-Content -Encoding UTF8`
+  // byte-order-markot ir a fajl ele, amitol a JSON.parse "Unexpected token"
+  // hibaval elhal — merve 2026-10-14, hot-reload teszten.
+  const text = readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '');
+  return JSON.parse(text);
+}
 const PORT = Number(arg('port', process.env.PROXY_PORT ?? CONFIG.port ?? 4123));
 const HOST = arg('host', CONFIG.host ?? '127.0.0.1');
 const LOG_PREFIX = '[fallback-proxy]';
@@ -98,7 +109,7 @@ function resolveProviders() {
   return providers;
 }
 
-const PROVIDERS = resolveProviders();
+let PROVIDERS = resolveProviders();
 
 // ── kötelező kulcsok a route-okhoz ─────────────────────────────────────────
 /**
@@ -121,8 +132,40 @@ const PROVIDERS = resolveProviders();
  *
  * A `local-only` route szándékosan helyi: ott ez a szabály nem érvényes.
  */
-const REQUIRED_ENV = CONFIG.requiredAnyEnv ?? {};
+let REQUIRED_ENV = CONFIG.requiredAnyEnv ?? {};
 const LEGACY_LOCAL_ONLY = new Set(['local-only']);
+
+// ── config hot-reload ──────────────────────────────────────────────────────
+/**
+ * A config.json ujratoltese restart nelkul (2026-10-14).
+ *
+ * Miert: a dailyOverrides/timeWindows csak akkor er valamit, ha a fajl
+ * mentese utan nem kell megvarni a watchdog ujrainditasat (es nem szakad meg
+ * tole egy futo keres). A provider-kulcsok is ujra feloldodnak, igy egy uj
+ * kulcs a credential-store-ban azonnal hat.
+ */
+function applyConfigReload() {
+  try {
+    const next = loadConfig();
+    CONFIG = next;
+    PROVIDERS = resolveProviders();
+    REQUIRED_ENV = next.requiredAnyEnv ?? {};
+    const ov = overrideState();
+    log(`CONFIG ujratoltve (hot-reload). Napi felulbiralat: ${ov.active ? ov.routes.join(', ') : 'nincs'}`);
+  } catch (e) {
+    log(`CONFIG ujratoltes SIKERTELEN (a regi tartalom marad): ${e?.message ?? e}`);
+  }
+}
+
+let reloadTimer = null;
+try {
+  fsWatch(CONFIG_PATH, () => {
+    clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(applyConfigReload, 800);
+  });
+} catch (e) {
+  log(`figyelem: config hot-reload nem indult: ${e?.message ?? e}`);
+}
 
 function requiredEnvFor(routeName) {
   if (LEGACY_LOCAL_ONLY.has(routeName)) return [];
@@ -165,12 +208,327 @@ function localDateKey(d = new Date()) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-function effectiveRoute(routeName) {
+/** A keres tartalmanak egyszeru jelzesei (kep, becsult token, toolok). */
+function requestSignals(body) {
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  let chars = 0;
+  let hasImage = false;
+  for (const m of messages) {
+    const c = m?.content;
+    if (typeof c === 'string') { chars += c.length; continue; }
+    if (!Array.isArray(c)) continue;
+    for (const part of c) {
+      if (!part || typeof part !== 'object') continue;
+      if (part.type === 'image_url' || part.type === 'input_image' || part.type === 'image') hasImage = true;
+      if (typeof part.text === 'string') chars += part.text.length;
+      const url = part.image_url?.url;
+      if (typeof url === 'string') chars += url.length;
+    }
+  }
+  const loop = loopSignals(messages);
+  return {
+    hasImage,
+    estTokens: Math.round(chars / 4),
+    toolCount: Array.isArray(body?.tools) ? body.tools.length : 0,
+    stream: body?.stream === true,
+    ...loop
+  };
+}
+
+/**
+ * PORGO MUNKA jelei (2026-10-14).
+ *
+ * MERES (analyze-escalation.mjs): a fo koltseg a lepesek SZAMABOL jon
+ * (flash-lepes ~$0,001-0,002 cache-elt kontextuson), es egy eszkalacio
+ * belepesi koltsege a teljes kontextus atvitelekor ~$0,21 (a modellvaltas a
+ * cache-t is elviszi), tomor brief-fel viszont csak ~$0,02. Fedezeti pont:
+ * 220, illetve 21 elrontott flash-lepes.
+ *
+ * A megbizhato jel a HOSSZU beszelgetes + ISMETLODO azonos tool-hivas
+ * (ugyanaz a nev ES ugyanaz az argumentum). A tool-eredmenyek szabad
+ * szovegeben az "error" szo NEM hasznalhato jel: fajltartalomban gyakran
+ * szerepel (merve: 98%-os hamis hibaaranyt adott).
+ */
+function loopSignals(messages) {
+  const counts = new Map();
+  let repeatedCalls = 0;
+  for (const m of messages) {
+    const calls = m?.tool_calls;
+    if (!Array.isArray(calls)) continue;
+    for (const c of calls) {
+      const name = c?.function?.name ?? c?.name ?? '?';
+      const args = String(c?.function?.arguments ?? c?.arguments ?? '').slice(0, 400);
+      const key = `${name}|${args}`;
+      const n = (counts.get(key) ?? 0) + 1;
+      counts.set(key, n);
+      if (n > 1) repeatedCalls += 1;
+    }
+  }
+  let maxRepeat = 0;
+  for (const n of counts.values()) if (n > maxRepeat) maxRepeat = n;
+  return { messages: messages.length, repeatedCalls, maxRepeat };
+}
+
+/** Beleesik-e az ido a [from,to) UTC ablakba? (ejfelen atfordulva is: [22,4]) */
+function withinUtcWindow(range, date) {
+  if (!Array.isArray(range) || range.length !== 2) return false;
+  const from = Number(range[0]);
+  const to = Number(range[1]);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return false;
+  const hour = date.getUTCHours();
+  return from === to ? true : from < to ? (hour >= from && hour < to) : (hour >= from || hour < to);
+}
+
+/** A DeepSeek hivatalos csucsablakai UTC-ben: 01-04 es 06-10, hetkoznap. */
+function isDeepseekPeakNow(now) {
+  const dow = now.getUTCDay();
+  if (dow === 0 || dow === 6) return false;
+  const h = now.getUTCHours();
+  return (h >= 1 && h < 4) || (h >= 6 && h < 10);
+}
+
+/**
+ * Illeszkedik-e egy `rules` bejegyzes a kereskre es az idopontra.
+ * Támogatott feltetelek: hasImage, minTokens/maxTokens (becsult),
+ * minTools, days (0=vasarnap), utc ablak, peak (DeepSeek csucs).
+ */
+function ruleMatches(rule, sig, now) {
+  if (!rule || typeof rule !== 'object') return false;
+  if (rule.hasImage === true && !sig.hasImage) return false;
+  if (rule.hasImage === false && sig.hasImage) return false;
+  if (Number.isFinite(rule.minTokens) && sig.estTokens < rule.minTokens) return false;
+  if (Number.isFinite(rule.maxTokens) && sig.estTokens > rule.maxTokens) return false;
+  if (Number.isFinite(rule.minTools) && sig.toolCount < rule.minTools) return false;
+  // Porgo-munka jelek (eszkalaciohoz): hosszu beszelgetes + ismetlodo hivasok.
+  if (Number.isFinite(rule.minMessages) && (sig.messages ?? 0) < rule.minMessages) return false;
+  if (Number.isFinite(rule.maxMessages) && (sig.messages ?? 0) > rule.maxMessages) return false;
+  if (Number.isFinite(rule.minRepeatedCalls) && (sig.repeatedCalls ?? 0) < rule.minRepeatedCalls) return false;
+  if (Number.isFinite(rule.minMaxRepeat) && (sig.maxRepeat ?? 0) < rule.minMaxRepeat) return false;
+  if (Array.isArray(rule.days) && rule.days.length > 0 && !rule.days.includes(now.getUTCDay())) return false;
+  if (rule.utc !== undefined && !withinUtcWindow(rule.utc, now)) return false;
+  if (rule.peak === true && !isDeepseekPeakNow(now)) return false;
+  if (rule.peak === false && isDeepseekPeakNow(now)) return false;
+  return true;
+}
+
+// ── INTELLIGENS, KOLTSEG-TUDATOS MODELLVALASZTO (2026-10-14) ───────────────
+/**
+ * Elvek — mind MERESBOL (ALIBABA-MERES.md 16-18. szakasz):
+ *
+ *  1. KOLTSEG-ALAPU dontes: a `pricing` tablabol celonkent becsüljük a keres
+ *     varhato koltseget (savos ar + a session koratol fuggo cache-arany +
+ *     a DeepSeek csucs-idoszak + a szingapúri ingyenes keret), es a
+ *     LEGOLCSoBB ALKALMAS cel nyer — nem fix sorrend.
+ *  2. KEMENY KEPESSEG: a cel kontextusablaka >= becsult token, es kepet csak
+ *     olyan cel kaphat, amelyik deklaraltan lat (`vision: true`).
+ *  3. SESSION-RAGADOSAG: a modellvaltas a szolgaltato cache-t is eldobja
+ *     (merve: DeepSeek cache = az input 2%-a, Alibaba = 10%), ezert egy
+ *     beszelgetesen BELUL nem valtogatunk. Valtas csak akkor, ha a varhato
+ *     nyereseg a hatralevo lepeseken meghaladja a cache-ujraeles koltseget.
+ *  4. Az ESZKALACIO es a tobbi `rules` felulir mindent (elotte fut).
+ */
+const SESSION_ROUTES = new Map();      // sessionKey -> { label, at, switches, steps, reason }
+const SESSION_TTL_MS = 30 * 60 * 1000;
+const SESSION_MAX = 800;
+const DECISIONS = [];                  // utolso par dontes a /healthz-hez
+const QUOTA_USED = new Map();          // label -> becsult elhasznalt ingyenes token
+
+function rememberDecision(entry) {
+  DECISIONS.push(entry);
+  if (DECISIONS.length > 12) DECISIONS.shift();
+}
+
+/** A beszelgetes azonositoja: rendszer-uzenet + az ELSO felhasznaloi uzenet. */
+function sessionKeyOf(messages) {
+  let basis = '';
+  for (const m of messages) {
+    if (m?.role === 'system' && typeof m.content === 'string') basis += m.content.slice(0, 400);
+    if (m?.role === 'user') {
+      const c = typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '');
+      basis += c.slice(0, 1200);
+      break;
+    }
+  }
+  if (basis.length === 0) return null;
+  let h = 2166136261;
+  for (let i = 0; i < basis.length; i++) { h ^= basis.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(16);
+}
+
+/** A cel ara erre a keresre (USD), a sávot a keres MERETE valasztja. */
+function estimateCost(meta, sig, cachedShare, now) {
+  if (!meta) return null;
+  const size = Math.max(1, sig.estTokens);
+  const cached = Math.round(size * cachedShare);
+  const fresh = Math.max(0, size - cached);
+  const out = Math.max(1, Number(CONFIG.assumedOutputTokens ?? 900));
+  const tier = Array.isArray(meta.tiers)
+    ? (meta.tiers.find((t) => size <= t.upTo) ?? meta.tiers[meta.tiers.length - 1])
+    : meta;
+  const peak = isDeepseekPeakNow(now);
+  const miss = (peak && tier.peakMiss) || tier.miss || 0;
+  const hit = (peak && tier.peakHit) || tier.hit || (miss * 0.1);
+  const outRate = (peak && tier.peakOut) || tier.out || 0;
+  // Szingapúri ingyenes keret: amig a becsult felhasznalas a keret alatt van, 0 USD.
+  if (Number.isFinite(meta.freeQuotaTokens)) {
+    const used = QUOTA_USED.get(meta._label) ?? 0;
+    if (used + size <= meta.freeQuotaTokens) return 0;
+  }
+  return (fresh * miss + cached * hit + out * outRate) / 1e6;
+}
+
+/** A cél egy keresre alkalmas-e (kepesseg, nem ar kerdese). */
+function targetUsable(meta, sig) {
+  if (!meta) return false;
+  if (Number.isFinite(meta.contextWindow) && sig.estTokens > meta.contextWindow) return false;
+  if (sig.hasImage && meta.vision !== true) return false;
+  return true;
+}
+
+/** Az ingyenes keret becsult fogyasztasanak rogzitese (minden kiszolgalas). */
+function noteQuota(label, sig) {
+  const meta = (CONFIG.pricing ?? {})[label];
+  if (meta && Number.isFinite(meta.freeQuotaTokens)) {
+    QUOTA_USED.set(label, (QUOTA_USED.get(label) ?? 0) + Math.max(1, sig.estTokens));
+  }
+}
+
+/**
+ * A cel kivalasztasa. Visszaad: { targets, reason, cost, sticky } vagy null
+ * (ha nincs hasznalhato jelolt, a hivo a route alap lan cat hasznalja).
+ */
+function chooseTarget(routeName, base, sig, messages, now) {
+  const table = CONFIG.pricing ?? {};
+  const candidates = Array.isArray(base?.candidates) ? base.candidates : [];
+  if (candidates.length === 0) return null;
+
+  const key = sessionKeyOf(messages);
+  let sticky = key ? SESSION_ROUTES.get(key) : null;
+  if (sticky && now - sticky.at > SESSION_TTL_MS) { SESSION_ROUTES.delete(key); sticky = null; }
+
+  const cachedShare = messages.length >= 4 ? Number(CONFIG.assumedCachedShare ?? 0.9) : 0;
+  const scored = [];
+  for (const label of candidates) {
+    const meta = table[label];
+    if (!meta || !targetUsable(meta, sig)) continue;
+    const withMeta = { ...meta, _label: label };
+    scored.push({ label, cost: estimateCost(withMeta, sig, cachedShare, now) });
+  }
+  if (scored.length === 0) return null;
+  scored.sort((a, b) => a.cost - b.cost);
+  const best = scored[0];
+
+  // Ragadosag: a mar valasztott cel megtartasa, kiveve ha képesség kell,
+  // vagy a varhato nyereseg meghaladja a cache-ujraeles koltseget.
+  if (sticky) {
+    const currentMeta = table[sticky.label];
+    const stillUsable = currentMeta !== undefined && targetUsable(currentMeta, sig);
+    if (stillUsable && sticky.label !== best.label) {
+      const current = scored.find((s) => s.label === sticky.label);
+      if (current) {
+        const size = Math.max(1, sig.estTokens);
+        const currentTier = Array.isArray(currentMeta.tiers)
+          ? (currentMeta.tiers.find((t) => size <= t.upTo) ?? currentMeta.tiers[currentMeta.tiers.length - 1])
+          : currentMeta;
+        const bestMeta = { ...table[best.label], _label: best.label };
+        const bestTier = Array.isArray(bestMeta.tiers)
+          ? (bestMeta.tiers.find((t) => size <= t.upTo) ?? bestMeta.tiers[bestMeta.tiers.length - 1])
+          : bestMeta;
+        // A valtas EGYSZERI ara: az elso keres a friss (miss) aron megy a
+        // regi cache-talalat helyett.
+        const switchCost = (size * ((bestTier.miss || 0) - (currentTier.hit || 0))) / 1e6;
+        const perStepSaving = Math.max(0, current.cost - best.cost);
+        const remaining = Number(CONFIG.assumedRemainingSteps ?? 8);
+        const worthIt = perStepSaving * remaining > switchCost;
+        if (!worthIt) {
+          sticky.at = now;
+          sticky.steps = (sticky.steps ?? 0) + 1;
+          noteQuota(sticky.label, sig);
+          return { targets: [sticky.label], reason: `ragados (${sticky.label}): a valtas ${switchCost.toFixed(5)} USD, a nyereseg ${(perStepSaving * remaining).toFixed(5)} USD ${remaining} lepesre`, cost: current.cost, sticky: true, key };
+        }
+      }
+    }
+    if (stillUsable && sticky.label === best.label) {
+      sticky.at = now;
+      sticky.steps = (sticky.steps ?? 0) + 1;
+      noteQuota(sticky.label, sig);
+      return { targets: [sticky.label], reason: `ragados (${sticky.label}): tovabbra is a legolcsobb`, cost: best.cost, sticky: true, key };
+    }
+  }
+
+  // Uj valasztas: a nyertes cel elore, a tobbi jelolt tartaleknak.
+  const rest = candidates.filter((c) => c !== best.label);
+  noteQuota(best.label, sig);
+  if (key) {
+    const prev = SESSION_ROUTES.get(key);
+    SESSION_ROUTES.set(key, { label: best.label, at: now, switches: (prev?.switches ?? 0) + 1, steps: 1, reason: best.label });
+    if (Number.isFinite(table[best.label]?.freeQuotaTokens)) {
+      QUOTA_USED.set(best.label, (QUOTA_USED.get(best.label) ?? 0) + sig.estTokens);
+    }
+    // A map merete korlatozott (a legregebbi bejegyzesek esnek ki).
+    if (SESSION_ROUTES.size > SESSION_MAX) {
+      for (const [k, v] of SESSION_ROUTES) { if (now - v.at > SESSION_TTL_MS) SESSION_ROUTES.delete(k); if (SESSION_ROUTES.size <= SESSION_MAX) break; }
+    }
+  }
+  return { targets: [best.label, ...rest], reason: `koltseg-optimalis (${best.label}): ~$${best.cost.toFixed(5)}/lepes (cache-arany ${(cachedShare * 100).toFixed(0)}%)`, cost: best.cost, sticky: false, key };
+}
+
+function effectiveRoute(routeName, requestBody) {
   const today = localDateKey();
   const override = CONFIG.dailyOverrides?.[today]?.[routeName];
   if (Array.isArray(override) && override.length > 0) return override;
   // Egy route lehet tomb (celok) vagy objektum (celok + metaadatok).
   const base = (CONFIG.routes ?? {})[routeName] ?? (CONFIG.routes ?? {})[CONFIG.defaultRoute];
+  // ── rules: TARTALOM- es IDO-fuggo celvalasztas (az "auto" modell) ───────
+  // Az elso illeszkedo szabaly nyer. Sorrend: dailyOverrides > rules >
+  // intelligens valasztas > timeWindows > targets. Csak akkor fut, ha van
+  // keres-torzs (a /healthz tajekoztato lanca szandekosan a szabalyok
+  // nelkuli alapot mutatja).
+  const sig = base && !Array.isArray(base) && requestBody ? requestSignals(requestBody) : null;
+  const now = new Date();
+  if (sig !== null && Array.isArray(base.rules)) {
+    for (const r of base.rules) {
+      if (!ruleMatches(r, sig, now)) continue;
+      if (Array.isArray(r.targets) && r.targets.length > 0) {
+        log(`AUTO ${routeName}: ${r.name ?? 'szabaly'} (kep=${sig.hasImage}, tok~${sig.estTokens}, tool=${sig.toolCount}, msg=${sig.messages ?? 0}, ismetles=${sig.repeatedCalls ?? 0} max=${sig.maxRepeat ?? 0}) -> ${r.targets.join(' -> ')}`);
+        rememberDecision({ at: now.toISOString(), route: routeName, label: r.targets[0], reason: `szabaly: ${r.name ?? '?'}`, sticky: false });
+        return r.targets;
+      }
+    }
+  }
+  // ── intelligens, koltseg-alapu valasztas (2026-10-14) ───────────────────
+  if (sig !== null) {
+    const messages = Array.isArray(requestBody.messages) ? requestBody.messages : [];
+    if (messages.length > 0) {
+      const pick = chooseTarget(routeName, base, sig, messages, now);
+      if (pick !== null) {
+        log(`AUTO ${routeName}: ${pick.sticky ? 'RAGADOS' : 'VALASZTAS'} — ${pick.reason} (kep=${sig.hasImage}, tok~${sig.estTokens}, msg=${messages.length}) -> ${pick.targets.slice(0, 3).join(' -> ')}${pick.targets.length > 3 ? ' -> ...' : ''}`);
+        rememberDecision({ at: now.toISOString(), route: routeName, session: pick.key ?? null, label: pick.targets[0], cost: pick.cost ?? null, sticky: pick.sticky, reason: pick.reason });
+        return pick.targets;
+      }
+    }
+  }
+  // ── timeWindows: UTC ora szerinti lanccsere (2026-10-14) ────────────────
+  // Forma: "timeWindows": [{ "utc": [from, to], "days": [0-6], "targets": [...] }]
+  //  - az elso illeszkedo ablak nyer (felulirja a base targets-et),
+  //  - az `utc` atfordulhat ejfelen: [22, 4] = 22:00-04:00 UTC,
+  //  - a `days` opcionalis (0 = vasarnap); nelkule minden nap.
+  // Hasznalat: pl. a draga DeepSeek-csucs (01-04, 06-10 UTC) kikerulese, vagy
+  // az Alibaba 14-24 UTC-es ejszakai (-60%) ablaka.
+  if (base && !Array.isArray(base) && Array.isArray(base.timeWindows)) {
+    const now = new Date();
+    const hour = now.getUTCHours();
+    const dow = now.getUTCDay();
+    for (const w of base.timeWindows) {
+      const range = Array.isArray(w?.utc) ? w.utc.map(Number) : null;
+      if (!range || range.length !== 2 || !Number.isFinite(range[0]) || !Number.isFinite(range[1])) continue;
+      const [from, to] = range;
+      const inWindow = from === to ? true : from < to ? (hour >= from && hour < to) : (hour >= from || hour < to);
+      if (!inWindow) continue;
+      if (Array.isArray(w.days) && w.days.length > 0 && !w.days.includes(dow)) continue;
+      if (Array.isArray(w.targets) && w.targets.length > 0) return w.targets;
+    }
+  }
   return Array.isArray(base) ? base : base?.targets;
 }
 
@@ -182,12 +540,38 @@ function overrideState() {
 }
 
 /** Egy route → a probálandó providerek sorrendben (napi felulbirálattal). */
-function routeChain(routeName) {
+// ── cel-szintu cooldown (2026-10-14) ───────────────────────────────────────
+/**
+ * MERES: az Alibaba EU-workspace szorvanyosan FEJLECET SEM KULD (streamen sem
+ * — 3-bol 1 eset a meresben), a nem-stream nagy keresek pedig a hosszu
+ * reasoning miatt 30 s folott jarhatnak. Ilyenkor a kovetkezo keres ne a
+ * beragadt celon kezdjen: a frissen elhalt cel a lanc VEGERE kerul (nem esik
+ * ki, csak nem elsokent probalt), es egy siker torli a cooldownt.
+ */
+const TARGET_COOLDOWNS = new Map();
+function markCooldown(label, reason, ms) {
+  const dur = Number.isFinite(ms) ? ms : Number(CONFIG.targetCooldownMs ?? 90000);
+  TARGET_COOLDOWNS.set(label, { until: Date.now() + dur, reason });
+  log(`COOLDOWN ${label} ${dur} ms: ${reason}`);
+}
+function clearCooldown(label) {
+  if (TARGET_COOLDOWNS.delete(label)) log(`COOLDOWN feloldva: ${label}`);
+}
+function coolingTargets() {
+  const now = Date.now();
+  const out = {};
+  for (const [label, v] of TARGET_COOLDOWNS) {
+    if (v.until > now) out[label] = { secondsLeft: Math.ceil((v.until - now) / 1000), reason: v.reason };
+  }
+  return out;
+}
+
+function routeChain(routeName, requestBody) {
   // Hiányzó kötelező kulcs esetén NINCS lánc: nem esünk vissza a helyire.
   // A hívó (handleChat) 503-at ad, a watchdog pedig hangosan jelez.
   if (!routeAvailability(routeName).ok) return [];
 
-  const targets = effectiveRoute(routeName);
+  const targets = effectiveRoute(routeName, requestBody);
   if (!Array.isArray(targets) || targets.length === 0) return [];
 
   const chain = [];
@@ -206,7 +590,15 @@ function routeChain(routeName) {
       log(`WARN nincs modell megadva: ${providerId}`);
       continue;
     }
-    chain.push({ provider, model });
+    chain.push({ provider, model, label: `${providerId}/${model}` });
+  }
+  // Cooldown: a frissen elhalt celok a lanc VEGERE kerulnek (nem esnek ki).
+  const cooldownNow = Date.now();
+  const cooling = chain.filter((c) => (TARGET_COOLDOWNS.get(c.label)?.until ?? 0) > cooldownNow);
+  if (cooling.length > 0 && cooling.length < chain.length) {
+    const fresh = chain.filter((c) => !cooling.includes(c));
+    log(`COOLDOWN-elore: ${cooling.map((c) => c.label).join(', ')} -> a lanc vegere`);
+    return [...fresh, ...cooling];
   }
   return chain;
 }
@@ -411,7 +803,7 @@ function retriable(result) {
 // ── a kérés kiszolgálása ───────────────────────────────────────────────────
 async function handleChat(req, res, bodyObj) {
   const requested = typeof bodyObj.model === 'string' ? bodyObj.model : CONFIG.defaultRoute;
-  const chain = routeChain(requested);
+  const chain = routeChain(requested, bodyObj);
 
   if (chain.length === 0) {
     // Fontos sorrend: a hiányzó kulcs a leggyakoribb ok, és a DSH-nak ezt
@@ -448,6 +840,8 @@ async function handleChat(req, res, bodyObj) {
     if (retriable(result)) {
       tried.push(`${label} (${result.reason})`);
       log(`FAIL ${label} -> ${result.reason}`);
+      // Hálózati/időtúllépéses hiba: a cél egy ideig a lánc végére kerül.
+      if (result.kind === 'error') markCooldown(label, result.reason);
       continue;
     }
 
@@ -456,8 +850,10 @@ async function handleChat(req, res, bodyObj) {
       if (a.verdict === 'bad') {
         tried.push(`${label} (${a.why})`);
         log(`FAIL ${label} -> ${a.why}`);
+        markCooldown(label, a.why, 30000);
         continue;
       }
+      clearCooldown(label);
       log(`${i === 0 ? 'HIT ' : 'FALLBACK '}${label}`);
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
       res.end(result.text);
@@ -499,15 +895,18 @@ async function handleChat(req, res, bodyObj) {
       result.abort.abort(new Error('serult valasz'));
       tried.push(`${label} (${probe.why})`);
       log(`FAIL ${label} -> ${probe.why}`);
+      markCooldown(label, probe.why, 30000);
       continue;
     }
     if (!sawBytes) {
       watcher.disarm();
       tried.push(`${label} (üres stream)`);
       log(`FAIL ${label} -> üres stream`);
+      markCooldown(label, 'üres stream', 30000);
       continue;
     }
 
+    clearCooldown(label);
     log(`${i === 0 ? 'HIT ' : 'FALLBACK '}${label}`);
     res.writeHead(200, {
       'content-type': 'text/event-stream; charset=utf-8',
@@ -529,6 +928,7 @@ async function handleChat(req, res, bodyObj) {
     } catch (err) {
       // A stream már elindult a kliens felé: visszatekerni nem lehet, jelezzük.
       log(`STREAM-MEGSZAKADT ${label}: ${err?.message ?? err}`);
+      markCooldown(label, `stream megszakadt: ${err?.message ?? err}`, 60000);
       if (!res.writableEnded) {
         res.write(`data: ${JSON.stringify({ error: { message: `upstream stream hiba: ${err?.message ?? err}`, type: 'upstream_stream_error' } })}\n\n`);
       }
@@ -587,6 +987,26 @@ function handleHealth(res) {
     // A napi felulbiralat allapota: ha aktiv, a routes a mai lancot mutatja.
     dailyOverride: overrideState(),
     routes,
+    // Cel-szintu cooldown (frisssen elhalt celok) es az intelligens valaszto
+    // allapota: melyik beszelgetes melyik celon ragadt be, es mi volt az
+    // utolso par dontes indoka. Ez teszi a mukodest megfigyelhetove.
+    cooldowns: coolingTargets(),
+    intelligent: {
+      sessions: [...SESSION_ROUTES.entries()].map(([key, v]) => ({
+        session: key,
+        label: v.label,
+        steps: v.steps ?? 0,
+        switches: v.switches ?? 0,
+        idleSec: Math.round((Date.now() - v.at) / 1000),
+      })),
+      quotaUsed: Object.fromEntries(QUOTA_USED),
+      decisions: DECISIONS,
+      tuning: {
+        assumedCachedShare: CONFIG.assumedCachedShare ?? 0.9,
+        assumedOutputTokens: CONFIG.assumedOutputTokens ?? 900,
+        assumedRemainingSteps: CONFIG.assumedRemainingSteps ?? 8,
+      },
+    },
   });
 }
 
