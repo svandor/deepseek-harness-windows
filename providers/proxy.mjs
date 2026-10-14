@@ -197,7 +197,9 @@ function requiredEnvFor(routeName) {
 
 /** Melyik kötelező kulcs hiányzik ehhez a route-hoz? (üres tömb = rendben) */
 function missingRequiredEnv(routeName) {
-  return requiredEnvFor(routeName).filter((name) => !envValue(name));
+  // A credential-store is számít (nem csak a környezet): a proxy indítótól
+  // függetlenül működik, ezért a kapunak is ugyanazt kell néznie.
+  return requiredEnvFor(routeName).filter((name) => !(envValue(name) ?? credentialRef(name)));
 }
 
 /**
