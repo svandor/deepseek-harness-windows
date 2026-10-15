@@ -108,7 +108,9 @@ const SKIP_FILES = new Set(["model-pricing.txt", "model-pricing-raw.html"]);
 // külön soroljuk fel őket (törölhetők), és csak a valódi fájlokat jelezzük.
 const isBackup = (p) => /\.bak(-|$)|\.pre-strip$|\.old-/.test(p.split(/[\\/]/).pop());
 const hasId = (f) => {
-  if (SKIP_FILES.has(f.split(/[\\/]/).pop())) return false;
+  const base = f.split(/[\\/]/).pop();
+  // A .gitignore fájl-szintű kizárásai: ezek nem részei a nyilvános repónak.
+  if (SKIP_FILES.has(base) || /\.log$|\.out\.txt$|\.pid$/.test(base) || /\.bak(-|$)/.test(base)) return false;
   try { return statSync(f).size < 2e6 && leak.test(readFileSync(f, "utf8")); } catch { return false; }
 };
 const hits = files.filter(hasId);
