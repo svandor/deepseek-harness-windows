@@ -1268,7 +1268,8 @@ window.__ModuleLoader__.load({
       "balanceErrorTitle": "A szerveroldali egyenleg-lekérdezés nem sikerült: ",
       "spendPair": "DSH / Alibaba",
       "spendPairTitle": "Bal oldal: a DeepSeek számlán HÁTRALEVŐ egyenleg. Jobb oldal: az Alibaba-számla mínusz előjellel (pay-as-you-go, nincs előre feltöltött egyenleg).",
-      "spendPairBalance": "DeepSeek egyenleg: {balance} ({currency}) — hátralévő, nem költés.",
+      "spendPairBalance": "DeepSeek egyenleg (feltöltött): {balance} {currency} — ez a konzollal egyező összeg.",
+      "spendPairBalanceBreakdown": "Az API szerinti TELJES elérhető egyenleg: {total} — ebből jóváírt (promóciós) rész: {granted}.",
       "spendPairBill": "Alibaba számla ({cycle}): {amount} {currency} fizetendő.",
       "spendPairBillCycle": "Ciklus zárása: {close} — {daysLeft} nap; a terhelés a zárás után esedékes.",
       "spendPairBillAvailable": "Elérhető egyenleg: {available} · {models} modell-tétel a számlán.",
@@ -1506,7 +1507,8 @@ window.__ModuleLoader__.load({
       "balanceErrorTitle": "The host-side balance query failed: ",
       "spendPair": "DSH / Alibaba",
       "spendPairTitle": "Left: the REMAINING balance on the DeepSeek account. Right: the Alibaba invoice with a minus sign (pay-as-you-go, no prepaid balance).",
-      "spendPairBalance": "DeepSeek balance: {balance} ({currency}) — remaining, not spend.",
+      "spendPairBalance": "DeepSeek balance (topped-up): {balance} {currency} — this matches the console.",
+      "spendPairBalanceBreakdown": "The API's TOTAL available balance: {total} — of which granted (promotional): {granted}.",
       "spendPairBill": "Alibaba invoice ({cycle}): {amount} {currency} payable.",
       "spendPairBillCycle": "Cycle closes: {close} — {daysLeft} days; the charge is due after the close.",
       "spendPairBillAvailable": "Available balance: {available} · {models} model line items.",
@@ -2449,8 +2451,15 @@ window.__ModuleLoader__.load({
         // JOBB oldal: az Alibaba-koltes az idoszakban, MINUSZ elojellel — az
         // Alibaba pay-as-you-go, nincs elore feltoltott egyenlege, ezert ott
         // a koltes a "negativ egyenleg".
+        // A DeepSeek API a TELJES elerheto egyenleget adja (total = feltoltott +
+        // jovairt); a konzol a FELTOLTOTT osszeget mutatja. A pillen a
+        // konzollal egyezo ertek megy, a teljes/jovairt bontas a tooltipben.
+        var dshToppedUp = balance.status === "ready" && balance.data && balance.data.toppedUp !== null && balance.data.toppedUp !== undefined
+          ? Number(balance.data.toppedUp) : null;
+        var dshGranted = balance.status === "ready" && balance.data && balance.data.granted !== null && balance.data.granted !== undefined
+          ? Number(balance.data.granted) : null;
         var dshBalanceText = balance.status === "ready"
-          ? (formatMoney(balanceTotal, balanceCurrency) || t("balanceUnavailable"))
+          ? (formatMoney(dshToppedUp !== null ? dshToppedUp : balanceTotal, balanceCurrency) || t("balanceUnavailable"))
           : (balance.status === "loading" ? t("balanceLoading") : t("balanceUnavailable"));
         var alibabaBillData = alibabaBillState.status === "ready" ? alibabaBillState.data : null;
         var aliAmount = alibabaBillData !== null && typeof alibabaBillData.pretaxAmount === "number"
@@ -2474,7 +2483,11 @@ window.__ModuleLoader__.load({
         // tobb sorra bontva megy — igy minden elfer.
         var spendTitleLines = [
           t("spendPairTitle"),
-          t("spendPairBalance", { balance: dshBalanceText, currency: balanceCurrency || "?" })
+          t("spendPairBalance", { balance: dshBalanceText, currency: balanceCurrency || "?" }),
+          t("spendPairBalanceBreakdown", {
+            total: formatMoney(balanceTotal, balanceCurrency) || "-",
+            granted: dshGranted === null ? "-" : (formatMoney(dshGranted, balanceCurrency) || "-")
+          }),
         ];
         if (alibabaBillData !== null) {
           spendTitleLines.push(t("spendPairBill", {
