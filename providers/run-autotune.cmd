@@ -20,4 +20,9 @@ REM ============================================================================
 
 set PROXYDIR=%~dp0
 node "%PROXYDIR%autotune.mjs" --days 30 --apply >> "%PROXYDIR%autotune.out.log" 2>&1
-exit /b %ERRORLEVEL%
+set AUTOTUNE_RC=%ERRORLEVEL%
+REM Ingyenes keret figyeles: a szamla a merce. Kifogyott keretu cel -> fizetosre.
+node "%PROXYDIR%quota-watch.mjs" --apply >> "%PROXYDIR%quota-watch.out.log" 2>&1
+set QUOTA_RC=%ERRORLEVEL%
+if not "%QUOTA_RC%"=="0" exit /b %QUOTA_RC%
+exit /b %AUTOTUNE_RC%
