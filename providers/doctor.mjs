@@ -87,9 +87,12 @@ if (existsSync(wdLog)) {
 
 console.log("\n=== NYILVÁNOS REPO (fiókadat-szivárgás ellenőrzése) ===");
 const files = [];
+// A .gitignore biztonsági szempontból fontos sorai (a doctor nem hív git-et):
+// ezek a helyek NEM részei a nyilvános repónak.
+const IGNORED_DIRS = new Set([".git", "node_modules", "obj", "dist", "state", "reports", ".test-dsh-home", ".automation", ".vs"]);
 const walk = (dir) => {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (e.name === ".git" || e.name === "node_modules") continue;
+    if (IGNORED_DIRS.has(e.name) || e.name.startsWith(".tmp-")) continue;
     const p = join(dir, e.name);
     if (e.isDirectory()) walk(p); else files.push(p);
   }
