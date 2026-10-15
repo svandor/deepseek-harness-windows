@@ -6,7 +6,7 @@
   "port": 4123,
   "defaultRoute": "deepseek-chat",
   "connectTimeoutMs": 120000,
-  "stallTimeoutMs": 180000,
+  "stallTimeoutMs": 90000,
   "maxRequestBytes": 33554432,
   "_vram_megjegyzes": "A helyi (ollama) celok keep_alive-ja 2 perc. MERVE 2026-10-07: qwen2.5:7b-instruct 6,14 GB VRAM a hivas alatt, a lejarat utan a foglalas visszaesik (9577 -> 3086 MiB a 16 GB-os RTX 5080 Laptopon). A gpt-oss:20b (12,85 GB) nem fer el biztonsagosan mas folyamatok mellett, ezert nem alapertelmezett cel; kezzel a local-only route-on erheto el.",
   "ollamaKeepAlive": "2m",
@@ -169,7 +169,8 @@
       "_comment": "Közvetlen DeepSeek — az auto route csúcsidőn KÍVÜLI (olcsó) alapcélja. A proxy változatlanul továbbítja a reasoning_content-ot, ezért a gondolatmenet-visszajátszás is működik rajta.",
       "label": "DeepSeek (közvetlen)",
       "baseURL": "https://api.deepseek.com/v1",
-      "apiKeyEnv": "DEEPSEEK_API_KEY"
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "connectTimeoutMs": 45000
     },
     "ollama": {
       "label": "Ollama (helyi)",
@@ -244,12 +245,24 @@
       ],
       "rules": [
         {
+          "name": "csucs-kikerules",
+          "peak": true,
+          "targets": [
+            "alibaba-intl/qwen3.8-flash",
+            "alibaba/qwen3.7-flash",
+            "alibaba/qwen3.8-flash"
+          ]
+        },
+        {
           "name": "eszkalacio-porgas",
           "minMessages": 40,
           "minMaxRepeat": 3,
+          "peak": false,
           "targets": [
             "deepseek/deepseek-v4-pro",
-            "deepseek/deepseek-flash"
+            "deepseek/deepseek-flash",
+            "alibaba-intl/qwen3.7-flash",
+            "alibaba/qwen3.7-flash"
           ]
         },
         {
@@ -259,6 +272,7 @@
             "alibaba-intl/qwen3.8-flash",
             "alibaba/qwen3.7-flash",
             "alibaba/qwen3.8-flash",
+            "deepseek/deepseek-flash",
             "ollama/qwen2.5:7b-instruct"
           ]
         }
