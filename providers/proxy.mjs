@@ -355,7 +355,10 @@ const SESSION_ROUTES = new Map();      // sessionKey -> { label, at, switches, s
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const SESSION_MAX = 800;
 const DECISIONS = [];                  // utolso par dontes a /healthz-hez
-const QUOTA_USED = new Map();          // label -> becsult elhasznalt ingyenes token
+const QUOTA_USED = new Map();          // label -> becsült elhasznált ingyenes token
+/** Számla-szintű kvóta kifogyás után ideiglenesen tiltott freeQuota célok — nem esnek ki a láncból, csak a választóból */
+const FREE_QUOTA_BLOCKED = new Map();  // label -> timestamp (ms) ameddig tiltható
+const FREE_QUOTA_BLOCK_TTL_MS = 60000;  // 1 perc blokkolás 429-es "quota exhausted" után
 
 function rememberDecision(entry) {
   DECISIONS.push(entry);
@@ -394,9 +397,18 @@ function estimateCost(meta, sig, cachedShare, now) {
   const hit = (peak && tier.peakHit) || tier.hit || (miss * 0.1);
   const outRate = (peak && tier.peakOut) || tier.out || 0;
   // Szingapúri ingyenes keret: amig a becsult felhasznalas a keret alatt van, 0 USD.
+  // DE: ha a target már kapott 429-et "quota exhausted" miatt, ideiglenesen tiltsuk — így nem
+  // választja ki újra a chooseTarget, és legalább deepseek-flashre fordul a lánc.
   if (Number.isFinite(meta.freeQuotaTokens)) {
+    const blockedUntil = FREE_QUOTA_BLOCKED.get(meta._label);
+    if (blockedUntil && now < blockedUntil) {
+      // még tiltható → számolj normal áron, ne 0-val
+    } else if (blockedUntil) {
+      // lejárt a blokkolás → töröljük és visszaáll az ingyenes státusz
+      FREE_QUOTA_BLOCKED.delete(meta._label);
+    }
     const used = QUOTA_USED.get(meta._label) ?? 0;
-    if (used + size <= meta.freeQuotaTokens) return 0;
+    if (!(blockedUntil && now < blockedUntil) && used + size <= meta.freeQuotaTokens) return 0;
   }
   return (fresh * miss + cached * hit + out * outRate) / 1e6;
 }
@@ -866,6 +878,14 @@ async function handleChat(req, res, bodyObj) {
       log(`FAIL ${label} -> ${result.reason}`);
       // Hálózati/időtúllépéses hiba: a cél egy ideig a lánc végére kerül.
       if (result.kind === 'error') markCooldown(label, result.reason);
+      // FREE QUOTA BLOCK: ha 429 ("quota exhausted") jött freeQuota céltól, tiltsuk ideiglenesen — igy nem valasztja ki újra a chooseTarget.
+      if (result.status === 429 && label) {
+        const meta = (CONFIG.pricing ?? {})[label];
+        if (meta && Number.isFinite(meta.freeQuotaTokens)) {
+          log(`FREE_QUOTA_BLOCKED: ${label} → ${FREE_QUOTA_BLOCK_TTL_MS / 1000}s`);
+          FREE_QUOTA_BLOCKED.set(label, Date.now() + FREE_QUOTA_BLOCK_TTL_MS);
+        }
+      }
       continue;
     }
 
@@ -1024,6 +1044,7 @@ function handleHealth(res) {
         idleSec: Math.round((Date.now() - v.at) / 1000),
       })),
       quotaUsed: Object.fromEntries(QUOTA_USED),
+      freeQuotaBlocked: Object.fromEntries(FREE_QUOTA_BLOCKED),
       decisions: DECISIONS,
       tuning: {
         assumedCachedShare: CONFIG.assumedCachedShare ?? 0.9,
