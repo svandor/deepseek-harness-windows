@@ -98,11 +98,19 @@ const walk = (dir) => {
   }
 };
 walk(ROOT);
-const leak = /ws-[a-z0-9]{12,}|LTAI[0-9A-Za-z]{10,}@?|RRhOZoM6/;
+// Fiókadat-minták. SZÁNDÉKOSAN csak ALAKZATOK vannak benne, valódi
+// kulcs-töredék SOHA — különben maga a doctor lenne a szivárgás.
+// A model-pricing.txt a szállító nyilvános dokumentuma (a saját példa-
+// azonosítójával), ezért nem vizsgáljuk.
+const leak = /ws-[a-z0-9]{12,}|LTAI[0-9A-Za-z]{12,}|sk-ws-[A-Za-z0-9._-]{20,}/;
+const SKIP_FILES = new Set(["model-pricing.txt", "model-pricing-raw.html"]);
 // A gitignore-olt biztonsági mentések nem részei a nyilvános repónak, ezért
 // külön soroljuk fel őket (törölhetők), és csak a valódi fájlokat jelezzük.
 const isBackup = (p) => /\.bak(-|$)|\.pre-strip$|\.old-/.test(p.split(/[\\/]/).pop());
-const hasId = (f) => { try { return statSync(f).size < 2e6 && leak.test(readFileSync(f, "utf8")); } catch { return false; } };
+const hasId = (f) => {
+  if (SKIP_FILES.has(f.split(/[\\/]/).pop())) return false;
+  try { return statSync(f).size < 2e6 && leak.test(readFileSync(f, "utf8")); } catch { return false; }
+};
 const hits = files.filter(hasId);
 const tracked = hits.filter((f) => !isBackup(f));
 const backups = hits.filter(isBackup);
