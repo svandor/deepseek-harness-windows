@@ -22,7 +22,7 @@
  */
 
 import http from 'node:http';
-import { readFileSync, watch as fsWatch } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, watch as fsWatch } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -355,7 +355,25 @@ const SESSION_ROUTES = new Map();      // sessionKey -> { label, at, switches, s
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const SESSION_MAX = 800;
 const DECISIONS = [];                  // utolso par dontes a /healthz-hez
-const QUOTA_USED = new Map();          // label -> becsült elhasznált ingyenes token
+// A keret-fogyas becslese — PERZISZTALVA (2026-10-15). Korabban minden
+// proxy-ujrainditas nullazta, ezert a szelektor ujra meg ujra "ingyenesnek"
+// hitte a mar kimerult keretet. A MERCE a szolgaltato (email / konzol); ez a
+// sajat forgalmunkbol szarmazo becsles, ami restartot tulel.
+const QUOTA_STATE_PATH = path.join(HERE, 'reports', 'quota-used.json');
+const QUOTA_USED = new Map((() => {
+  try { return Object.entries(JSON.parse(readFileSync(QUOTA_STATE_PATH, 'utf8')).used ?? {}); } catch { return []; }
+})());
+let quotaSaveTimer = null;
+function saveQuotaState() {
+  try {
+    mkdirSync(path.dirname(QUOTA_STATE_PATH), { recursive: true });
+    writeFileSync(QUOTA_STATE_PATH, JSON.stringify({
+      at: new Date().toISOString(),
+      note: 'becsult ingyenes-keret fogyasztas celonkent (token) — a mervado a szolgaltato adata',
+      used: Object.fromEntries(QUOTA_USED)
+    }, null, 1), 'utf8');
+  } catch { /* nem kritikus */ }
+}
 /** Számla-szintű kvóta kifogyás után ideiglenesen tiltott freeQuota célok — nem esnek ki a láncból, csak a választóból */
 const FREE_QUOTA_BLOCKED = new Map();  // label -> timestamp (ms) ameddig tiltható
 const FREE_QUOTA_BLOCK_TTL_MS = 60000;  // 1 perc blokkolás 429-es "quota exhausted" után
@@ -426,6 +444,8 @@ function noteQuota(label, sig) {
   const meta = (CONFIG.pricing ?? {})[label];
   if (meta && Number.isFinite(meta.freeQuotaTokens)) {
     QUOTA_USED.set(label, (QUOTA_USED.get(label) ?? 0) + Math.max(1, sig.estTokens));
+    clearTimeout(quotaSaveTimer);
+    quotaSaveTimer = setTimeout(saveQuotaState, 2000);
   }
 }
 
@@ -498,9 +518,8 @@ function chooseTarget(routeName, base, sig, messages, now) {
   if (key) {
     const prev = SESSION_ROUTES.get(key);
     SESSION_ROUTES.set(key, { label: best.label, at: now, switches: (prev?.switches ?? 0) + 1, steps: 1, reason: best.label });
-    if (Number.isFinite(table[best.label]?.freeQuotaTokens)) {
-      QUOTA_USED.set(best.label, (QUOTA_USED.get(best.label) ?? 0) + sig.estTokens);
-    }
+    // A keret-fogyast a noteQuota() rogziti (fent) — itt NEM szamoljuk meg
+    // meg egyszer, kulonben a becsles duplazodna.
     // A map merete korlatozott (a legregebbi bejegyzesek esnek ki).
     if (SESSION_ROUTES.size > SESSION_MAX) {
       for (const [k, v] of SESSION_ROUTES) { if (now - v.at > SESSION_TTL_MS) SESSION_ROUTES.delete(k); if (SESSION_ROUTES.size <= SESSION_MAX) break; }
