@@ -1,5 +1,7 @@
 # Biztonságos plugin-fejlesztés (DSH UI-bővítések)
 
+> English version: [`safe-plugin-development.en.md`](safe-plugin-development.en.md).
+
 Ez a jegyzet azt rögzíti, **hogyan fejlesztünk úgy, hogy az éles DSH felület ne
 tudjon megbénulni**. Két alkalommal a saját plugin-bejegyzés megbuktatta a bootot
 („Failed to load plugins”), és a helyreállítás az npx cache törlését igényelte —
