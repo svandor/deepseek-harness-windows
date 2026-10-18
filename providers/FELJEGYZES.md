@@ -1,5 +1,7 @@
 # Feljegyzés — Provider-konfiguráció és karbantartás
 
+> English version: [`FELJEGYZES.en.md`](FELJEGYZES.en.md).
+
 **Dátum:** 2026-09-27
 **DSH verzió:** `0.1.5-rc.3` (npx cache: `@deepseek-ai/dsh@0.1.5-rc.3`)
 **DSH home:** `%USERPROFILE%\.dsh`
