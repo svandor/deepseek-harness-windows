@@ -1,5 +1,7 @@
 # Cursor előfizetés a DeepSeek Harness-ben — elemzés és döntés
 
+> English version: [`CURSOR-CLI-ELEMZES.en.md`](CURSOR-CLI-ELEMZES.en.md).
+
 **Dátum:** 2026-09-30
 **Státusz:** ELDÖNTVE, félretéve. Az út: **Cursor CLI, banmentes üzemmód**, a keret
 elhasználása, az előfizetés lemondása 2026 októbere végén.

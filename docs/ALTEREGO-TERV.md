@@ -1,5 +1,7 @@
 # Alteregó avatarok — terv és ötletlista
 
+> English version: [`ALTEREGO-TERV.en.md`](ALTEREGO-TERV.en.md).
+
 **Státusz:** **MEGVALÓSÍTVA** (2026-10-01) — 14 alteregó, kattintható választó,
 automatikus váltogatás, közös perzisztált állapot.
 
