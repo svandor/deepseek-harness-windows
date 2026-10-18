@@ -1,5 +1,7 @@
 # Helyi robot (bot) — terv a Grok Bot kiváltására
 
+> English version: [`BOT-TERV.en.md`](BOT-TERV.en.md).
+
 **Dátum:** 2026-09-30
 **Státusz:** TERV — döntések rögzítve, még semmi nem épült meg.
 **Kapcsolódó:** [`CURSOR-CLI-ELEMZES.md`](CURSOR-CLI-ELEMZES.md), `providers/README.md`,

@@ -1,5 +1,7 @@
 # Alibaba Cloud (Qwen) bekötése a DSH-ba — előkészített terv
 
+> English version: [`ALIBABA-QWEN-TERV.en.md`](ALIBABA-QWEN-TERV.en.md).
+
 **Állapot:** felderítés kész, **API-kulcsra vár**. Nem telepítve, nem mérve.
 **Dátum:** 2026-10-01
 **Kapcsolódó:** `FELJEGYZES.md` (4. és 9. szakasz), `README.md`, `config.json`
