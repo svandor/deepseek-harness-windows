@@ -1,5 +1,7 @@
 # Alibaba (Qwen) EU bekötés — élő mérések és lelet
 
+> English version: [`ALIBABA-MERES.en.md`](ALIBABA-MERES.en.md).
+
 **Dátum:** 2026-10-14. **Mérő:** `providers/probe-alibaba*.mjs` (élő API-hívások, kulcs soha nem kerül ki).
 **Jelölések:** [M] = ezen a gépen mért, [D] = gyári dokumentáció, [K] = kombináció/becslés. [D]-t nem tekintünk igazoltnak mérés nélkül.
 
