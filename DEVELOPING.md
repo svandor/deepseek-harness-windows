@@ -41,6 +41,21 @@ Until a workspace has a stored value, the language follows the active interface
 language — the interface language and the commit language are deliberately two
 separate things.
 
+**A repó nyilvános, ezért a commit-üzenet mindig angol.** A HU/EN gomb csak az
+automatikusan generált üzenetet állítja; a kézzel beírt (vagy agent által írt)
+üzenetre ugyanaz a szabály vonatkozik. Ezt egy `commit-msg` hook kényszeríti ki:
+`tools/check-commit-msg.mjs`, bekapcsolás: `.\tools\install-hooks.ps1`.
+Megkerülés (ritka, tudatos): `git commit --no-verify`, vagy egy `commit-lang: any`
+sor az üzenetben. A hook elutasítja az ékezetes és a jellegzetesen magyar szavakat
+tartalmazó üzeneteket — angol üzenethez nem kell ékezet.
+
+**Because the repository is public, commit messages are always English.** The
+HU/EN button only drives the automatically generated message; hand-written (or
+agent-written) messages follow the same rule. A `commit-msg` hook enforces it:
+`tools/check-commit-msg.mjs`, enable with `.\tools\install-hooks.ps1`, bypass with
+`git commit --no-verify` or a `commit-lang: any` trailer. The hook rejects messages
+carrying Hungarian accented letters or distinctive Hungarian words.
+
 ## Szerző / Author
 
 **Varga Sándor (svandor)** — MIT licenc / MIT license.

@@ -1,0 +1,10 @@
+#!/bin/sh
+# commit-msg hook — this repository is public, so commit messages are English.
+#
+# Installed by `tools/install-hooks.ps1`, which points `core.hooksPath` at this
+# directory. The check itself lives in tools/check-commit-msg.mjs so it can also
+# be run by hand (and by tools/check-plugin.mjs's test suite).
+#
+# Bypass (rare, deliberate): `git commit --no-verify`, or a `commit-lang: any`
+# trailer line in the message.
+exec node "$(dirname "$0")/../check-commit-msg.mjs" "$1"
