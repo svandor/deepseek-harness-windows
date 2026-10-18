@@ -1,5 +1,7 @@
 # DSH UI-plugin fejlesztési jegyzet
 
+> English version: [`dsh-plugin-notes.en.md`](dsh-plugin-notes.en.md).
+
 Ez a jegyzet a DSH felületének bővítéséhez szükséges, **visszafejtett** csatolási
 pontokat rögzíti (a forráskód nem elérhető, csak a telepített, lefordított
 csomagok). Cél: Git panel, SSH panel, statisztika panel, terminál + futtatható
