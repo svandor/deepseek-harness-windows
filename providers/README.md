@@ -1,5 +1,7 @@
 # Provider-bővítés a DeepSeek Harness-hez
 
+> English version: [`README.en.md`](README.en.md).
+
 Ez a mappa a DSH több-provideres beállítását tartalmazza: helyi Ollama, ingyenes
 felhős providerek, és egy automatikus fallback proxy.
 

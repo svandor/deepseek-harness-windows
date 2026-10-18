@@ -23,10 +23,12 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 /** Directories whose documents are part of the public face of the project. */
 const DIRECTORIES = ['docs', 'providers'];
 
-/** Files that are exempt: English-only by nature, or already the mirror. */
-const EXEMPT = new Set([
-  'README.en.md' // providers/README.md is Hungarian, providers/README.en.md is its mirror
-]);
+/**
+ * Files that are exempt from the mirror rule. Empty today: every Hungarian
+ * document under the scanned directories has (or must get) an English mirror,
+ * and the mirrors themselves are skipped by the `*.en.md` rule below.
+ */
+const EXEMPT = new Set();
 
 /**
  * The mirror of `X.md` is `X.en.md`. A file that IS a mirror (`*.en.md`) needs
