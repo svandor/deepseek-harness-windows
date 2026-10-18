@@ -318,6 +318,42 @@ try {
     if (noSession === hostDir) ok('with no Session and no workspace the host directory is the last resort');
     else fail(`resolveWorkspace returned ${JSON.stringify(noSession)} instead of the host fallback`);
 
+    // --- the footer balance -----------------------------------------------
+    //
+    // The footer pill read the TOPPED-UP balance alone: an account with 6.60 USD
+    // loaded and 8.40 USD granted credit showed "$6.60" while the DeepSeek
+    // console showed $15.00 — from the user's side, a wrong balance. The API's
+    // `total_balance` is granted + topped-up, so the pill shows that, and this
+    // pins it against the shape the live `/ui-extras/balance` answer has.
+    const near = (a, b) => typeof a === 'number' && Math.abs(a - b) < 1e-9;
+    const liveBalance = { status: 'ready', data: { currency: 'USD', total: '15.00', granted: '8.40', toppedUp: '6.60' } };
+    const live = plugin.balanceFigures(liveBalance);
+    if (near(live.shown, 15) && plugin.formatMoney(live.shown, 'USD') === '$15.00') {
+      ok('the footer pill shows the total balance, granted credit included ($15.00, not $6.60)');
+    } else {
+      fail(`the footer pill would show ${plugin.formatMoney(live.shown, 'USD')}, not the total`);
+    }
+
+    // An older host may answer without `total`: granted + topped-up must still
+    // add up, because the pill is the available amount either way.
+    const noTotal = plugin.balanceFigures({ status: 'ready', data: { currency: 'USD', granted: '8.40', toppedUp: '6.60' } });
+    if (near(noTotal.shown, 15)) ok('a host without `total` still yields granted + topped-up');
+    else fail(`without \`total\` the pill would show ${JSON.stringify(noTotal.shown)} instead of 15`);
+
+    // A hole in the answer must not blank the pill: the topped-up part alone is
+    // still better than "unavailable".
+    const toppedOnly = plugin.balanceFigures({ status: 'ready', data: { currency: 'USD', toppedUp: '6.60' } });
+    if (near(toppedOnly.shown, 6.6)) ok('with only the topped-up part the pill still shows a figure');
+    else fail(`with only \`toppedUp\` the pill would show ${JSON.stringify(toppedOnly.shown)}`);
+
+    // And a missing figure is NOT a zero balance: `Number(null)` is 0, and
+    // "$0.00" in the footer reads as an emptied account.
+    if (plugin.formatMoney(plugin.balanceFigures({ status: 'ready', data: {} }).shown, 'USD') === null) {
+      ok('a missing balance reads as "unavailable", never as $0.00');
+    } else {
+      fail('a missing balance was formatted as a real amount');
+    }
+
     // --- the conversation phase readers ------------------------------------
     //
     // The corner controls and the statistics row are registered TWICE: once in

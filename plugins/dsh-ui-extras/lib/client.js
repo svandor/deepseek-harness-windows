@@ -1278,9 +1278,9 @@ window.__ModuleLoader__.load({
       "balanceTitle": "Élő egyenleg a DeepSeek számláról, szerveroldali lekérdezéssel.",
       "balanceErrorTitle": "A szerveroldali egyenleg-lekérdezés nem sikerült: ",
       "spendPair": "DSH / Alibaba",
-      "spendPairTitle": "Bal oldal: a DeepSeek számlán HÁTRALEVŐ egyenleg. Jobb oldal: az Alibaba-számla mínusz előjellel (pay-as-you-go, nincs előre feltöltött egyenleg).",
-      "spendPairBalance": "DeepSeek egyenleg (feltöltött): {balance} {currency} — ez a konzollal egyező összeg.",
-      "spendPairBalanceBreakdown": "Az API szerinti TELJES elérhető egyenleg: {total} — ebből jóváírt (promóciós) rész: {granted}.",
+      "spendPairTitle": "Bal oldal: a DeepSeek számlán ELÉRHETŐ egyenleg (feltöltött + jóváírt grátisz). Jobb oldal: az Alibaba-számla mínusz előjellel (pay-as-you-go, nincs előre feltöltött egyenleg).",
+      "spendPairBalance": "DeepSeek egyenleg (a grátisszal együtt): {balance} {currency} — a konzollal egyező, elérhető összeg.",
+      "spendPairBalanceBreakdown": "Bontás: feltöltött {toppedUp} + jóváírt (grátisz) {granted} = {total}.",
       "spendPairBill": "Alibaba számla ({cycle}): {amount} {currency} fizetendő.",
       "spendPairBillCycle": "Ciklus zárása: {close} — {daysLeft} nap; a terhelés a zárás után esedékes.",
       "spendPairBillAvailable": "Elérhető egyenleg: {available} · {models} modell-tétel a számlán.",
@@ -1294,7 +1294,7 @@ window.__ModuleLoader__.load({
       "usageAlibabaSgQuota": "Szingapúri ingyenes keret ({model}): {used} / {quota} zseton ({percent}) — jóváírva {free}, fizetve {paid}",
       "usageAlibabaNote": "Alibaba-árak: EU (Frankfurt) és Szingapúr (International) listaár.",
       "usageAlibabaNote2": "Proxy-útvonalon (worker/auto) a napló a route nevét rögzíti — ott a költség közelítés.",
-      "usageBalanceLine": "DeepSeek-egyenleg: {balance}",
+      "usageBalanceLine": "DeepSeek-egyenleg (a grátisszal együtt): {balance}",
       "costTitle": "Költség: a hivatalos ártáblából, kérésenként számolva (USD).",
       "rowTitle": "Használat és költség. A költség a hivatalos ártáblából becsült érték.",
       "usageTooltipHead": "Használat és költség (becslés a hivatalos ártáblával)",
@@ -1528,9 +1528,9 @@ window.__ModuleLoader__.load({
       "balanceTitle": "Live balance from the DeepSeek account, queried on the host.",
       "balanceErrorTitle": "The host-side balance query failed: ",
       "spendPair": "DSH / Alibaba",
-      "spendPairTitle": "Left: the REMAINING balance on the DeepSeek account. Right: the Alibaba invoice with a minus sign (pay-as-you-go, no prepaid balance).",
-      "spendPairBalance": "DeepSeek balance (topped-up): {balance} {currency} — this matches the console.",
-      "spendPairBalanceBreakdown": "The API's TOTAL available balance: {total} — of which granted (promotional): {granted}.",
+      "spendPairTitle": "Left: the AVAILABLE balance on the DeepSeek account (topped-up + granted). Right: the Alibaba invoice with a minus sign (pay-as-you-go, no prepaid balance).",
+      "spendPairBalance": "DeepSeek balance (granted included): {balance} {currency} — the available amount, matching the console.",
+      "spendPairBalanceBreakdown": "Breakdown: topped-up {toppedUp} + granted {granted} = {total}.",
       "spendPairBill": "Alibaba invoice ({cycle}): {amount} {currency} payable.",
       "spendPairBillCycle": "Cycle closes: {close} — {daysLeft} days; the charge is due after the close.",
       "spendPairBillAvailable": "Available balance: {available} · {models} model line items.",
@@ -2047,9 +2047,43 @@ window.__ModuleLoader__.load({
     }
 
     function formatMoney(raw, code) {
+      // `Number(null)` is 0: a missing figure must read as "no figure", never as
+      // a real zero balance.
+      if (raw === null || raw === undefined || raw === "") return null;
       var value = Number(raw);
       if (!isFinite(value)) return null;
       return currencySymbol(code) + value.toFixed(2);
+    }
+
+    /**
+     * A DeepSeek-egyenleg három mezője számként (`null`, ha nincs).
+     *
+     * Az API `total_balance`-e a feltöltött ÉS a jóváírt (grátisz) rész összege
+     * — a webes konzol is ezt az elérhető összeget mutatja. A lábléc ezért a
+     * `total`-t jeleníti meg (`shown`); a bontás (feltöltött / grátisz) a
+     * tooltipben marad. Ha egy régebbi host nem ad `total`-t, a két részből
+     * számoljuk, és csak akkor esünk vissza a feltöltött részre, ha a `total`
+     * tényleg nem áll elő.
+     */
+    function balanceFigures(state) {
+      var data = state && state.status === "ready" && state.data ? state.data : null;
+      if (data === null) return { total: null, granted: null, toppedUp: null, shown: null };
+      var figure = function (raw) {
+        if (raw === null || raw === undefined || raw === "") return null;
+        var value = Number(raw);
+        return isFinite(value) ? value : null;
+      };
+      var granted = figure(data.granted);
+      var toppedUp = figure(data.toppedUp);
+      var total = figure(data.total);
+      if (total === null && granted !== null && toppedUp !== null) total = granted + toppedUp;
+      return {
+        total: total,
+        granted: granted,
+        toppedUp: toppedUp,
+        // A pill ezt az értéket mutatja: a TELJES egyenleg, benne a grátisszal.
+        shown: total !== null ? total : toppedUp
+      };
     }
 
     /** USD to four decimals, the shape the usage tooltip shows costs in. */
@@ -2293,7 +2327,12 @@ window.__ModuleLoader__.load({
       var switchAt = nextSwitch(now);
       var cacheHit = usage ? cacheHitPercent(usage) : null;
 
-      var balanceTotal = balance.status === "ready" && balance.data ? Number(balance.data.total) : null;
+      // A DeepSeek API a TELJES elérhető egyenleget adja: `total` = feltöltött +
+      // jóváírt (grátisz). 2026-10-19: a lábléc-pill is ezt mutatja (a webes
+      // konzollal egyezően) — korábban csak a feltöltött rész látszott, ami
+      // kevesebbnek tűnt a valós egyenlegnél. A bontás a tooltipben marad.
+      var dshBalance = balanceFigures(balance);
+      var balanceTotal = dshBalance.total;
       var balanceCurrency = balance.status === "ready" && balance.data ? balance.data.currency : null;
       var balanceText;
       if (balance.status === "loading") balanceText = t("balanceLoading");
@@ -2478,21 +2517,21 @@ window.__ModuleLoader__.load({
       // vesz el: a pill tooltipjeben ott marad. Ha a host meg a regi (nincs
       // `spend` mezo), valtozatlanul az egyenleg-pill jelenik meg.
       if (spend !== null) {
-        // BAL oldal: a DeepSeek szamlan HATRALEVO egyenleg (a
+        // BAL oldal: a DeepSeek szamlan ELERHETO egyenleg (a
         // /ui-extras/balance valaszabol, a sajat penznemeben) — ez a kerdes
         // targya: "a DSH-bol a hatralevot kell mutatni".
         // JOBB oldal: az Alibaba-koltes az idoszakban, MINUSZ elojellel — az
         // Alibaba pay-as-you-go, nincs elore feltoltott egyenlege, ezert ott
         // a koltes a "negativ egyenleg".
-        // A DeepSeek API a TELJES elerheto egyenleget adja (total = feltoltott +
-        // jovairt); a konzol a FELTOLTOTT osszeget mutatja. A pillen a
-        // konzollal egyezo ertek megy, a teljes/jovairt bontas a tooltipben.
-        var dshToppedUp = balance.status === "ready" && balance.data && balance.data.toppedUp !== null && balance.data.toppedUp !== undefined
-          ? Number(balance.data.toppedUp) : null;
-        var dshGranted = balance.status === "ready" && balance.data && balance.data.granted !== null && balance.data.granted !== undefined
-          ? Number(balance.data.granted) : null;
+        // 2026-10-19: a pillen a TELJES elerheto egyenleg megy (total =
+        // feltoltott + jovairt/gratisz), mert a webes konzol is ezt mutatja —
+        // a feltoltott resz onmagaban kevesebbnek tunt a valos egyenlegnel.
+        // A feltoltott/gratisz bontas a tooltipben marad.
+        var dshToppedUp = dshBalance.toppedUp;
+        var dshGranted = dshBalance.granted;
+        var dshShown = dshBalance.shown;
         var dshBalanceText = balance.status === "ready"
-          ? (formatMoney(dshToppedUp !== null ? dshToppedUp : balanceTotal, balanceCurrency) || t("balanceUnavailable"))
+          ? (formatMoney(dshShown, balanceCurrency) || t("balanceUnavailable"))
           : (balance.status === "loading" ? t("balanceLoading") : t("balanceUnavailable"));
         var alibabaBillData = alibabaBillState.status === "ready" ? alibabaBillState.data : null;
         var aliAmount = alibabaBillData !== null && typeof alibabaBillData.pretaxAmount === "number"
@@ -2519,7 +2558,8 @@ window.__ModuleLoader__.load({
           t("spendPairBalance", { balance: dshBalanceText, currency: balanceCurrency || "?" }),
           t("spendPairBalanceBreakdown", {
             total: formatMoney(balanceTotal, balanceCurrency) || "-",
-            granted: dshGranted === null ? "-" : (formatMoney(dshGranted, balanceCurrency) || "-")
+            granted: dshGranted === null ? "-" : (formatMoney(dshGranted, balanceCurrency) || "-"),
+            toppedUp: dshToppedUp === null ? "-" : (formatMoney(dshToppedUp, balanceCurrency) || "-")
           }),
         ];
         if (alibabaBillData !== null) {
@@ -7756,6 +7796,12 @@ window.__ModuleLoader__.load({
     // That ordering is a rule, and a rule without a test drifts.
     exports.resolveWorkspace = resolveWorkspace;
     exports.pickSessionWorkspace = pickSessionWorkspace;
+    // Exported so tools/check-plugin.mjs can pin the FOOTER FIGURE: the pill
+    // showed the topped-up balance alone, while the DeepSeek API (and the web
+    // console) report the total INCLUDING the granted credit. A wrong figure in
+    // the footer looks like a wrong balance, so the rule gets a test.
+    exports.balanceFigures = balanceFigures;
+    exports.formatMoney = formatMoney;
     return module.exports;
   }
 });
