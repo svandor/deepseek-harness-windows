@@ -19,9 +19,20 @@
  *
  * It also owns the approval prompt: the built-in card offers one-shot answers
  * only, so this plugin takes over the composer for approval interactions and
- * adds "remember this approval type" buttons. The type is derived and stored on
- * the host (`/ui-extras/approvals`), which then answers that type itself — see
+ * adds the "remember this approval type" buttons. The type is derived and stored
+ * on the host (`/ui-extras/approvals`), which then answers that type itself — see
  * the remembered-approvals section of the host half.
+ *
+ * Four remember scopes are offered, narrowing left to right:
+ *
+ *   * `session`   — this conversation only (host memory, gone on restart),
+ *   * `path-dir`  — only inside the folder the pending call names,
+ *   * `path-file` — only the exact file the pending call names,
+ *   * `tool` / `all` — the durable per-tool / every-tool type grants.
+ *
+ * The location scopes are only offered when the pending tool call actually names
+ * a path (`file_path` / `path`), because the approval request itself carries no
+ * location: the host re-derives it from the session log's `tool/call` event.
  *
  * Every visible string lives in the `hu` / `en` dictionaries below and is
  * requested through the slot-provided `t` function, so the row follows the
@@ -1470,16 +1481,27 @@ window.__ModuleLoader__.load({
       "approvalRememberToolHint": "Ezentúl nem kérdez rá, ha a(z) {tool} eszköz ilyen típusú hozzáférést kér",
       "approvalRememberAll": "Mindig: minden eszköz",
       "approvalRememberAllHint": "Ezentúl nem kérdez rá, ha bármely eszköz ilyen típusú hozzáférést kér",
-      "approvalRememberHint": "A „Mindig” gomb elmenti ezt a hozzájárulás-típust, és legközelebb már nem kérdez rá. A 🛡 gombnál bármikor visszavonható.",
+      "approvalRememberSession": "Munkamenetre",
+      "approvalRememberSessionHint": "Csak ennek a beszélgetésnek az idejére engedélyezi ezt a hozzáféréstípus, és nem kérdez rá újra. Nem íródik a hozzájárulás-tárba, ezért a Harness újraindításakor (és a beszélgetés végén) elvész.",
+      "approvalRememberDir": "Mappa: {name}",
+      "approvalRememberDirHint": "Ezentúl nem kérdez rá, ha a(z) {tool} eszköz ebben a mappában kér ilyen hozzáférést: {path}",
+      "approvalRememberFile": "Fájl: {name}",
+      "approvalRememberFileHint": "Ezentúl nem kérdez rá, ha a(z) {tool} eszköz pontosan ezt a fájlt érinti: {path}",
+      "approvalPathLine": "Érintett útvonal: {path}",
+      "approvalPathUnavailable": "Ehhez a kéréshez nem olvasható ki útvonal a hívásból, ezért csak a munkamenetre, eszközre vagy mindenkire szóló engedély adható.",
+      "approvalRememberHint": "A „Mindig” gomb elmenti ezt a hozzájárulás-típust, és legközelebb már nem kérdez rá. A „Munkamenetre” gomb csak a beszélgetés végéig érvényes, a mappa/fájl gombok pedig csak az adott helyre. Mindegyik visszavonható a 🛡 gombnál.",
       "approvalRemembering": "Megjegyzés…",
       "approvalRemembered": "Megjegyezve",
       "approvalWriteFailed": "A művelet nem sikerült:",
       "approvalPermissionsOpen": "Engedélyek (megjegyzett hozzájárulások)",
       "approvalPermissionsTitle": "Megjegyzett hozzájárulások",
-      "approvalPermissionsHint": "Az itt felsorolt hozzáféréstípusokra a Harness többé nem kérdez rá: a kérést a szerver automatikusan engedélyezi. Visszavonás után ismét kérdezni fog.",
-      "approvalNoRules": "Nincs megjegyzett hozzájárulás. A sárga jóváhagyás-kártyán a „Mindig” gombbal vehetsz fel egyet.",
+      "approvalPermissionsHint": "Az itt felsorolt hozzáféréstípusokra a Harness többé nem kérdez rá: a kérést a szerver automatikusan engedélyezi. A „munkamenet” jelölésűek csak a beszélgetés végéig (a Harness újraindításáig) érvényesek, a mappa/fájl hatókörűek pedig csak az adott helyen. Visszavonás után ismét kérdezni fog.",
+      "approvalNoRules": "Nincs megjegyzett hozzájárulás. A sárga jóváhagyás-kártyán a „Munkamenetre” vagy a „Mindig” gombbal vehetsz fel egyet.",
       "approvalRuleEveryTool": "minden eszközre érvényes",
       "approvalRuleTools": "csak ezekre az eszközökre: {tools}",
+      "approvalRuleSession": "munkamenet — csak a beszélgetés végéig, újraindítás után elvész",
+      "approvalRulePathDir": "mappa: {path}",
+      "approvalRulePathFile": "fájl: {path}",
       "approvalRuleUsed": "alkalmazva: {count}×",
       "approvalRuleCreated": "létrehozva: {date}",
       "approvalRevoke": "Visszavonás",
@@ -1709,16 +1731,27 @@ window.__ModuleLoader__.load({
       "approvalRememberToolHint": "Never asks again when tool {tool} requests this access type",
       "approvalRememberAll": "Always: every tool",
       "approvalRememberAllHint": "Never asks again when any tool requests this access type",
-      "approvalRememberHint": "An “Always” button stores this approval type, so it will not ask again. It can be revoked behind the 🛡 button at any time.",
+      "approvalRememberSession": "This session",
+      "approvalRememberSessionHint": "Allows this access type for the rest of THIS conversation, without asking again. It is not written to the approval store, so it is gone when the Harness restarts (and when the conversation ends).",
+      "approvalRememberDir": "Folder: {name}",
+      "approvalRememberDirHint": "Never asks again when tool {tool} requests this access type inside this folder: {path}",
+      "approvalRememberFile": "File: {name}",
+      "approvalRememberFileHint": "Never asks again when tool {tool} touches exactly this file: {path}",
+      "approvalPathLine": "Affected path: {path}",
+      "approvalPathUnavailable": "No path can be read from this call, so only a session, tool-wide or every-tool approval can be given.",
+      "approvalRememberHint": "An “Always” button stores this approval type and will not ask again. “This session” only lasts for this conversation, the folder/file buttons only for that location. All of them can be revoked behind the 🛡 button.",
       "approvalRemembering": "Remembering…",
       "approvalRemembered": "Remembered",
       "approvalWriteFailed": "The operation failed:",
       "approvalPermissionsOpen": "Permissions (remembered approvals)",
       "approvalPermissionsTitle": "Remembered approvals",
-      "approvalPermissionsHint": "For the access types listed here the Harness no longer asks: the server allows the request automatically. After a revoke it asks again.",
-      "approvalNoRules": "No remembered approval yet. The “Always” button on the yellow approval card adds one.",
+      "approvalPermissionsHint": "For the access types listed here the Harness no longer asks: the server allows the request automatically. The ones marked “session” only last until the conversation ends (or the Harness restarts); a folder/file scope only covers that location. After a revoke it asks again.",
+      "approvalNoRules": "No remembered approval yet. The “This session” or “Always” button on the yellow approval card adds one.",
       "approvalRuleEveryTool": "valid for every tool",
       "approvalRuleTools": "only for these tools: {tools}",
+      "approvalRuleSession": "session — only until this conversation ends, lost on restart",
+      "approvalRulePathDir": "folder: {path}",
+      "approvalRulePathFile": "file: {path}",
       "approvalRuleUsed": "applied: {count}×",
       "approvalRuleCreated": "created: {date}",
       "approvalRevoke": "Revoke",
@@ -2684,8 +2717,8 @@ window.__ModuleLoader__.load({
       return t("approvalRuleTools", { tools: rule.tools.join(", ") });
     }
 
-    /** The command text of the tool call an approval is about, when there is one. */
-    function approvalCommandOf(snapshot, callId) {
+    /** The parsed arguments of the tool call an approval is about, when there are any. */
+    function approvalCallArgsOf(snapshot, callId) {
       if (callId === undefined || snapshot === null || snapshot === undefined) return null;
       if (snapshot.nodes === undefined || typeof snapshot.nodes.values !== "function") return null;
       var nodes = snapshot.nodes.values();
@@ -2696,13 +2729,75 @@ window.__ModuleLoader__.load({
         if ("kind" in root) return null;
         try {
           var args = JSON.parse(root.argsRaw);
-          if (args !== null && typeof args.command === "string") return args.command;
+          return args !== null && typeof args === "object" ? args : null;
         } catch (error) {
           return null;
         }
-        return null;
       }
       return null;
+    }
+
+    /** The command text of the tool call an approval is about, when there is one. */
+    function approvalCommandOf(snapshot, callId) {
+      var args = approvalCallArgsOf(snapshot, callId);
+      if (args === null) return null;
+      return typeof args.command === "string" ? args.command : null;
+    }
+
+    /**
+     * The filesystem target of the tool call an approval is about, when it names
+     * one.
+     *
+     * This mirrors the host's `APPROVAL_PATH_KEYS` order: the folder/file buttons
+     * are only offered when BOTH halves agree that the call names a path, and the
+     * host re-derives it from the session log before it stores anything.
+     */
+    var APPROVAL_PATH_ARG_KEYS = ["file_path", "path", "filePath", "target_file", "notebook_path", "directory", "dir"];
+
+    function approvalPathOf(snapshot, callId) {
+      var args = approvalCallArgsOf(snapshot, callId);
+      if (args === null) return null;
+      for (var index = 0; index < APPROVAL_PATH_ARG_KEYS.length; index += 1) {
+        var value = args[APPROVAL_PATH_ARG_KEYS[index]];
+        if (typeof value === "string" && value.trim() !== "") return value.trim();
+      }
+      return null;
+    }
+
+    /** The folder a path lives in (display only: the host derives the stored one). */
+    function approvalFolderOf(path) {
+      var text = String(path === null || path === undefined ? "" : path).trim();
+      if (text === "") return null;
+      var cut = Math.max(text.lastIndexOf("\\"), text.lastIndexOf("/"));
+      if (cut <= 0) return text;
+      return text.slice(0, cut);
+    }
+
+    /** The last segment of a path: the label on the folder/file buttons. */
+    function approvalNameOf(path) {
+      var text = String(path === null || path === undefined ? "" : path).trim();
+      if (text === "") return "";
+      var cut = Math.max(text.lastIndexOf("\\"), text.lastIndexOf("/"));
+      var name = cut < 0 ? text : text.slice(cut + 1);
+      if (name === "") return text;
+      return name.length > 28 ? name.slice(0, 27) + "…" : name;
+    }
+
+    /**
+     * One line describing what a remembered rule narrows to beyond its type.
+     *
+     * @returns the location/session line, or null for a plain type-wide rule.
+     */
+    function approvalRuleScopeDetail(rule, t) {
+      if (rule === null || rule === undefined) return null;
+      var lines = [];
+      if (rule.sessionScoped === true) lines.push(t("approvalRuleSession"));
+      if (typeof rule.pathScope === "string" && rule.pathScope !== "") {
+        lines.push(rule.pathKind === "file"
+          ? t("approvalRulePathFile", { path: rule.pathScope })
+          : t("approvalRulePathDir", { path: rule.pathScope }));
+      }
+      return lines.length === 0 ? null : lines.join(" · ");
     }
 
     /**
@@ -2880,15 +2975,27 @@ window.__ModuleLoader__.load({
 
       var isHungarian = isHungarianLocaleId(activeLocaleId(props.locale));
 
+      // The pending call's own data: the command line for the card body, and the
+      // path the folder/file buttons would narrow to. Both come from the same
+      // tool-call snapshot the host reads out of the session log, so the buttons
+      // can never promise a location the host would not derive.
       var command = null;
+      var callPath = null;
       try {
         if (typeof props.useChat === "function" && pending && pending.callId !== undefined) {
           var callId = pending.callId;
           command = props.useChat(function (snapshot) { return approvalCommandOf(snapshot, callId); });
+          callPath = props.useChat(function (snapshot) { return approvalPathOf(snapshot, callId); });
         }
       } catch (error) {
         command = null;
+        callPath = null;
       }
+
+      // `PendingApproval.sessionId` — the session that owns this request. A
+      // session-scoped grant is keyed on it, so it can never leak into another
+      // conversation's waterfall.
+      var sessionId = pending && typeof pending.sessionId === "string" ? pending.sessionId : "";
 
       var pendingKey = pending && pending.key !== undefined ? pending.key : "";
       var toolName = pending && typeof pending.toolName === "string" ? pending.toolName : "";
@@ -2942,13 +3049,20 @@ window.__ModuleLoader__.load({
        * Remember this approval type on the host, then answer the pending
        * request: the user's press is consent for THIS action too, so the card
        * must not leave the tool waiting for a second decision.
+       *
+       * @param scope - `session` | `tool` | `all` | `path-dir` | `path-file`.
+       * @param extraPath - the path the location scopes narrow to (ignored by the
+       *   others); the host normalizes it and stores what it derived.
        */
-      function remember(scope) {
+      function remember(scope, extraPath) {
         setStatus(t("approvalRemembering"));
+        var payload = { action: "remember", toolName: toolName, reason: reason, scope: scope };
+        if (typeof extraPath === "string" && extraPath !== "") payload.path = extraPath;
+        if (scope === "session" && sessionId !== "") payload.session = sessionId;
         fetch(APPROVALS_ROUTE, {
           method: "POST",
           headers: { "content-type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ action: "remember", toolName: toolName, reason: reason, scope: scope })
+          body: JSON.stringify(payload)
         })
           .then(function (response) { return response.json(); })
           .then(function (body) {
@@ -3005,6 +3119,9 @@ window.__ModuleLoader__.load({
                 reasonLine !== null
                   ? jsx.jsx("div", { className: "uix-appr-line", children: t("approvalReasonLine", { reason: reasonLine }) })
                   : null,
+                callPath !== null && callPath !== undefined && callPath !== ""
+                  ? jsx.jsx("div", { className: "uix-appr-line", children: t("approvalPathLine", { path: callPath }) })
+                  : null,
                 command !== null && command !== undefined && command !== ""
                   ? jsx.jsxs("div", {
                     children: [
@@ -3029,6 +3146,39 @@ window.__ModuleLoader__.load({
                   onClick: function () { answer("rejected"); },
                   children: t("approvalReject")
                 }),
+                // The narrowest answer first: this conversation, then the
+                // location, then the tool, and only then every tool. The card
+                // reads left to right from "just this conversation" to
+                // "everything, forever".
+                hostReady === true && sessionId !== ""
+                  ? jsx.jsx(ApprovalButton, {
+                    variant: "outline",
+                    disabled: answered,
+                    title: t("approvalRememberSessionHint"),
+                    onClick: function () { remember("session"); },
+                    children: t("approvalRememberSession")
+                  })
+                  : null,
+                hostReady === true && callPath !== null && callPath !== undefined && callPath !== ""
+                  && type !== null && type !== undefined && type.scopes.indexOf("path-dir") >= 0
+                  ? jsx.jsx(ApprovalButton, {
+                    variant: "outline",
+                    disabled: answered,
+                    title: t("approvalRememberDirHint", { tool: toolName, path: approvalFolderOf(callPath) }),
+                    onClick: function () { remember("path-dir", callPath); },
+                    children: t("approvalRememberDir", { name: approvalNameOf(approvalFolderOf(callPath)) })
+                  })
+                  : null,
+                hostReady === true && callPath !== null && callPath !== undefined && callPath !== ""
+                  && type !== null && type !== undefined && type.scopes.indexOf("path-file") >= 0
+                  ? jsx.jsx(ApprovalButton, {
+                    variant: "outline",
+                    disabled: answered,
+                    title: t("approvalRememberFileHint", { tool: toolName, path: callPath }),
+                    onClick: function () { remember("path-file", callPath); },
+                    children: t("approvalRememberFile", { name: approvalNameOf(callPath) })
+                  })
+                  : null,
                 hostReady === true
                   ? jsx.jsx(ApprovalButton, {
                     variant: "outline",
@@ -3184,6 +3334,7 @@ window.__ModuleLoader__.load({
             ? jsx.jsx("div", { style: { opacity: 0.8 }, children: t("approvalNoRules") })
             : null,
           state.rules.map(function (rule) {
+            var scopeDetail = approvalRuleScopeDetail(rule, t);
             return jsx.jsxs("div", {
               key: rule.id,
               "data-dsh-ui-extras": "permission-rule",
@@ -3199,8 +3350,17 @@ window.__ModuleLoader__.load({
               },
               children: [
                 jsx.jsxs("div", { style: { minWidth: 0 }, children: [
-                  jsx.jsx("div", { style: { fontWeight: 600 }, children: isHungarian ? rule.labelHu : rule.labelEn }),
+                  jsx.jsx("div", {
+                    style: { fontWeight: 600 },
+                    children: (rule.sessionScoped === true ? "⏳ " : "") + (isHungarian ? rule.labelHu : rule.labelEn)
+                  }),
                   jsx.jsx("div", { style: { opacity: 0.7 }, children: approvalRuleScopeText(rule, t) }),
+                  scopeDetail !== null
+                    ? jsx.jsx("div", {
+                      style: { opacity: 0.8, color: "var(--dsw-alias-state-warn-primary, #ffc400)" },
+                      children: scopeDetail
+                    })
+                    : null,
                   jsx.jsx("div", {
                     style: { opacity: 0.6 },
                     children: t("approvalRuleUsed", { count: String(Number(rule.hits) || 0) })

@@ -29,15 +29,20 @@
  *
  *   GET /ui-extras/approvals
  *   GET /ui-extras/approvals?toolName=<name>&reason=<text>
- *     The remembered approval types (`state/approvals.json`), the recent
- *     auto-answered decisions, and — with a tool name and reason — the TYPE of
- *     the request the browser is currently showing, so the approval card can
- *     name what a "remember this" press would store.
+ *     The remembered approval types (`state/approvals.json`) plus the grants that
+ *     belong to one session only (host memory), the recent auto-answered
+ *     decisions, and — with a tool name and reason — the TYPE of the request the
+ *     browser is currently showing, so the approval card can name what a
+ *     "remember this" press would store.
  *
  *   POST /ui-extras/approvals   { action: remember | forget | clear | clear-log }
- *     Store one approval type as permanently answered (`remember`, with
- *     `scope: "tool" | "all"`), revoke one rule (`forget` with its `id`), or
- *     drop every rule (`clear`).
+ *     Store one approval type as answered (`remember`, with
+ *     `scope: "session" | "tool" | "all" | "path-dir" | "path-file"`), revoke one
+ *     rule (`forget` with its `id`), or drop every rule (`clear`). A `session`
+ *     grant lives in host memory under the asking session and dies with the host
+ *     process; the path scopes are stored with the `path` they were granted for,
+ *     and only answer a request whose own tool-call arguments point inside that
+ *     path.
  *
  * The same file drives the waterfall answerer below: a request whose TYPE has a
  * remembered rule is answered `allowed-once` on the host, before the browser is
@@ -70,7 +75,7 @@
  * The plugin also serves its own static asset directory.
  */
 import { readFileSync, readdirSync, existsSync, writeFileSync, statSync, mkdirSync, copyFileSync, renameSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { execFile, spawnSync } from "node:child_process";
@@ -1852,6 +1857,161 @@ const SANDBOX_MODE_LABELS = {
   "danger-full-access": { hu: "teljes hozzáférés (danger-full-access)", en: "full access (danger-full-access)" }
 };
 
+/**
+ * Rule scopes: what one remembered answer actually covers.
+ *
+ *   * `session` — the same approval type, for the asking session, in host memory
+ *     only. This is the answer to "widen my fence for THIS conversation, not for
+ *     ever": the grant is gone when the host process ends.
+ *   * `tool` / `all` — the durable, type-wide forms (one tool, or every tool).
+ *   * `path-dir` / `path-file` — the durable, location-narrow form: the same
+ *     approval type, but only while the asking tool call touches that folder (or
+ *     that exact file).
+ */
+const APPROVAL_SCOPES = ["session", "tool", "all", "path-dir", "path-file"];
+
+/**
+ * Argument names carrying a filesystem target, in the order they are trusted.
+ *
+ * The approval request itself has no path field: the asker sends a tool name, an
+ * optional call id and a prose reason, so the ONLY machine-readable location is
+ * the tool call's own arguments (logged as the `tool/call` event). A sandbox
+ * escalation carries the model's justification, not the path, which is why a
+ * path-scoped grant has to be matched against the call arguments instead.
+ */
+const APPROVAL_PATH_KEYS = ["file_path", "path", "filePath", "target_file", "notebook_path", "directory", "dir"];
+
+/** Separator used when comparing two normalized paths. */
+const APPROVAL_PATH_SEPARATOR = process.platform === "win32" ? "\\" : "/";
+
+/**
+ * Normalize one path for COMPARISON (never for display).
+ *
+ * `resolve` makes both sides of a comparison independent of how the model spelled
+ * the path (relative vs absolute); Windows compares case-insensitively and
+ * accepts both separators, so the key is lower-cased and separator-normalized
+ * there. A trailing separator never matters: "C:\a\b\" is the folder "C:\a\b".
+ *
+ * @param value - the raw path as it appears in a rule or a tool call.
+ * @returns the comparison key, or null when the value names nothing usable.
+ */
+function approvalPathKey(value) {
+  const text = String(value ?? "").trim();
+  if (text === "") return null;
+  let resolved;
+  try {
+    resolved = resolve(text);
+  } catch {
+    return null;
+  }
+  if (process.platform === "win32") resolved = resolved.replace(/\//gu, "\\");
+  resolved = resolved.replace(/[\\/]+$/u, "");
+  if (resolved === "") return null;
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+/**
+ * Whether one granted path covers the requested one. Fail-closed: a comparison
+ * key that is missing on either side matches NOTHING, so a rule stored for a
+ * path we can no longer parse can never answer a request.
+ *
+ * @param scopeKey - the rule's normalized path.
+ * @param requestKey - the request's normalized path.
+ * @param kind - `"dir"` (the whole subtree) or `"file"` (that one file).
+ */
+function approvalPathWithin(scopeKey, requestKey, kind) {
+  if (scopeKey === null || scopeKey === undefined) return false;
+  if (requestKey === null || requestKey === undefined) return false;
+  if (kind === "file") return scopeKey === requestKey;
+  if (requestKey === scopeKey) return true;
+  const prefix = scopeKey.endsWith(APPROVAL_PATH_SEPARATOR) ? scopeKey : scopeKey + APPROVAL_PATH_SEPARATOR;
+  return requestKey.startsWith(prefix);
+}
+
+/**
+ * The path a pending approval is about, read from the tool call it belongs to.
+ *
+ * The approval request hands over the agent and the call id, and the agent's
+ * session log holds the `tool/call` event with the exact arguments — so the host
+ * derives the path from the SAME data the model produced, never from whatever the
+ * browser claims. The arguments are usually a raw JSON string (as the model
+ * emitted them) but a normalized object is accepted too.
+ *
+ * @param request - the `approval/request` payload ({agent, toolName, callId, reason}).
+ * @returns the argument value naming a path, or null when the call has none.
+ */
+function approvalPathOf(request) {
+  try {
+    const session = request?.agent?.session;
+    const callId = request?.callId;
+    if (session === undefined || session === null) return null;
+    if (typeof callId !== "string" || callId === "") return null;
+    if (typeof session.eventAt !== "function") return null;
+    const end = Number(session.seq);
+    if (!Number.isSafeInteger(end) || end < 0) return null;
+    for (let index = end - 1; index >= 0; index -= 1) {
+      const event = session.eventAt(index);
+      if (event === null || event === undefined || event.type !== "tool/call") continue;
+      const data = event.data ?? {};
+      if (data.callId !== callId) continue;
+      let args = data.arguments;
+      if (typeof args === "string") {
+        try {
+          args = JSON.parse(args);
+        } catch {
+          return null;
+        }
+      }
+      if (args === null || typeof args !== "object") return null;
+      for (const key of APPROVAL_PATH_KEYS) {
+        const value = args[key];
+        if (typeof value === "string" && value.trim() !== "") return value.trim();
+      }
+      return null;
+    }
+  } catch {
+    // A session whose log cannot be read simply contributes no path: every
+    // path-scoped rule then stops matching, which is the fail-closed direction.
+  }
+  return null;
+}
+
+/**
+ * Session-scoped grants, in host memory: `sessionId -> rules[]`.
+ *
+ * Deliberately NOT persisted. "For this session" means exactly that: the grant
+ * dies with the host process (and is not inherited by a new conversation), so a
+ * remembered session scope can never quietly become a durable permission.
+ */
+const sessionApprovalRules = new Map();
+
+/** The session-scoped rules of one asking session (never null). */
+function sessionRulesOf(sessionId) {
+  if (typeof sessionId !== "string" || sessionId === "") return [];
+  const rules = sessionApprovalRules.get(sessionId);
+  return Array.isArray(rules) ? rules : [];
+}
+
+/** Every session-scoped rule of every live session, for the permissions panel. */
+function allSessionRules() {
+  const collected = [];
+  for (const rules of sessionApprovalRules.values()) collected.push(...rules);
+  return collected;
+}
+
+/** Remove one session-scoped rule by id; returns the removed rule or null. */
+function forgetSessionRule(id) {
+  for (const [sessionId, rules] of sessionApprovalRules) {
+    const index = rules.findIndex((rule) => rule.id === id);
+    if (index < 0) continue;
+    const removed = rules[index];
+    rules.splice(index, 1);
+    if (rules.length === 0) sessionApprovalRules.delete(sessionId);
+    return removed;
+  }
+  return null;
+}
+
 /** An empty, valid approval document. */
 function emptyApprovals() {
   return { version: APPROVALS_VERSION, rules: [], log: [] };
@@ -1859,12 +2019,15 @@ function emptyApprovals() {
 
 /** Whether one stored entry is a rule this module can match and display. */
 function isApprovalRule(rule) {
-  return rule !== null && typeof rule === "object"
-    && typeof rule.id === "string"
-    && typeof rule.key === "string"
-    && typeof rule.kind === "string"
-    && typeof rule.target === "string"
-    && (rule.tools === null || Array.isArray(rule.tools));
+  if (rule === null || typeof rule !== "object") return false;
+  if (typeof rule.id !== "string" || typeof rule.key !== "string") return false;
+  if (typeof rule.kind !== "string" || typeof rule.target !== "string") return false;
+  if (!(rule.tools === null || Array.isArray(rule.tools))) return false;
+  // The location narrowing is optional; when it IS present it must be complete,
+  // because a half-read path scope would match either everything or nothing.
+  if (rule.pathScope === undefined || rule.pathScope === null) return true;
+  return typeof rule.pathScope === "string" && rule.pathScope !== ""
+    && (rule.pathKind === "dir" || rule.pathKind === "file");
 }
 
 /** Read the remembered approvals; an unreadable file is an empty document. */
@@ -1926,7 +2089,10 @@ function approvalTypeOf(toolName, reason) {
       labelHu: label.hu,
       labelEn: label.en,
       justification: escalation[2].trim(),
-      scopes: ["tool", "all"]
+      // A widened fence is one decision with a real vocabulary, so it may be
+      // remembered for the session, for one tool, for every tool, or for one
+      // folder — the widest-to-narrowest ladder the card offers.
+      scopes: ["session", "tool", "all", "path-dir", "path-file"]
     };
   }
   return {
@@ -1936,7 +2102,9 @@ function approvalTypeOf(toolName, reason) {
     labelHu: text === "" ? "(nincs megadott indok)" : text.slice(0, 180),
     labelEn: text === "" ? "(no reason given)" : text.slice(0, 180),
     justification: "",
-    scopes: ["tool"]
+    // Without a vocabulary there is nothing to widen safely: the exact reason
+    // text stays the target, so every offered scope is still one exact question.
+    scopes: ["session", "tool", "path-dir", "path-file"]
   };
 }
 
@@ -1947,15 +2115,40 @@ function ruleCoversTool(rule, toolName) {
 }
 
 /**
- * The remembered rule that already answers this request, or null. Fail-closed:
- * an unknown kind or target never matches, and a rule that only covers one tool
- * does not answer another tool's request.
+ * Whether one rule's location scope covers the path the request is about.
+ * A rule without a location scope answers wherever the path goes (the old
+ * behaviour); a rule WITH one answers only inside its folder, or exactly its
+ * file — and never answers a request that has no path at all.
  */
-function findApprovalRule(rules, toolName, reason) {
+function ruleCoversPath(rule, requestPath) {
+  const scope = typeof rule.pathScope === "string" && rule.pathScope !== "" ? rule.pathScope : null;
+  if (scope === null) return true;
+  return approvalPathWithin(
+    approvalPathKey(scope),
+    approvalPathKey(requestPath),
+    rule.pathKind === "file" ? "file" : "dir"
+  );
+}
+
+/**
+ * The remembered rule that already answers this request, or null. Fail-closed:
+ * an unknown kind or target never matches, a rule that only covers one tool does
+ * not answer another tool's request, and a path-scoped rule answers only a
+ * request whose own call arguments point inside its path.
+ *
+ * @param rules - the candidate rules (durable document rules or session rules).
+ * @param toolName - the asking tool.
+ * @param reason - the prose the asker sent.
+ * @param requestPath - the path derived from the pending tool call, when the
+ *   caller has one (`approvalPathOf`).
+ */
+function findApprovalRule(rules, toolName, reason, requestPath) {
   const type = approvalTypeOf(toolName, reason);
+  const path = requestPath === undefined ? null : requestPath;
   for (const rule of rules) {
     if (rule.kind !== type.kind || rule.target !== type.target) continue;
     if (!ruleCoversTool(rule, toolName)) continue;
+    if (!ruleCoversPath(rule, path)) continue;
     return rule;
   }
   return null;
@@ -1975,6 +2168,70 @@ function appendApprovalLog(document, entry) {
 /** The same tool scope, expressed for storage (null means "every tool"). */
 function approvalToolsFor(scope, toolName) {
   return scope === "all" ? null : [toolName];
+}
+
+/**
+ * The scope the browser asked for, narrowed to what this type may actually offer.
+ * An unknown or unavailable scope falls back to the per-tool rule the card has
+ * always offered — never to a wider one.
+ */
+function normalizedApprovalScope(rawScope, type) {
+  const wanted = APPROVAL_SCOPES.includes(rawScope) ? rawScope : "tool";
+  return type.scopes.includes(wanted) ? wanted : "tool";
+}
+
+/** The location a path scope narrows to: the file itself, or its folder. */
+function approvalPathScopeOf(scope, rawPath) {
+  const text = String(rawPath ?? "").trim();
+  if (approvalPathKey(text) === null) return null;
+  let absolute;
+  try {
+    absolute = resolve(text);
+  } catch {
+    return null;
+  }
+  if (scope === "path-file") return { path: absolute, kind: "file" };
+  // The folder of the file the call names. A bare root ("C:\") stays itself.
+  const cut = Math.max(absolute.lastIndexOf("\\"), absolute.lastIndexOf("/"));
+  const folder = cut <= 0 ? absolute : absolute.slice(0, cut);
+  return { path: folder, kind: "dir" };
+}
+
+/** One human label for the log line of a stored grant. */
+function approvalScopeLabel(scope, toolName, location) {
+  if (scope === "all") return "minden eszköz";
+  if (scope === "session") return `${toolName}, munkamenetre`;
+  if (location !== null && location !== undefined) return `${toolName}, ${location}`;
+  if (scope === "path-dir") return `${toolName}, mappa`;
+  if (scope === "path-file") return `${toolName}, fájl`;
+  return toolName;
+}
+
+/**
+ * Whether one stored rule is the same grant as what is being remembered now.
+ * Identity is the type plus everything that narrows it: the tool set, the
+ * location scope, and (for session grants) the session it was given to.
+ *
+ * @param rule - the candidate already in the store.
+ * @param type - the derived approval type.
+ * @param tools - the tool set about to be stored (null = every tool).
+ * @param sessionId - the session for a session grant, `""` for a durable one.
+ * @param location - `{path, kind}` for a path grant, null otherwise.
+ */
+function sameApprovalGrant(rule, type, tools, sessionId, location) {
+  if (rule.key !== type.key) return false;
+  if (JSON.stringify(rule.tools ?? null) !== JSON.stringify(tools)) return false;
+  if (String(rule.sessionId ?? "") !== sessionId) return false;
+  const ruleScope = typeof rule.pathScope === "string" && rule.pathScope !== "" ? rule.pathScope : null;
+  if (location === null) return ruleScope === null;
+  if (ruleScope === null) return false;
+  if ((rule.pathKind === "file" ? "file" : "dir") !== location.kind) return false;
+  return approvalPathKey(ruleScope) === approvalPathKey(location.path);
+}
+
+/** The rules as the browser sees them: this host process's session grants first. */
+function visibleApprovalRules(document) {
+  return [...allSessionRules(), ...(document === null ? [] : document.rules)];
 }
 
 /** Read, mutate, write — the three steps every route performs. */
@@ -2029,13 +2286,15 @@ function handleApprovals(req, res, url) {
   if (String(req.method ?? "GET").toUpperCase() === "GET") {
     const toolName = url.searchParams.get("toolName") ?? "";
     const reason = url.searchParams.get("reason") ?? "";
+    const requestPath = url.searchParams.get("path") ?? "";
     const document = readApprovals();
+    const rules = visibleApprovalRules(document);
     sendJson(res, {
       ok: true,
-      rules: document.rules,
+      rules,
       log: document.log.slice(0, 25),
       type: toolName === "" ? null : describeApprovalType(approvalTypeOf(toolName, reason)),
-      covered: toolName !== "" && findApprovalRule(document.rules, toolName, reason) !== null
+      covered: toolName !== "" && findApprovalRule(rules, toolName, reason, requestPath === "" ? null : requestPath) !== null
     });
     return;
   }
@@ -2056,13 +2315,63 @@ function handleApprovals(req, res, url) {
       }
       const reason = typeof body?.reason === "string" ? body.reason : "";
       const type = approvalTypeOf(toolName, reason);
-      // Only a type that has a real vocabulary may be widened to every tool.
-      const scope = body?.scope === "all" && type.scopes.includes("all") ? "all" : "tool";
+      // Only a scope this type really offers may be stored; anything else
+      // degrades to the per-tool rule, never to a wider grant.
+      const scope = normalizedApprovalScope(String(body?.scope ?? ""), type);
       const tools = approvalToolsFor(scope, toolName);
+      const sessionId = scope === "session" && typeof body?.session === "string" ? body.session : "";
+
+      let location = null;
+      if (scope === "path-dir" || scope === "path-file") {
+        location = approvalPathScopeOf(scope, body?.path);
+        if (location === null) {
+          sendJson(res, { ok: false, error: "a mappa/fajl hatokorhoz ervenyes path kell" });
+          return;
+        }
+      }
+
+      // A session grant never touches the file: it lives in host memory for as
+      // long as this process serves that session.
+      if (scope === "session") {
+        if (sessionId === "") {
+          sendJson(res, { ok: false, error: "a munkamenet-hatokorhoz hianyzik a session" });
+          return;
+        }
+        const rules = sessionApprovalRules.get(sessionId) ?? [];
+        const existing = rules.find((rule) => sameApprovalGrant(rule, type, tools, sessionId, null));
+        let stored = existing ?? null;
+        if (existing === undefined) {
+          stored = {
+            id: newApprovalRuleId(),
+            key: type.key,
+            kind: type.kind,
+            target: type.target,
+            tools,
+            labelHu: type.labelHu,
+            labelEn: type.labelEn,
+            note: type.justification,
+            createdAt: at,
+            updatedAt: at,
+            hits: 0,
+            sessionScoped: true,
+            sessionId
+          };
+          rules.unshift(stored);
+          sessionApprovalRules.set(sessionId, rules);
+        } else {
+          existing.labelHu = type.labelHu;
+          existing.labelEn = type.labelEn;
+          if (type.justification !== "") existing.note = type.justification;
+          existing.updatedAt = at;
+        }
+        appendClientLog(`approval remembered for the session: ${type.key} (${toolName})`);
+        sendJson(res, { ok: true, error: null, rule: stored, rules: visibleApprovalRules(readApprovals()) });
+        return;
+      }
+
       let stored = null;
       const result = updateApprovals((document) => {
-        const existing = document.rules.find((rule) => rule.key === type.key
-          && JSON.stringify(rule.tools ?? null) === JSON.stringify(tools));
+        const existing = document.rules.find((rule) => sameApprovalGrant(rule, type, tools, "", location));
         if (existing !== undefined) {
           existing.labelHu = type.labelHu;
           existing.labelEn = type.labelEn;
@@ -2083,25 +2392,32 @@ function handleApprovals(req, res, url) {
           note: type.justification,
           createdAt: at,
           updatedAt: at,
-          hits: 0
+          hits: 0,
+          ...location === null ? {} : { pathScope: location.path, pathKind: location.kind }
         };
         document.rules.unshift(rule);
         appendApprovalLog(document, { at, event: "remember", key: type.key, toolName, scope, label: type.labelHu });
         stored = rule;
       });
-      appendClientLog(`approval remembered: ${type.key} (${scope === "all" ? "minden eszköz" : toolName})`
+      appendClientLog(`approval remembered: ${type.key} (${approvalScopeLabel(scope, toolName, location === null ? null : `${location.kind}: ${location.path}`)})`
         + (result.error === null ? "" : `, write failed: ${result.error}`));
       sendJson(res, {
         ok: result.error === null,
         error: result.error,
         rule: stored,
-        rules: result.document.rules
+        rules: visibleApprovalRules(result.document)
       });
       return;
     }
 
     if (action === "forget") {
       const id = typeof body?.id === "string" ? body.id : "";
+      const fromSession = forgetSessionRule(id);
+      if (fromSession !== null) {
+        appendClientLog(`session approval rule revoked: ${fromSession.key}`);
+        sendJson(res, { ok: true, error: null, rules: visibleApprovalRules(readApprovals()) });
+        return;
+      }
       let removed = null;
       const result = updateApprovals((document) => {
         removed = document.rules.find((rule) => rule.id === id) ?? null;
@@ -2109,11 +2425,12 @@ function handleApprovals(req, res, url) {
         if (removed !== null) appendApprovalLog(document, { at, event: "forget", key: removed.key, label: removed.labelHu });
       });
       appendClientLog(`approval rule revoked: ${removed === null ? id : removed.key}`);
-      sendJson(res, { ok: result.error === null, error: result.error, rules: result.document.rules });
+      sendJson(res, { ok: result.error === null, error: result.error, rules: visibleApprovalRules(result.document) });
       return;
     }
 
     if (action === "clear" || action === "clear-log") {
+      if (action === "clear") sessionApprovalRules.clear();
       const result = updateApprovals((document) => {
         if (action === "clear") {
           const count = document.rules.length;
@@ -2123,7 +2440,12 @@ function handleApprovals(req, res, url) {
         }
         document.log = [];
       });
-      sendJson(res, { ok: result.error === null, error: result.error, rules: result.document.rules, log: result.document.log });
+      sendJson(res, {
+        ok: result.error === null,
+        error: result.error,
+        rules: visibleApprovalRules(result.document),
+        log: result.document.log
+      });
       return;
     }
 
@@ -2144,14 +2466,32 @@ function handleApprovals(req, res, url) {
  * request, a `never` policy) is left untouched: the policy check happens in the
  * approval service BEFORE the waterfall, so a session with approvals disabled
  * still rejects instead of silently auto-allowing.
+ *
+ * Two stores are consulted, narrowest first:
+ *
+ *   1. the asking session's own grants (host memory) — answered without touching
+ *      the disk, because a session grant is not a record, just a live consent;
+ *   2. the durable document (`state/approvals.json`), where a path-scoped rule
+ *      only answers when the pending call's own arguments point inside its path.
  */
 function installApprovalAnswerer(ctx) {
   return ctx.on("approval/request", function (request, next) {
     try {
       const toolName = typeof request?.toolName === "string" ? request.toolName : "";
       const reason = typeof request?.reason === "string" ? request.reason : "";
+      const toolPath = approvalPathOf(request);
+      const sessionId = typeof request?.agent?.session?.id === "string" ? request.agent.session.id : "";
+
+      const sessionRule = findApprovalRule(sessionRulesOf(sessionId), toolName, reason, toolPath);
+      if (sessionRule !== null) {
+        sessionRule.hits = (Number(sessionRule.hits) || 0) + 1;
+        sessionRule.lastUsedAt = new Date().toISOString();
+        appendClientLog(`approval auto-allowed for the session: ${sessionRule.key} (${toolName})`);
+        return "allowed-once";
+      }
+
       const document = readApprovals();
-      const rule = findApprovalRule(document.rules, toolName, reason);
+      const rule = findApprovalRule(document.rules, toolName, reason, toolPath);
       if (rule === null) return next();
       rule.hits = (Number(rule.hits) || 0) + 1;
       rule.lastUsedAt = new Date().toISOString();
@@ -3449,9 +3789,13 @@ export { handleGithubAction };
 /**
  * Exported for `tools/check-approvals.mjs`: the type derivation and the rule
  * matcher are the security-relevant part of the remembered-approval store, so
- * they are exercised directly instead of only through a live prompt.
+ * they are exercised directly instead of only through a live prompt. The path
+ * helpers and the route come with them because a path-scoped rule decides with
+ * `approvalPathOf`, and the session store is only reachable through
+ * `handleApprovals` — both are checked against a fake request, not a live one.
  */
 export { approvalTypeOf, findApprovalRule, readApprovals, writeApprovals, approvalsPath };
+export { approvalPathKey, approvalPathOf, approvalPathWithin, approvalPathScopeOf, handleApprovals, sessionApprovalRules, APPROVAL_PATH_KEYS };
 
 /**
  * Exported for `tools/check-usage.mjs`: the price table, the peak-window

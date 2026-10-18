@@ -103,7 +103,7 @@
   },
   "_valaszto_hangolas": "A szelektor becslesei: assumedCachedShare = a session 4. uzenete utan ennyi a feltetelezett cache-arany (merve 99,8%, de ovatosan 0,9); assumedOutputTokens = tipikus kimenet lepesenkent (merve ~870); assumedRemainingSteps = hany lepesre szamoljuk a valtas nyeresegét (a cache-ujraeles koltsege ellenében); switchMarginPct = ennyi% nyereseg alatt nem valtunk (cache-vedelem).",
   "assumedCachedShare": 0.95,
-  "assumedOutputTokens": 394,
+  "assumedOutputTokens": 398,
   "assumedRemainingSteps": 4,
   "switchMarginPct": 25,
   "dailyOverrides": {},

@@ -249,6 +249,36 @@ Ez **soha nem nyúl az npx cache-hez**, és a beépített funkciókat nem érint
     `localStorage`-ban marad), és ha a kimenet utolsó sorai jelszóra utalnak
     (`password`, `passphrase`, `jelszó`, `token`, …), a mező kerete sárgára vált és
     a placeholder erre figyelmeztet.
+- **Jóváhagyás-hatókörök: munkamenet, mappa, fájl** (2026-10-18). A sárga kártyán
+  korábban csak két „megjegyzés” volt: `Mindig: <eszköz>` és `Mindig: minden
+  eszköz` — vagyis a `write`/`edit` esetében csak az „minden edit automatikus”
+  szint létezett, a „csak erre a beszélgetésre” és a „csak ebben a mappában” nem.
+  Most a kártya balról jobbra szűkülő sorrendben kínálja:
+  `Munkamenetre` → `Mappa: <név>` → `Fájl: <név>` → `Mindig: <eszköz>` →
+  `Mindig: minden eszköz` → `Engedélyezés egyszer`.
+  - A **munkamenet-hatókör szándékosan nem perzisztens**: a host memóriájában él
+    (`sessionApprovalRules`, a session id alatt), nem íródik a
+    `state/approvals.json`-ba, és a host újraindításakor (illetve a beszélgetés
+    végén) elvész. A 🛡 panelen `⏳` jelöléssel látszik, és a szokásos módon
+    visszavonható. Ezért nem lehet „véletlenül örökös” engedély.
+  - A **mappa/fájl hatókör** perzisztens: a szabály a `pathScope` + `pathKind`
+    (`dir`/`file`) mezőt kapja. Illesztéskor a host a **hívás saját argumentumából**
+    olvassa ki az útvonalat (`approvalPathOf`: a session naplójában a `tool/call`
+    esemény `arguments` mezője, `file_path` / `path` / … kulcsokon), mert az
+    approval-kérésnek NINCS path mezője (csak `toolName`, `callId`, `reason` — az
+    indok pedig szabad szöveg). Windows-on a összehasonlítás kis/nagybetű
+    független, és a `C:\Temp\proj` hatókör **nem** fedi a `C:\Temp\project2`-t
+    (elválasztó-határ, nem sima prefix).
+  - **Fail-closed**: a hely-hatókörű szabály soha nem válaszol olyan kérésre,
+    amelyből nem olvasható ki útvonal (pl. `pwsh`, ahol a parancs szövegéből nem
+    lehet megmondani, mit érint) — ilyenkor a kártya csak a munkamenet/eszköz
+    szinteket kínálja. Ez szándékos: hamis pontosságot nem adunk.
+  - Ellenőrzés: `node tools\check-approvals.mjs` (a valódi route-ot hajtja fake
+    req/res-szel, a valódi szabályfájlt mentve/visszaállítva: 45 eset, köztük a
+    session-szivárgás, az előtag-határ, a „nincs útvonal” eset, valamint a kliens
+    és a host path-kulcslistájának egyezése), valamint `node tools\check-plugin.mjs`.
+    Élesítés: szerver-újraindítás (a host fél csak ekkor töltődik be), utána
+    lap-újratöltés.
 
 ## Következő lépések
 
