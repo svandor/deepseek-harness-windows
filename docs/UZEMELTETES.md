@@ -1,5 +1,7 @@
 # Üzemeltetés — indítás, újraindítás, leállítás
 
+> English version: [`UZEMELTETES.en.md`](UZEMELTETES.en.md).
+
 **Státusz:** az integritási átvizsgálás megtörtént (2026-10-02). Ez a dokumentum
 azt rögzíti, **melyik belépési pont mit tesz**, és miért úgy teszi — hogy egy
 nyilvános kiadásnál ne legyen „rossz helyről indítottam" típusú hiba.
