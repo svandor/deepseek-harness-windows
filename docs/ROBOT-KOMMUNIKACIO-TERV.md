@@ -1,5 +1,7 @@
 # A robot kommunikációs felülete — javaslat
 
+> English version: [`ROBOT-KOMMUNIKACIO-TERV.en.md`](ROBOT-KOMMUNIKACIO-TERV.en.md).
+
 **Dátum:** 2026-10-01
 **Státusz:** **MEGVALÓSÍTVA** (V2 robot-konzol, 3+1 felület, „Csak robot" mód)
 **Kapcsolódó:** [`BOT-TERV.md`](BOT-TERV.md), `bot/README.md` 5.0–5.0b szakasz
