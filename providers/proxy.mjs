@@ -967,6 +967,25 @@ function retriable(result) {
   return false;
 }
 
+/**
+ * BEMENET-SPECIFIKUS ELUTASITAS (merve 2026-10-20, javitva).
+ *
+ * Az Alibaba tartalom-szurese HTTP 400-at ad vissza
+ * `data_inspection_failed` kodddal ("Input text data may contain
+ * inappropriate content"). Ez NEM cel-kieses: ugyanaz a cel a KOVETKEZO
+ * kerest kiszolgalja. Korabban ilyenkor is 90 s cel-cooldown jart, es a
+ * KOVETKEZO 90 s MINDEN kerest elvitt a celtol — egy nap 33 ilyen eset
+ * volt (merve a proxy.out.log-ban), ami a fel napot a lanc vegere tolta.
+ *
+ * Ilyenkor csak ERRE a keresre valtunk a kovetkezo celre, a celt nem
+ * buntetjuk. A minta szandekosan szuk: csak 400 + tartalom-szuro kod.
+ */
+function isInputRejection(result) {
+  if (result?.status !== 400) return false;
+  const reason = String(result?.reason ?? '');
+  return /data_inspection_failed|inappropriate content|content[_ -]?(policy|filter)/i.test(reason);
+}
+
 // ── a kérés kiszolgálása ───────────────────────────────────────────────────
 async function handleChat(req, res, bodyObj) {
   const requested = typeof bodyObj.model === 'string' ? bodyObj.model : CONFIG.defaultRoute;
@@ -1008,7 +1027,13 @@ async function handleChat(req, res, bodyObj) {
       tried.push(`${label} (${result.reason})`);
       log(`FAIL ${label} -> ${result.reason}`);
       // Hálózati/időtúllépéses hiba: a cél egy ideig a lánc végére kerül.
-      if (result.kind === 'error') markCooldown(label, result.reason);
+      // KIVÉTEL: bemenet-specifikus elutasítás (lásd isInputRejection) — a cél
+      // egészséges, csak ezt a szöveget nem fogadta el, ezért NEM cooldownolunk.
+      if (result.kind === 'error' && isInputRejection(result)) {
+        log(`INPUT-REJECT ${label}: a cel ep, csak ezt a bemenetet utasitotta el -> kovetkezo cel (cooldown NELKUL)`);
+      } else if (result.kind === 'error') {
+        markCooldown(label, result.reason);
+      }
       // FREE QUOTA BLOCK: ha 429 ("quota exhausted") jött freeQuota céltól, tiltsuk ideiglenesen — igy nem valasztja ki újra a chooseTarget.
       if (result.status === 429 && label) {
         const meta = (CONFIG.pricing ?? {})[label];

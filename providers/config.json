@@ -198,13 +198,13 @@
       "maxTokens": 32768,
       "_alibaba_megjegyzes": "2026-10-14: az alibaba/qwen3.7-flash a fizetős TARTALÉK. Mért: valódi tool_calls ÉS kép egy kérésben (777 -> report_number). Az EU-s példány ~12 s volt; a SZINGAPÚRI ugyanerre 3,0 s, ezért a Szingapúr cél ELŐBB áll (ráadásul a gratis kvóta miatt induláskor ingyenes). Az ollama (35 s, hamis tool_calls) csak záró elem.",
       "targets": [
-        "groq/openai/gpt-oss-120b",
         "nvidia/nvidia/nemotron-3-super-120b-a12b",
         "nvidia/openai/gpt-oss-20b",
+        "groq/openai/gpt-oss-120b",
+        "openrouter/qwen/qwen3.8-27b:free",
         "ollama/qwen2.5:7b-instruct",
         "alibaba-intl/qwen3.7-flash",
-        "alibaba/qwen3.7-flash",
-        "openrouter/qwen/qwen3.8-27b:free"
+        "alibaba/qwen3.7-flash"
       ]
     },
     "deepseek-chat": {
@@ -258,6 +258,7 @@
         {
           "name": "csucs-kikerules",
           "peak": true,
+          "maxTokens": 256000,
           "targets": [
             "alibaba-intl/qwen3.8-flash",
             "alibaba/qwen3.7-flash",
@@ -267,7 +268,7 @@
         {
           "name": "eszkalacio-porgas",
           "minMessages": 40,
-          "minMaxRepeat": 3,
+          "minMaxRepeat": 6,
           "peak": false,
           "targets": [
             "deepseek/deepseek-v4-pro",
@@ -289,7 +290,7 @@
         }
       ],
       "_cache_figyelem": "MERES (analyze-model-choice.mjs, 30 nap): a main keresek 62,5%-a >256K token es 99,8%-ban CACHE-ELT. A DeepSeek cache-tarifa az input 2%-a, az Alibaba-e 10% — ezert a nagy, cache-elt lepesekre a DeepSeek ~3-5x olcsebb, hiaba olcsobb az Alibaba friss tokenen. MERES-FINOMITAS (2026-10-14): a korabbi `friss-nagy-kontextus` szabaly ELTAVOLITVA, mert a szelektor savos ara pontosabban dont (a 32-256K savban az EU Qwen olcsobb, 256K felett a DeepSeek), es a szabaly felulirta azt. A `kep` szabaly marad: képességet garantál es helyi tartalékot ad.",
-      "_eszkalacio_megjegyzes": "ESZKALACIO (2026-10-14): a flash dolgozik, de ha a beszelgetes hosszu (>=40 uzenet) ES ugyanaz a tool-hivas legalabb 3x ismetlodik, a kovetkezo lepest a pro modell kapja. Ez NEM delegalas (lefele), hanem FELFELÉ eszkalacio; a szakirodalom kaszkad-routingnak (cascade) hivja. Miert ezek a küszöbök: egy flash-lepes ~$0,001-0,002, a pro belepes a teljes kontextus atvitelekor ~$0,21 (a modellvaltas a cache-t is elviszi), tomor brief-fel ~$0,02; fedezeti pont 220, illetve 21 elrontott lepes (analyze-escalation.mjs). Ezert csak ERŐS jelre es HOSSZU beszelgetesre eszkalalunk. Kikapcsolas: a szabaly torlese. A jelzes a naploban: 'AUTO auto: eszkalacio-porgas (... msg=.., ismetles=..)'."
+      "_eszkalacio_megjegyzes": "ESZKALACIO (2026-10-14): a flash dolgozik, de ha a beszelgetes hosszu (>=40 uzenet) ES ugyanaz a tool-hivas legalabb 6x ismetlodik, a kovetkezo lepest a pro modell kapja. Ez NEM delegalas (lefele), hanem FELFELÉ eszkalacio; a szakirodalom kaszkad-routingnak (cascade) hivja. Miert ezek a küszöbök: egy flash-lepes ~$0,001-0,002, a pro belepes a teljes kontextus atvitelekor ~$0,21 (a modellvaltas a cache-t is elviszi), tomor brief-fel ~$0,02; fedezeti pont 220, illetve 21 elrontott lepes (analyze-escalation.mjs). Ezert csak ERŐS jelre es HOSSZU beszelgetesre eszkalalunk. Kikapcsolas: a szabaly torlese. A jelzes a naploban: 'AUTO auto: eszkalacio-porgas (... msg=.., ismetles=..)'."
     },
     "local-only": {
       "contextWindow": 131072,
