@@ -41,13 +41,14 @@ const COMPAT = [
   ["qwen3.6-flash", 1000000, 32768, true],
   ["qwen3.6-flash-2026-04-16", 1000000, 32768, true],
   ["qwen3.6-35b-a3b", 262144, 16384, true],
-  ["qwen3.5-plus", 1000000, 32768, true],
-  ["qwen3.5-plus-2026-02-15", 1000000, 32768, true],
+  // 2026-10-20: a qwen3.5-plus, a qwen3.5-plus-2026-02-15 es a
+  // qwen3.5-397b-a17b sorok KIKERULTEK — az Alibaba felmenta-listaja szerint
+  // EOM 2026-11-18, a kovetkezo 2027-01-19. Cserejuk a szolgaltato altala
+  // javasolt qwen3.8-flash (0.15/0.47 USD, azelotti 0.40/2.40 / 0.60/3.60).
   ["qwen3.5-flash", 1000000, 32768, true],
   ["qwen3.5-flash-2026-02-23", 1000000, 32768, true],
   ["qwen3.5-27b", 262144, 16384, true],
   ["qwen3.5-122b-a10b", 262144, 16384, true],
-  ["qwen3.5-397b-a17b", 262144, 16384, true],
   ["qwen3-vl-plus", 262144, 32768, true],
   ["qwen-vl-ocr", 262144, 8192, true],
   ["qwen3-coder-flash", 1000000, 32768, false],     // [M] szovegesen tagadja a kepet

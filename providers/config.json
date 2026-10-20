@@ -189,11 +189,11 @@
       "_alibaba_megjegyzes": "2026-10-14: az alibaba/qwen3.7-flash a fizetős TARTALÉK. Mért: valódi tool_calls ÉS kép egy kérésben (777 -> report_number). Az EU-s példány ~12 s volt; a SZINGAPÚRI ugyanerre 3,0 s, ezért a Szingapúr cél ELŐBB áll (ráadásul a gratis kvóta miatt induláskor ingyenes). Az ollama (35 s, hamis tool_calls) csak záró elem.",
       "targets": [
         "groq/openai/gpt-oss-120b",
-        "nvidia/openai/gpt-oss-20b",
         "nvidia/nvidia/nemotron-3-super-120b-a12b",
+        "nvidia/openai/gpt-oss-20b",
+        "ollama/qwen2.5:7b-instruct",
         "alibaba-intl/qwen3.7-flash",
         "alibaba/qwen3.7-flash",
-        "ollama/qwen2.5:7b-instruct",
         "openrouter/qwen/qwen3.8-27b:free"
       ]
     },
@@ -221,10 +221,10 @@
       "contextWindow": 1000000,
       "maxTokens": 32768,
       "targets": [
+        "ollama/qwen2.5:7b-instruct",
         "alibaba-intl/qwen3.8-flash",
         "alibaba/qwen3.7-flash",
-        "alibaba/qwen3.8-flash",
-        "ollama/qwen2.5:7b-instruct"
+        "alibaba/qwen3.8-flash"
       ]
     },
     "auto": {
