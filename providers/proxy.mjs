@@ -22,7 +22,7 @@
  */
 
 import http from 'node:http';
-import { readFileSync, writeFileSync, mkdirSync, watch as fsWatch } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync, watch as fsWatch } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -381,6 +381,118 @@ const FREE_QUOTA_BLOCK_TTL_MS = 60000;  // 1 perc blokkolás 429-es "quota exhau
 function rememberDecision(entry) {
   DECISIONS.push(entry);
   if (DECISIONS.length > 12) DECISIONS.shift();
+  // ── az "Auto" cimke szinkronizalasa a DSH modellvalasztohoz (2026-10-20) ──
+  const cfg = autoLabelConfig();
+  if (cfg !== null && entry?.route === cfg.route && typeof entry.label === 'string' && entry.label.length > 0) {
+    if (autoLabelTimer !== null) clearTimeout(autoLabelTimer);
+    const label = entry.label;
+    autoLabelTimer = setTimeout(() => {
+      autoLabelTimer = null;
+      writeAutoLabel(label);
+    }, cfg.debounceMs);
+    // A figyelo idozito ne tartsa életben a folyamatot leallaskor.
+    autoLabelTimer.unref?.();
+  }
+}
+
+// ── AZ "AUTO" MODELL CIMKEJE A DSH MODELLVALASZTOBAN ───────────────────────
+// Mi eldontendo: a megkereses szerint a model-listaban az "Auto" sor zarojele
+// eddig STATIKUS szoveget mutatott ("kep / csucs / hosszu kontextus szerint"),
+// es mindig az a TENYLEGES celpont alljon benne, amelyet a proxy eppen
+// szolgal ki (pl. "Auto (alibaba-intl/qwen3.8-flash)").
+//
+// Miert a settings.yamlba irunk: a DSH a model-pickerben a katalógus-bejegyzés
+// `name` mezojet lista fel, ami az `llm-pi-ai.providers.auto-router.models[].
+// name` ertékből jön — a display name ENNEK a fajlnak a tartalmaza. A harness
+// a settings.yaml valtozasat élore figyeli (`dsh-settings-file`: chokidar
+// watcher, "external edits hot-publish"), igy a beleiras a kovetkezo
+// katalogus-olvasasra mar latszik, ujrainditas nelkul.
+//
+// KORLAT, amit tudni kell: a picker bejegyzés EGY, GLOBALIS — nem sessiononkenti
+// kulon cime. Ezert a LEGUTOBBI `auto` dontes celjat irjuk ki. A proxy
+// session-ragadossaga (SESSION_ROUTES, 30 perc TTL) miatt ez a gyakorlatban
+// egyezik a kerulet modellel; ket kulonbozo session kulon celen futasa elofordulhat.
+//
+// Kikapcsolás: "autoLabel": { "enabled": false } a config.jsonban — a restart
+// is hot-reloadon keresztul él, mert a fajlt a proxy is figyeli.
+const autoLabelDefaults = {
+  provider: 'auto-router',   // a settings.yaml llm-pi-ai provider kulcsa
+  model: 'auto',             // a felulirando model bejegyzes `id`-ja
+  prefix: 'Auto',            // a zarojel elotti szoveg
+  route: 'auto',             // melyik proxy route dontesét figyeljuk
+  debounceMs: 1000,          // ennyi idovel halmozzuk az esetlegessebb valtast
+  dropProviderPrefix: false, // true = csak a modell-nev, provider-elolel nelkul
+};
+let autoLabelLast = null;
+let autoLabelTimer = null;
+
+/** Az `autoLabel` config blokk feloldasa; `null`, ha ki van kapcsolva. */
+function autoLabelConfig() {
+  const c = CONFIG.autoLabel;
+  if (c && c.enabled === false) return null;
+  const home = process.env.DSH_HOME ?? path.join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.dsh');
+  return {
+    file: c?.settingsFile || path.join(home, 'settings.yaml'),
+    provider: c?.provider || autoLabelDefaults.provider,
+    model: c?.model || autoLabelDefaults.model,
+    prefix: typeof c?.prefix === 'string' ? c.prefix : autoLabelDefaults.prefix,
+    route: c?.route || autoLabelDefaults.route,
+    debounceMs: Number.isFinite(c?.debounceMs) ? c.debounceMs : autoLabelDefaults.debounceMs,
+    dropProviderPrefix: c?.dropProviderPrefix === true,
+  };
+}
+
+/**
+ * Beirja a konkret cel-modellt a settings.yaml `auto` modelenek `name` mezobe.
+ *
+ * Szabalyok: csak valtozas eseten ir (a hot-reload ne forogjon uramen
+ * minden lepesnel); a provajder-blokkot szonként keresi, nem YAML-parzerel —
+ * a 380 soros fajlban egy sor cseréje kevesebb fals, mint a felujras; atomban
+ * (temp + rename) ir, hogy a harness figyeloje soha felbeszolt tartalmat ne
+ * laton; es SOHA nem dob — egy irasi hiba nem zavarhatja be a szolgalatot.
+ */
+function writeAutoLabel(rawLabel) {
+  const cfg = autoLabelConfig();
+  if (cfg === null) return;
+  // A cel `provider/model` alaku; az elso perjelen hasitunk, ugyanugy, mint a
+  // splitTarget() — a modell-id magaban is tartalmazhat perjelt.
+  let label = String(rawLabel ?? '');
+  if (cfg.dropProviderPrefix && label.includes('/')) label = label.slice(label.indexOf('/') + 1);
+  if (label.length === 0) return;
+  const want = `${cfg.prefix} (${label})`;
+  if (want === autoLabelLast) return;
+  try {
+    const raw = readFileSync(cfg.file, 'utf8');
+    const eol = raw.includes('\r\n') ? '\r\n' : '\n';
+    const lines = raw.split(/\r?\n/);
+    const start = lines.findIndex((l) => l === `    ${cfg.provider}:`);
+    if (start === -1) { log(`AUTO cimke: a '${cfg.provider}' provider blokk nem talalhato: ${cfg.file}`); return; }
+    let end = start + 1;
+    while (end < lines.length && !/^[^\s]/.test(lines[end])) end++;
+    const idIdx = lines.findIndex((l, i) => i > start && i < end && l.trim() === `- id: ${cfg.model}`);
+    if (idIdx === -1) { log(`AUTO cimke: a '${cfg.model}' modell nem talalhato a '${cfg.provider}' blokkban`); return; }
+    // A `name:` a model sor utan jon, de meg elofordulhat mas mezо is; a
+    // kovetkezo `- id:` sor elott keressuk meg az elso `name:`-et.
+    let nameIdx = -1;
+    for (let i = idIdx + 1; i < end; i++) {
+      if (/^\s*- id:/.test(lines[i])) break;
+      if (/^\s*name:/.test(lines[i])) { nameIdx = i; break; }
+    }
+    if (nameIdx === -1) { log(`AUTO cimke: a '${cfg.model}' modellnek nincs 'name:' sora`); return; }
+    const indent = /^\s*/.exec(lines[nameIdx])[0];
+    // Idézőjel: a cel-nev tartalmazhat kettépontot (ollama/qwen2.5:7b-instruct),
+    // ami vezérlőjel lenne a digyteknélküli (plain) skalárban.
+    const wantLine = `${indent}name: ${JSON.stringify(want)}`;
+    if (lines[nameIdx] === wantLine) { autoLabelLast = want; return; }
+    lines[nameIdx] = wantLine;
+    const tmp = `${cfg.file}.autolabel.tmp`;
+    writeFileSync(tmp, lines.join(eol), 'utf8');
+    renameSync(tmp, cfg.file);
+    autoLabelLast = want;
+    log(`AUTO cimke irva a settings.yaml-ba: "${want}"`);
+  } catch (e) {
+    log(`AUTO cimke nem irhato meg (${cfg.file}): ${e?.message ?? e}`);
+  }
 }
 
 /** A beszelgetes azonositoja: rendszer-uzenet + az ELSO felhasznaloi uzenet. */

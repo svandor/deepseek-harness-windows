@@ -3763,6 +3763,36 @@ function apply(ctx) {
     handler: (req, res) => handleGithubAction(req, res)
   }), "ui-extras: github action route");
 
+  // ── Auto-route aktuális célja a model-pickertől (2026-10-20) ───────────────
+  // Miért kell ez a host végpont? A böngészőből közvetlenül nem éri el a proxy
+  // /healthz-ét CORS-ok miatt; ezt a szerver oldalon átjárózzuk.
+  const HEALTHZ_URL = process.env.PROXY_HEALTH_URL ?? 'http://127.0.0.1:4123/healthz';
+  let lastAutoTarget = null;
+  function fetchAutoTarget() {
+    try {
+      return fetch(HEALTHZ_URL, { signal: AbortSignal.timeout(3000) })
+        .then(r => r.json())
+        .catch(() => null);
+    } catch { return Promise.resolve(null); }
+  }
+  ctx.effect(() => ctx.webServer.register({
+    kind: "exact",
+    path: "/ui-extras/auto-target",
+    handler: (_req, res) => {
+      fetchAutoTarget().then(data => {
+        if (data?.intelligent?.decisions) {
+          const auto = data.intelligent.decisions.find(d => d.route === 'auto');
+          if (auto && auto.label) {
+            lastAutoTarget = { label: auto.label, at: auto.at || Date.now() };
+          }
+        }
+        sendJson(res, { ok: true, target: lastAutoTarget });
+      }).catch(err => {
+        sendJson(res, { ok: false, error: err?.message ?? String(err), target: lastAutoTarget });
+      });
+    }
+  }), "ui-extras: auto-target route");
+
   ctx.effect(() => ctx.webServer.register({
     kind: "prefix",
     path: "/ui-extras/assets",

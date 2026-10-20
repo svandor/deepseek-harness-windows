@@ -2180,6 +2180,83 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Auto-modell Elő cél-overlay (2026-10-20, Útvonal B).
+     *
+     * A DSH modellválasztó boot-pillanatképből dolgozik, ezért a statikus
+     * név nem frissül automatikusan. Ez a modul a proxy `/healthz` végpontjának
+     * `intelligent.decisions` szekciójából lekérdezett konkrét modellt felülírja
+     * a picker triggerében — tiszta DOM overlay, nincs React függés.
+     *
+     * Polling: 5 s. MutationObserverrel védi a React újrarajzolását.
+     */
+    function startAutoTargetOverlay() {
+      try {
+        var desired = null;
+        var observer = null;
+
+        /** Patch one model-pickerről a span textContent-et az elso Auto-val. */
+        function patchLabel() {
+          if (!desired || typeof document === 'undefined') return;
+          var buttons = document.querySelectorAll('button[aria-haspopup="menu"][title]');
+          for (var i = 0; i < buttons.length; i++) {
+            var btn = buttons[i];
+            var title = btn.getAttribute('title') || '';
+            if (title.indexOf('Auto') !== 0) continue;
+            var span = btn.querySelector('span:not([class*="Icon"]):not([class*="icon"]):not([class*="iconData"])');
+            if (!span) {
+              // fallback: elsо span belso elem
+              for (var j = 0; j < btn.children.length; j++) {
+                if (btn.children[j].nodeName === 'SPAN' && !btn.children[j].getAttribute('style')) {
+                  span = btn.children[j]; break;
+                }
+              }
+            }
+            if (span !== null) {
+              var newText = 'Auto (' + desired + ')';
+              if (span.textContent !== newText) {
+                span.textContent = newText;
+                btn.setAttribute('title', newText);
+              }
+            }
+            break;
+          }
+        }
+
+        /** Fetch auto target from host API endpoint. */
+        function pollAutoTarget() {
+          try {
+            fetch('/ui-extras/auto-target', { method: 'GET', credentials: 'same-origin' })
+              .then(function (r) { return r.json(); })
+              .then(function (data) {
+                if (data?.ok && data?.target?.label) {
+                  if (data.target.label !== desired) {
+                    desired = String(data.target.label);
+                    patchLabel();
+                  }
+                }
+              })
+              .catch(function () { /* proxy down; tolerált */ });
+          } catch (_e) { /* non-browser context; tolerált */ }
+        }
+
+        // Inditás (+ 1x per 5s)
+        pollAutoTarget();
+        setInterval(pollAutoTarget, 5000);
+
+        // MutationObserver: React újrarendezés esetén újra patchel
+        observer = new MutationObserver(patchLabel);
+        observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true });
+
+        // Cleanup: page unload vagy plugin unmount esetén
+        window.addEventListener('beforeunload', function () {
+          if (observer) observer.disconnect();
+        });
+      } catch (_err) {
+        reportToHost("auto-live", "startAutoTargetOverlay init failed :: " + String(_err && _err.stack ? _err.stack : _err));
+      }
+    }
+
+    /**
      * One label/value pair, styled like the built-in composer stats pills.
      *
      * A `strong` érték színe a TÉMA változója, nem fix fehér: az egyenleg az
@@ -7762,6 +7839,9 @@ window.__ModuleLoader__.load({
         style.textContent = "[data-composer-stats]{display:none !important}";
         document.head.appendChild(style);
       });
+
+      // Auto-modell Elő címkéje (a DSH model-pickert frissíti a proxy allapon).
+      safeRun("auto live target overlay", startAutoTargetOverlay);
     }
     var inject = ["slots", "locale", "theme", "sessions", "workspaces", "settingsScope", "sidebarRightTabs", "sidebarRight"];
 
