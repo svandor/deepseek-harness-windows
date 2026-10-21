@@ -1,0 +1,26 @@
+{
+  "name": "dsh-auto-status",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Auto route állapotsáv a composer felett: a helyi proxy /healthz-ből mutatja, melyik modell szolgálja ki éppen az 'Auto' modellt.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.2"
+  },
+  "license": "MIT"
+}

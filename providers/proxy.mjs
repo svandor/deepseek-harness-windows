@@ -49,6 +49,20 @@ function loadConfig() {
 }
 const PORT = Number(arg('port', process.env.PROXY_PORT ?? CONFIG.port ?? 4123));
 const HOST = arg('host', CONFIG.host ?? '127.0.0.1');
+// A /healthz CORS-engedelyezett eredetei: a Web GUI bongeszobol kerdezheti le,
+// hogy a sajat sessionje eppen melyik celon fut. Alapertelmezes: a szokasos
+// helyi GUI-originok; `["*"]` mindenkit enged (csak localhost-kotodes mellett
+// ertelmes, mert a /healthz nem tartalmaz kulcsot). A config hot-reload miatt
+// minden keresnel ujra olvassuk.
+const CORS_ORIGINS_DEFAULT = ['http://127.0.0.1:3080', 'http://localhost:3080'];
+function corsOrigins() {
+  const list = CONFIG.corsOrigins;
+  return Array.isArray(list) && list.length > 0 ? list.map(String) : CORS_ORIGINS_DEFAULT;
+}
+const corsOriginAllowed = (origin) => {
+  const allowed = corsOrigins();
+  return allowed.includes('*') || allowed.includes(origin);
+};
 const LOG_PREFIX = '[fallback-proxy]';
 
 // ── segédek ────────────────────────────────────────────────────────────────
@@ -368,6 +382,28 @@ function ruleMatches(rule, sig, now) {
 const SESSION_ROUTES = new Map();      // sessionKey -> { label, at, switches, steps, reason }
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const SESSION_MAX = 800;
+/**
+ * JELENTESI terkep a /healthz-hez: session-kulcs -> utolso cel, fuggetlenul a
+ * ragadossagtol (a szabaly-uton valasztott cel is bekerul). A session-kulcs mellett
+ * az elso-felhasznaloi-uzenet hash-t is tarolja, hogy a felulet parositani tudja
+ * a sajat beszelgetesevel.
+ */
+const SESSION_REPORT = new Map();
+const SESSION_REPORT_MAX = 200;
+function noteSessionTarget(key, firstUser, label, reason) {
+  if (typeof key !== 'string' || key.length === 0 || typeof label !== 'string' || label.length === 0) return;
+  SESSION_REPORT.set(key, {
+    firstUser: firstUser ?? null,
+    label,
+    reason: reason ?? null,
+    at: new Date().toISOString(),
+  });
+  while (SESSION_REPORT.size > SESSION_REPORT_MAX) {
+    const oldest = SESSION_REPORT.keys().next().value;
+    if (oldest === undefined) break;
+    SESSION_REPORT.delete(oldest);
+  }
+}
 const DECISIONS = [];                  // utolso par dontes a /healthz-hez
 // A keret-fogyas becslese — PERZISZTALVA (2026-10-15). Korabban minden
 // proxy-ujrainditas nullazta, ezert a szelektor ujra meg ujra "ingyenesnek"
@@ -406,6 +442,16 @@ function rememberDecision(entry) {
     }, cfg.debounceMs);
     // A figyelo idozito ne tartsa életben a folyamatot leallaskor.
     autoLabelTimer.unref?.();
+    // Tétlenség-figyelő: ennyi ido utan a cimke sima "Auto"-ra all vissza,
+    // hogy egy uj beszelgetes valasztójában ne egy korabbi celpont latszodjon.
+    if (cfg.idleResetMinutes > 0) {
+      if (autoLabelIdleTimer !== null) clearTimeout(autoLabelIdleTimer);
+      autoLabelIdleTimer = setTimeout(() => {
+        autoLabelIdleTimer = null;
+        resetAutoLabel('tétlenség');
+      }, cfg.idleResetMinutes * 60000);
+      autoLabelIdleTimer.unref?.();
+    }
   }
 }
 
@@ -436,9 +482,12 @@ const autoLabelDefaults = {
   route: 'auto',             // melyik proxy route dontesét figyeljuk
   debounceMs: 1000,          // ennyi idovel halmozzuk az esetlegessebb valtast
   dropProviderPrefix: false, // true = csak a modell-nev, provider-elolel nelkul
+  resetOnStart: true,        // indulaskor a cimke sima "Auto" (nincs elavult cel)
+  idleResetMinutes: 10,      // ennyi tétlenség után sima "Auto" (0 = kikapcsolva)
 };
 let autoLabelLast = null;
 let autoLabelTimer = null;
+let autoLabelIdleTimer = null;
 
 /** Az `autoLabel` config blokk feloldasa; `null`, ha ki van kapcsolva. */
 function autoLabelConfig() {
@@ -453,6 +502,8 @@ function autoLabelConfig() {
     route: c?.route || autoLabelDefaults.route,
     debounceMs: Number.isFinite(c?.debounceMs) ? c.debounceMs : autoLabelDefaults.debounceMs,
     dropProviderPrefix: c?.dropProviderPrefix === true,
+    resetOnStart: c?.resetOnStart !== false,
+    idleResetMinutes: Number.isFinite(c?.idleResetMinutes) ? c.idleResetMinutes : autoLabelDefaults.idleResetMinutes,
   };
 }
 
@@ -472,8 +523,9 @@ function writeAutoLabel(rawLabel) {
   // splitTarget() — a modell-id magaban is tartalmazhat perjelt.
   let label = String(rawLabel ?? '');
   if (cfg.dropProviderPrefix && label.includes('/')) label = label.slice(label.indexOf('/') + 1);
-  if (label.length === 0) return;
-  const want = `${cfg.prefix} (${label})`;
+  // Ures cimke = sima "Auto": nincs (meg) ervenyes cel — indulaskor vagy
+  // tetlenseg utan ide all vissza, hogy ne mutasson elavult celpontot.
+  const want = label.length === 0 ? cfg.prefix : `${cfg.prefix} (${label})`;
   if (want === autoLabelLast) return;
   try {
     const raw = readFileSync(cfg.file, 'utf8');
@@ -509,6 +561,22 @@ function writeAutoLabel(rawLabel) {
   }
 }
 
+/**
+ * A cimke visszaallitasa sima "Auto"-ra — indulaskor es tetlenseg utan.
+ * Igy a modellvalaszto nem mutat egy korabbi beszelgetes celpontjat, amikor
+ * meg nincs dontes; az elso keres utan ujra a tenyleges cel latszik.
+ */
+function resetAutoLabel(reason) {
+  const cfg = autoLabelConfig();
+  if (cfg === null) return;
+  if (autoLabelIdleTimer !== null) {
+    clearTimeout(autoLabelIdleTimer);
+    autoLabelIdleTimer = null;
+  }
+  writeAutoLabel('');
+  log(`AUTO cimke: sima "${cfg.prefix}" (${reason})`);
+}
+
 /** A beszelgetes azonositoja: rendszer-uzenet + az ELSO felhasznaloi uzenet. */
 function sessionKeyOf(messages) {
   let basis = '';
@@ -519,6 +587,27 @@ function sessionKeyOf(messages) {
       basis += c.slice(0, 1200);
       break;
     }
+  }
+  if (basis.length === 0) return null;
+  let h = 2166136261;
+  for (let i = 0; i < basis.length; i++) { h ^= basis.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(16);
+}
+
+/**
+ * Session-azonosito CSAK az elso felhasznaloi uzenetbol (2026-10-21).
+ * A DSH nem kuld session-fejlecet a proxy fele, a ragadossag kulcsa pedig a
+ * system promptot is tartalmazza — azt viszont a kliens nem tudja ujraszamolni.
+ * Ez a kulcs csak JELENTESRE valo (/healthz), igy a felulet ugyanazt a hasht
+ * tudja képezni a beszelgetes elso uzenetebol, es parositani a dontesekhez.
+ */
+function firstUserKeyOf(messages) {
+  let basis = '';
+  for (const m of messages) {
+    if (m?.role !== 'user') continue;
+    const c = typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '');
+    basis = c.slice(0, 1200);
+    break;
   }
   if (basis.length === 0) return null;
   let h = 2166136261;
@@ -667,24 +756,30 @@ function effectiveRoute(routeName, requestBody) {
   // nelkuli alapot mutatja).
   const sig = base && !Array.isArray(base) && requestBody ? requestSignals(requestBody) : null;
   const now = new Date();
+  // A jelenteshez (es a /healthz parositashoz) szukseges kulcsok — a
+  // ragadossagi kulcstol fuggetlenul, minden dontes-uton rogzitjuk.
+  const msgs = requestBody && Array.isArray(requestBody.messages) ? requestBody.messages : [];
   if (sig !== null && Array.isArray(base.rules)) {
     for (const r of base.rules) {
       if (!ruleMatches(r, sig, now)) continue;
       if (Array.isArray(r.targets) && r.targets.length > 0) {
         log(`AUTO ${routeName}: ${r.name ?? 'szabaly'} (kep=${sig.hasImage}, tok~${sig.estTokens}, tool=${sig.toolCount}, msg=${sig.messages ?? 0}, ismetles=${sig.repeatedCalls ?? 0} max=${sig.maxRepeat ?? 0}) -> ${r.targets.join(' -> ')}`);
-        rememberDecision({ at: now.toISOString(), route: routeName, label: r.targets[0], reason: `szabaly: ${r.name ?? '?'}`, sticky: false });
+        const reason = `szabaly: ${r.name ?? '?'}`;
+        rememberDecision({ at: now.toISOString(), route: routeName, label: r.targets[0], reason, sticky: false });
+        noteSessionTarget(sessionKeyOf(msgs), firstUserKeyOf(msgs), r.targets[0], reason);
         return r.targets;
       }
     }
   }
   // ── intelligens, koltseg-alapu valasztas (2026-10-14) ───────────────────
   if (sig !== null) {
-    const messages = Array.isArray(requestBody.messages) ? requestBody.messages : [];
+    const messages = msgs;
     if (messages.length > 0) {
       const pick = chooseTarget(routeName, base, sig, messages, now);
       if (pick !== null) {
         log(`AUTO ${routeName}: ${pick.sticky ? 'RAGADOS' : 'VALASZTAS'} — ${pick.reason} (kep=${sig.hasImage}, tok~${sig.estTokens}, msg=${messages.length}) -> ${pick.targets.slice(0, 3).join(' -> ')}${pick.targets.length > 3 ? ' -> ...' : ''}`);
         rememberDecision({ at: now.toISOString(), route: routeName, session: pick.key ?? null, label: pick.targets[0], cost: pick.cost ?? null, sticky: pick.sticky, reason: pick.reason });
+        noteSessionTarget(pick.key, firstUserKeyOf(messages), pick.targets[0], pick.reason);
         return pick.targets;
       }
     }
@@ -1204,7 +1299,7 @@ async function handleModels(res) {
   sendJson(res, 200, { object: 'list', data });
 }
 
-function handleHealth(res) {
+function handleHealth(res, sessionFilter) {
   const routes = {};
   for (const name of routeNames()) {
     routes[name] = routeChain(name).map((t) => `${t.provider.id}/${t.model}`);
@@ -1240,13 +1335,24 @@ function handleHealth(res) {
     // utolso par dontes indoka. Ez teszi a mukodest megfigyelhetove.
     cooldowns: coolingTargets(),
     intelligent: {
-      sessions: [...SESSION_ROUTES.entries()].map(([key, v]) => ({
-        session: key,
-        label: v.label,
-        steps: v.steps ?? 0,
-        switches: v.switches ?? 0,
-        idleSec: Math.round((Date.now() - v.at) / 1000),
-      })),
+      // Sessiononkenti utolso cel — a ragadossagi terkepbol (steps/switches) es a
+      // jelentesi terkepbol (szabaly-ut is). A `firstUser` hash a beszelgetes
+      // elso felhasznaloi uzenetebol kepzett kulcs: ezzel tudja egy felulet a
+      // sajat sessionjehez parositani a dontest (a DSH nem kuld session-fejlecet).
+      sessions: [...SESSION_REPORT.entries()]
+        .filter(([key, v]) => !sessionFilter || v.firstUser === sessionFilter || key === sessionFilter)
+        .map(([key, v]) => {
+          const sticky = SESSION_ROUTES.get(key);
+          return {
+            session: key,
+            firstUser: v.firstUser,
+            label: v.label,
+            reason: v.reason,
+            steps: sticky?.steps ?? 0,
+            switches: sticky?.switches ?? 0,
+            idleSec: Math.max(0, Math.round((Date.now() - Date.parse(v.at)) / 1000)),
+          };
+        }),
       quotaUsed: Object.fromEntries(QUOTA_USED),
       freeQuotaBlocked: Object.fromEntries(FREE_QUOTA_BLOCKED),
       decisions: DECISIONS,
@@ -1294,7 +1400,15 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
   if (req.method === 'GET' && (url.pathname === '/healthz' || url.pathname === '/')) {
-    handleHealth(res);
+    // A Web GUI (127.0.0.1:3080) bongeszobol is lekerdezheti; CORS csak itt,
+    // csak a beallitott eredtekre. Optionalis ?session=<firstUser> szuro.
+    const origin = req.headers.origin;
+    if (typeof origin === 'string' && corsOriginAllowed(origin)) {
+      res.setHeader('access-control-allow-origin', origin);
+      res.setHeader('vary', 'origin');
+    }
+    res.setHeader('cache-control', 'no-store');
+    handleHealth(res, url.searchParams.get('session'));
     return;
   }
 
@@ -1353,6 +1467,10 @@ server.listen(PORT, HOST, () => {
   } else {
     log(`  napi felulbiralat: nincs a mai napra (${ov.date})`);
   }
+  // Indulaskor a cimke sima "Auto": a korabbi folyamat altal (esetleg egy
+  // eszkalalas utan) otthagyott celpont nem maradhat bent a valasztoban.
+  const labelCfg = autoLabelConfig();
+  if (labelCfg !== null && labelCfg.resetOnStart) resetAutoLabel('indulás');
 });
 
 server.on('error', (err) => {
