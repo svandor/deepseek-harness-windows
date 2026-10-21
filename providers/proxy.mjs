@@ -126,6 +126,20 @@ function resolveProviders() {
       // Helyi szerver (Ollama) placeholder kulccsal is megy.
       optionalKey: def.optionalKey === true,
       models: def.models ?? [],
+      // 2026-10-21: ezeket a config.json-beli provider-mezőket KORÁBBAN
+      // eldobta ez a whitelist, ezért a bennük deklarált beállítások NÉMÁN
+      // hatástalanok voltak (az `attempt()` a globális alapértékre esett vissza):
+      //   - connectTimeoutMs: az alababa 30 s fejléc-timeout helyett 120 s,
+      //     így egy néma Alibaba-cél 2 percig fogta a láncot,
+      //   - stallTimeoutMs: stream-csend figyelő,
+      //   - reasoning: thinking-korlát (enable_thinking / thinking_budget),
+      //   - headers: OpenRouter HTTP-Referer / X-Title,
+      //   - keepAlive: az Ollama keep_alive.
+      connectTimeoutMs: def.connectTimeoutMs,
+      stallTimeoutMs: def.stallTimeoutMs,
+      reasoning: def.reasoning,
+      headers: def.headers,
+      keepAlive: def.keepAlive,
     };
   }
   return providers;
@@ -841,6 +855,40 @@ async function attempt(target, bodyObj, { stream }) {
   // A gpt-oss:20b (12,85 GB) ezzel szemben gyakorlatilag kitöltené a 16 GB-ot.
   if (provider.id === 'ollama' && payload.keep_alive === undefined) {
     payload.keep_alive = provider.keepAlive ?? CONFIG.ollamaKeepAlive ?? '2m';
+  }
+  // THINKING-KORLÁT (2026-10-21): a qwen3.8-flash a chat/completions úton
+  // alapból gondolkodik, korlát nélkül — MÉRVE ugyanazon a kérésen 4 488, ill.
+  // 15 052 reasoning token (37 s, ill. 142 s), thinking_budget=512-tel 8 s,
+  // ill. 13-17 s. A korlátot a provider adja (config.json providers.*.reasoning),
+  // és CSAK akkor injektáljuk, ha a kliens nem küldött saját thinking paramétert
+  // (enable_thinking / thinking_budget / reasoning_effort), hogy a DSH
+  // reasoningEffort-kezelése ne ütközzön vele.
+  if (provider.reasoning && typeof provider.reasoning === 'object') {
+    const clientSetThinking =
+      payload.enable_thinking !== undefined ||
+      payload.thinking_budget !== undefined ||
+      payload.reasoning_effort !== undefined;
+    if (!clientSetThinking) {
+      // MÉRT HIBA (2026-10-21): ha a kliens kicsi kimeneti keretet kér (pl. a
+      // DSH session-cím generálása 64 tokent), a fix 512-es thinking_budget
+      // ÉRVÉNYTELEN: "max_completion_tokens [64] must be greater than
+      // thinking_budget [512]" -> HTTP 400 -> cooldown, és a lánc a lassú
+      // tartalékra esik. Ezért a korlátot a kimeneti kerethez igazítjuk.
+      const wanted = Number(provider.reasoning.thinking_budget);
+      const maxOut = Number(payload.max_tokens ?? payload.max_completion_tokens);
+      if (Number.isFinite(wanted)) {
+        const budget =
+          Number.isFinite(maxOut) && maxOut > 0 && maxOut <= wanted
+            ? Math.max(1, Math.floor(maxOut / 2))
+            : wanted;
+        payload.thinking_budget = budget;
+        for (const [k, v] of Object.entries(provider.reasoning)) {
+          if (k !== 'thinking_budget') payload[k] = v;
+        }
+      } else {
+        Object.assign(payload, provider.reasoning);
+      }
+    }
   }
   const headers = { 'content-type': 'application/json', accept: stream ? 'text/event-stream' : 'application/json' };
   if (provider.apiKey) headers.authorization = `Bearer ${provider.apiKey}`;

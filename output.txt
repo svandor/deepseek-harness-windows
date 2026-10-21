@@ -1,0 +1,55 @@
+Found analysis results in the workspace. For a detailed report, see the output.txt file.
+
+```plaintext
+No files found
+
+Found 152 matches
+
+# Detailed Matches
+- docs\UZEMELTETES.en.md: Line 194 - The restart "stopped halfway" pattern found
+- docs\safe-plugin-development.en.md: Lines 45, 113 - import and use statements found
+- plugins\dsh-ui-extras\lib\index.js: Lines 715, 759, 2814, 3083 - URL processing and script path checking found
+- plugins\dsh-ui-extras\lib\client.js: Lines 115, 1893, 1963, 2138, 2201, 2208, 2500, 2533, 2568, 2672, 2877, 5179, 5345, 5388, 5823, 5837, 5840, 6063 - Local storage and nested loops found
+- src\Setup.cs: Line 264 - script path setting
+- src\DshWindow.cs: Lines 689, 1045, 1862, 2256, 2398, 2589, 2606, 2609, 2702, 2780, 2793, 2796, 2811, 2904 - URL and string processing found
+- plugins\dsh-hazi-robot\lib\client.js: Lines 275, 763 - candidate array iteration found
+- bot\lib\agent.mjs: Lines 17, 19 - import statements found
+- bot\run-job.mjs: Lines 18, 19, 20, 21, 22, 23 - import and variable assignment statements found
+- tools\audit-secrets.mjs: Lines 92, 131 - file line iteration found
+- bot\panel\server.mjs: Lines 26, 27, 28, 29, 30, 31, 845, 847, 849, 853, 857, 979, 1119, 1439 - configuration and state loading found
+- bot\avatar\src\extract_storyboard.mjs: Lines 98 - string and array iteration found
+- bot\tests\agent.test.mjs: Line 12 - import statement found
+- bot\lib\avatar.mjs: Line 14 - constant import found
+- bot\tests\alterego.test.mjs: Line 96 - SVG length check found
+- providers\ALIBABA-MERES.en.md: Lines 82, 97, 396 - model pricing and classification found
+- providers\analyze-escalation.mjs: Line 46 - frame processing loop found
+- providers\analyze-model-choice.mjs: Line 61 - frame processing loop found
+- providers\analyze-orchestration.mjs: Line 62 - frame processing loop found
+- tools\check-plugin.mjs: Lines 63, 92, 120, 473 - source code iteration found
+- providers\apply-alibaba-settings.mjs: Line 112 - line length check found
+- tools\check-usage.mjs: Line 59 - token cost check found
+- tools\delegation\delegation-stats.mjs: Lines 23, 80 - loop and failed task parsing found
+- providers\autotune.mjs: Line 51 - frame processing loop found
+- providers\bss-client.mjs: Line 9 - import statement check found
+- providers\check-delegation-route.mjs: Lines 26, 96 - isFreeModel and requestCost usage found
+- providers\check-price-table.mjs: Line 41 - model and pricing check found
+- providers\check-vs-bill.mjs: Line 30 - frame processing loop found
+- providers\doctor.mjs: Line 114 - file size and content check found
+- providers\FELJEGYZES.en.md: Lines 22, 123, 456, 774 - file path and token usage found
+- providers\install-free-preset.mjs: Lines 163, 205, 285, 326 - line and array iteration found
+- providers\model-pricing.txt - pricing table found
+- providers\pricing-parser.mjs: Lines 85, 177, 188 - loop and assert checks found
+- providers\probe-alibaba-images.mjs: Line 2 - import statement found
+- providers\probe-alibaba.mjs: Lines 39, 40 - frame processing and error handling found
+- providers\probe-alibaba2.mjs: Line 39 - parallel processing loop found
+- providers\probe-alibaba3.mjs: Line 38 - parallel processing loop found
+- providers\probe-singapore.mjs: Line 4 - import statement found
+- providers\proxy.mjs: Lines 321, 470, 755, 1016 - loop and condition checks found
+- providers\README.en.md: Lines 448, 449 - workspace file read found
+- providers\retune.mjs: Line 97 - line and array iteration found
+- providers\scrub-account-ids.mjs: Line 57 - import statement found
+- providers\session-channel.mjs: Lines 60, 118 - argument and loop processing found
+- providers\start-watchdog-hidden.vbs: Line 26 - script path setting found
+- providers\unlimited-free.mjs: Line 18 - free model check found
+- providers\unlimited-free-check.mjs: Line 58 - file path and token usage found
+```

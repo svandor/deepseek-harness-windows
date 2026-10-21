@@ -60,7 +60,14 @@ $proxyArgs = @($proxy, '--port', "$Port")
 if ($Config) { $proxyArgs += @('--config', $Config) }
 
 if ($Background) {
-    $proc = Start-Process -FilePath $node -ArgumentList $proxyArgs -WorkingDirectory $root `
+    # IDÉZŐJELEK (javítva 2026-10-21): a Start-Process az -ArgumentList tömb
+    # elemeit szóközzel fűzi össze, de NEM tesz köréjük idézőjelet — a
+    # "C:\Szerver\Deepseek Harness\..." útvonal így szétesett, és a node a
+    # "C:\Szerver\Deepseek" fájlt próbálta futtatni (SyntaxError, a proxy
+    # el sem indult). Ezért itt külön, idézőjeles argumentumlista kell.
+    $quotedArgs = @("`"$proxy`"", '--port', "$Port")
+    if ($Config) { $quotedArgs += @('--config', "`"$Config`"") }
+    $proc = Start-Process -FilePath $node -ArgumentList $quotedArgs -WorkingDirectory $root `
         -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru -WindowStyle Hidden
     Start-Sleep -Milliseconds 900
     if ($proc.HasExited) {
