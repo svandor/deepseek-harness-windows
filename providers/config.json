@@ -23,7 +23,11 @@
   "maxRequestBytes": 33554432,
   "_vram_megjegyzes": "A helyi (ollama) celok keep_alive-ja 2 perc. MERVE 2026-10-07: qwen2.5:7b-instruct 6,14 GB VRAM a hivas alatt, a lejarat utan a foglalas visszaesik (9577 -> 3086 MiB a 16 GB-os RTX 5080 Laptopon). A gpt-oss:20b (12,85 GB) nem fer el biztonsagosan mas folyamatok mellett, ezert nem alapertelmezett cel; kezzel a local-only route-on erheto el.",
   "ollamaKeepAlive": "2m",
-  "targetCooldownMs": 90000,
+  "targetCooldownMs": 600000,
+  "_targetContext_megjegyzes": "MERT VALOS kontextus-ablak celonkent (2026-10-22). A route `contextWindow` erteke a DSH fele csak HIRDETES; a cel tenyleges ablaka ettol elterhet. MERVE HIBA: a `worker` route 131072-t hirdetett, de a helyi ollama qwen2.5:7b-instruct 32768-cal futott (`ollama ps` -> CONTEXT 32768); egy 35k tokenes kereset az Ollama NEMAN csonkolt (az elejet eldobta, ahol az utasitas volt), a valasz megis ep JSON volt -> a proxy HIT-nek latta, a delegalas csendben elromlott. A proxy a routeChain-ben kiszuri azt a celt, amelynek itt mert ablaka kisebb a keresnel. Csak azt a celt erdemes ide felvenni, amit tenylegesen megmertunk.",
+  "targetContext": {
+    "ollama/qwen2.5:7b-instruct": 32768
+  },
   "_cooldown_megjegyzes": "MERVE 2026-10-14: az Alibaba EU-workspace szorvanyosan FEJLECET SEM KULD (3-bol 1 eset streamen is), es a nem-stream nagy keresek a hosszu reasoning miatt 30 s folott jarhatnak. Ezert a hibazott cel a lanc VEGERE kerul targetCooldownMs ideig (nem esik ki), es a provider-szintu connectTimeoutMs (alababa 30 s) hamarabb adja at a helyet a kovetkezo celnek. A cooldown a /healthz cooldowns mezojeben latszik.",
   "_timeWindows_megjegyzes": "UTC-óra szerinti lánccsere (2026-10-14). Forma: \"timeWindows\": [{ \"utc\": [14, 24], \"days\": [1,2,3,4,5], \"targets\": [\"alibaba/qwen3.7-plus\"] }] a route OBJEKTUMÁBAN. Az első illeszkedő ablak felülírja a targets-et; az utc átfordulhat éjfélen ([22,4]); days 0=vasárnap. Jelenleg egy route sem használja: a proxy láncai ingyenes célokra épülnek (a fizetős Alibaba csak tartalék), a main route pedig nem megy át a proxy-n. Előkészített példa, ha egy drága DeepSeek-célt is felvesztek: \"timeWindows\": [{ \"utc\": [1,4], \"targets\": [\"alibaba/qwen3.8-flash\"] }, { \"utc\": [6,10], \"targets\": [\"alibaba/qwen3.8-flash\"] }] — a DeepSeek csúcsablakaiban (01-04, 06-10 UTC) így automatikusan Alibabára vált.",
   "_freeQuota_megjegyzes": "INGYENES KERET MODELLENKENT, CSAK SZINGAPURBAN (gyari dokumentacio: 'The following models offer a free quota only in Singapore'). 1 000 000 token/modell, 90 nap. Ezert van minden szingapuri ar-soron freeQuotaTokens; a proxy a SAJAT forgalmabol becsli a fogyast (providers/reports/quota-used.json, 2026-10-15 ota perzisztalva), de a MERCE a szolgaltatoe. 2026-10 ciklus: a qwen3.8-flash kerete a gyari email szerint ELFOGYOTT -> freeQuotaTokens 0 (fizetos). Ha tovabbi kimerulesi ertesites jon, itt kell 0-ra allitani; az autotune 'SZAMLA-EGYEZTETES' szakasza mutatja a valos hatast.",
@@ -244,9 +248,9 @@
         "groq/openai/gpt-oss-120b",
         "openrouter/qwen/qwen3.8-27b",
         "openrouter/inclusionai/ling-3.0-flash",
-        "ollama/qwen2.5:7b-instruct",
         "alibaba-intl/qwen3.7-flash",
-        "alibaba/qwen3.7-flash"
+        "alibaba/qwen3.7-flash",
+        "ollama/qwen2.5:7b-instruct"
       ]
     },
     "free-quota": {
@@ -285,10 +289,10 @@
       "contextWindow": 1000000,
       "maxTokens": 32768,
       "targets": [
-        "ollama/qwen2.5:7b-instruct",
         "alibaba-intl/qwen3.8-flash",
         "alibaba/qwen3.7-flash",
-        "alibaba/qwen3.8-flash"
+        "alibaba/qwen3.8-flash",
+        "ollama/qwen2.5:7b-instruct"
       ]
     },
     "auto": {

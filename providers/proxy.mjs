@@ -824,14 +824,61 @@ function overrideState() {
  * beragadt celon kezdjen: a frissen elhalt cel a lanc VEGERE kerul (nem esik
  * ki, csak nem elsokent probalt), es egy siker torli a cooldownt.
  */
-const TARGET_COOLDOWNS = new Map();
+/**
+ * PERZISZTENCIA + ESZKALACIO (2026-10-22).
+ *
+ * MERVE HIBA: a cooldown csak memoriaban elt, es 90 s volt. A watchdog viszont
+ * rendszeresen ujrainditja a proxyt (proxy-watchdog.log), es minden restart
+ * NULLAZTA a tudast arrol, hogy a groq/openrouter celok halottak. Igy minden
+ * uj delegalas ugyanazt a vesztes sorozatot futotta vegig, es a lanc a helyi
+ * qwen2.5:7b-instruct-ra esett.
+ *
+ * Ket valtozas:
+ *  1. a cooldown-allapot a reports/target-cooldowns.json tarolja -> restartot tulel;
+ *  2. ismetelt hiba eseten a cooldown ESZKALAL (duplazodik, max 1 ora), igy egy
+ *     tartosan rossz cel nem kerul 90 s-onkent vissza a lanc elejere.
+ */
+const COOLDOWN_STATE_PATH = path.join(HERE, 'reports', 'target-cooldowns.json');
+const COOLDOWN_MAX_MS = 3600000;
+const FAIL_STREAK = new Map();          // label -> egymast koveto hibak szama
+const TARGET_COOLDOWNS = new Map(
+  (() => {
+    try {
+      const raw = JSON.parse(readFileSync(COOLDOWN_STATE_PATH, 'utf8'));
+      const now = Date.now();
+      return Object.entries(raw.cooldowns ?? {})
+        .filter(([, v]) => v && v.until > now)
+        .map(([k, v]) => [k, { until: v.until, reason: v.reason }]);
+    } catch { return []; }
+  })(),
+);
+let cooldownSaveTimer = null;
+function saveCooldownState() {
+  try {
+    mkdirSync(path.dirname(COOLDOWN_STATE_PATH), { recursive: true });
+    writeFileSync(COOLDOWN_STATE_PATH, JSON.stringify({
+      at: new Date().toISOString(),
+      note: 'cel-szintu cooldown + hibasorozat — restartot tulel, hogy egy halott cel ne keruljon vissza a lanc elejere',
+      cooldowns: Object.fromEntries(TARGET_COOLDOWNS),
+      failStreak: Object.fromEntries(FAIL_STREAK),
+    }, null, 1), 'utf8');
+  } catch { /* nem kritikus */ }
+}
 function markCooldown(label, reason, ms) {
-  const dur = Number.isFinite(ms) ? ms : Number(CONFIG.targetCooldownMs ?? 90000);
+  const base = Number.isFinite(ms) ? ms : Number(CONFIG.targetCooldownMs ?? 90000);
+  const streak = (FAIL_STREAK.get(label) ?? 0) + 1;
+  FAIL_STREAK.set(label, streak);
+  // Ket egymast koveto hiba utan duplazodik, max 1 ora.
+  const dur = Math.min(base * Math.pow(2, Math.min(streak - 1, 5)), COOLDOWN_MAX_MS);
   TARGET_COOLDOWNS.set(label, { until: Date.now() + dur, reason });
-  log(`COOLDOWN ${label} ${dur} ms: ${reason}`);
+  log(`COOLDOWN ${label} ${dur} ms (hibasorozat: ${streak}): ${reason}`);
+  clearTimeout(cooldownSaveTimer);
+  cooldownSaveTimer = setTimeout(saveCooldownState, 1000);
 }
 function clearCooldown(label) {
-  if (TARGET_COOLDOWNS.delete(label)) log(`COOLDOWN feloldva: ${label}`);
+  const had = TARGET_COOLDOWNS.delete(label);
+  if (FAIL_STREAK.delete(label)) saveCooldownState();
+  if (had) { log(`COOLDOWN feloldva: ${label}`); saveCooldownState(); }
 }
 function coolingTargets() {
   const now = Date.now();
@@ -868,15 +915,49 @@ function routeChain(routeName, requestBody) {
     }
     chain.push({ provider, model, label: `${providerId}/${model}` });
   }
+  // ── KONTEXTUS-OR (2026-10-22) ────────────────────────────────────────────
+  // MERVE HIBA: a `worker` route 131072 ablakot hirdetett a DSH fele, de a
+  // helyi ollama 32768-cal futott. Egy 35k tokenes kereset az Ollama NEMAN
+  // csonkolt (az ELEJET dobta el, ahol az utasitas volt), a modell utasitas
+  // nelkul valaszolt — a valasz megis ep JSON volt, tehat a proxy HIT-nek
+  // latta, es a delegalas csendben elromlott.
+  // Ezert: amelyik cel ablaka bizonyithatoan KISEBB a keresnel, azt nem
+  // probaljuk meg. Csak azt dobjuk ki, aminek van mert `targetContext` erteke,
+  // es soha nem ugy, hogy a lanc teljesen kiuruljon.
+  let sized = chain;
+  if (requestBody) {
+    try {
+      const sig = requestSignals(requestBody);
+      const filtered = chain.filter((c) => {
+        const cap = targetContextOf(c.label);
+        if (!Number.isFinite(cap)) return true;
+        if (sig.estTokens <= cap) return true;
+        log(`SKIP ${c.label} (kontextus: ~${sig.estTokens} token > ${cap}) — csonkolna`);
+        return false;
+      });
+      if (filtered.length > 0) sized = filtered;
+      else log(`FIGYELEM: minden cel kisebb a keresnel (~${sig.estTokens} token) — a teljes lanc marad`);
+    } catch (e) {
+      log(`kontextus-becsles kihagyva: ${e?.message ?? e}`);
+    }
+  }
   // Cooldown: a frissen elhalt celok a lanc VEGERE kerulnek (nem esnek ki).
   const cooldownNow = Date.now();
-  const cooling = chain.filter((c) => (TARGET_COOLDOWNS.get(c.label)?.until ?? 0) > cooldownNow);
-  if (cooling.length > 0 && cooling.length < chain.length) {
-    const fresh = chain.filter((c) => !cooling.includes(c));
+  const cooling = sized.filter((c) => (TARGET_COOLDOWNS.get(c.label)?.until ?? 0) > cooldownNow);
+  if (cooling.length > 0 && cooling.length < sized.length) {
+    const fresh = sized.filter((c) => !cooling.includes(c));
     log(`COOLDOWN-elore: ${cooling.map((c) => c.label).join(', ')} -> a lanc vegere`);
     return [...fresh, ...cooling];
   }
-  return chain;
+  return sized;
+}
+
+/** Egy cel VALOS kontextus-ablaka: kezzel mert ertek, kulonben az ar-tabla (ha van). */
+function targetContextOf(label) {
+  const explicit = CONFIG.targetContext?.[label];
+  if (Number.isFinite(explicit)) return explicit;
+  const meta = (CONFIG.pricing ?? {})[label];
+  return Number.isFinite(meta?.contextWindow) ? meta.contextWindow : null;
 }
 
 function routeNames() {
@@ -1081,6 +1162,31 @@ function assessJsonBody(text) {
   if (HARMONY_LEAK.test(JSON.stringify(obj))) return { verdict: 'bad', why: 'sérült harmony-token a válaszban' };
   if ((!msg.tool_calls || msg.tool_calls.length === 0) && FAKE_TOOL_JSON.test(content)) {
     return { verdict: 'bad', why: 'tool-hívás content-szövegként (nincs valódi tool_calls)' };
+  }
+  // ── SZERKEZETI TOOL-HIVAS ELLENORZES (2026-10-22) ──────────────────────
+  // A gyenge (helyi) modellek gyakori hibaja, hogy a tool-hivas argumentuma
+  // nem parse-olhato JSON, vagy a nev hianyzik. A DSH ezt nem tudja
+  // vegrehajtani, tehat a valasz HASZNALHATATLAN — akkor is, ha a HTTP 200.
+  // Eddig az ilyen "ep" valaszkent ment tovabb es HIT-nek szamitott.
+  // (Tartalmilag teves, de formalisan jo hivast — pl. rossz utvonal — a proxy
+  // NEM tud kiszurni; arra a modellvaltas a valasz.)
+  if (choice?.finish_reason === 'tool_calls' && (!msg.tool_calls || msg.tool_calls.length === 0)) {
+    return { verdict: 'bad', why: 'finish_reason=tool_calls, de nincs tool_calls' };
+  }
+  if (Array.isArray(msg.tool_calls)) {
+    for (const tc of msg.tool_calls) {
+      if (!tc?.function?.name) return { verdict: 'bad', why: 'tool-hívás név nélkül' };
+      const args = tc.function.arguments;
+      if (typeof args === 'string') {
+        if (args.trim() !== '') {
+          try { JSON.parse(args); } catch {
+            return { verdict: 'bad', why: 'tool-hívás érvénytelen JSON argumentummal' };
+          }
+        }
+      } else if (args !== undefined && args !== null && typeof args !== 'object') {
+        return { verdict: 'bad', why: 'tool-hívás érvénytelen argumentummal' };
+      }
+    }
   }
   return { verdict: 'ok' };
 }
