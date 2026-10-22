@@ -87,9 +87,45 @@ The atomic write (temp file + `Move-Item`) is needed because an interrupted writ
 | `tray.log` | tray | the tray's log (every operation and error) |
 | `restart.log` | `restart-node.js` | the log of restarts started from the Web UI |
 | `restart-harness.log` / `.err.log` | `restart-node.js` | the log of the **server** started from the Web UI (the fresh token goes from here into `harness.url`) |
+| `panel-layout.json` | the `dsh-ui-extras` host half | the terminal panel's remembered state per workspace (`rightbarWidth`, `active`, `search`, `terminalWanted`, `terminalRail`, `height:run-N`) |
 
 > **The `~\.dsh\dsh-web\harness.url` file is NO LONGER used.** Previously we wrote a token there
 > too, and an interrupted write left a truncated file. The source of truth is `state\harness.url`.
+
+### 3.1 The terminal tab after a new workflow
+
+The right-hand column's tab set is **per session** (DSH mints a separate store for
+every session, and a new session starts with a collapsed, empty column). A new
+workflow therefore **cannot keep** the terminal tab: the shell never put it into the
+new session's column. The only thing a plugin can do — and the only thing it does —
+is **re-open it**.
+
+The mechanism has two halves:
+
+- **Intent** (`terminalWanted` in `panel-layout.json`, per workspace): set to 1 when
+  the terminal panel appears. Closing it (switching to the files tab, collapsing the
+  column, closing the tab) does **not** clear it: two of those are not a decision, and
+  guessing wrong there is exactly how the earlier build lost the terminal for good.
+- **Re-open**: only on a **session switch** and on **page load**, through one watcher
+  (`watchTerminalPresence`), with a handful of tries and verified on the panel's DOM.
+  Nothing re-opens while the reader works inside the current session, so a tab closed
+  by hand stays closed until the next workflow starts.
+
+> **Once after deploying:** the fix takes effect on the first **page reload** (the
+> client bundle is served by the host). Then open the terminal once with the ▶ button —
+> that records the intent — and from then on it comes back by itself after every new
+> workflow, and after an app restart too.
+
+Checks (live server plus headless Edge, on the right column's real behaviour):
+
+```
+node tools\probe-terminal-restore.mjs
+node tools\check-plugin.mjs
+```
+
+`check-plugin.mjs` also pins the **shape** of the mechanism (no `terminalOpen`
+heartbeat, one watcher, no DOM watcher on the sidebar's subtree, a re-open verified on
+the DOM), so the old loop cannot creep back in.
 
 ## 4. The robot panel (4180)
 

@@ -5256,31 +5256,127 @@ window.__ModuleLoader__.load({
       writeTerminalPrefs(workspace, patch);
     }
 
+    // ------------------------------------------------------------- terminal intent
+    //
+    // What the terminal tab needs from this file is not "persistence" — the right
+    // Sidebar is PER SESSION, so a new workflow cannot inherit a tab — but a
+    // remembered INTENT plus one action that honours it. These are the two keys
+    // that carry it, in the workspace's layout document (state\panel-layout.json).
+    //
+    // 'terminalWanted' is the reader's intent ("a terminal belongs on screen in
+    // this project"). Nothing infers it from a timer: a value that only decays is
+    // how the earlier build mistook a live panel for a closed one.
+    var TERMINAL_WANT_KEY = "terminalWanted";
+    // Whether the reader left the column collapsed to its rail, so a re-opened tab
+    // can put the column back the way they had it.
+    var TERMINAL_RAIL_KEY = "terminalRail";
+
     /**
-     * Track whether the terminal panel is on screen.
+     * The intent as this PAGE holds it.
      *
-     * A page cannot run anything while it is closing, so "was it open?" is
-     * answered by the ABSENCE of a signal: the mounted panel refreshes
-     * `terminalOpen` every few seconds, and a value that has gone stale means the
-     * page went away with the panel open — which is exactly when the next page
-     * should reopen it. Closing the tab clears the flag at once, so a deliberate
-     * close stays closed.
+     * In memory because a session switch has to be answered at once, with no
+     * round-trip and no guess about which workspace the answer belongs to; and
+     * mirrored into the layout document so a page reload or an app restart can
+     * read it back.
      */
-    function startTerminalHeartbeat(workspace) {
-      if (!workspace) return function () { };
-      function beat() {
-        writeTerminalPrefs(workspace, { terminalOpen: Math.floor(Date.now() / 1000) });
+    var terminalIntent = { want: false, rail: false, known: false };
+
+    /** True once the page is unloading: its unmounts are not the reader's doing. */
+    var pageGoingAway = false;
+
+    /** The current session's id from a sessions service, or null. */
+    function sessionIdOf(sessions) {
+      try {
+        if (!sessions || !sessions.list || typeof sessions.list.getSnapshot !== "function") return null;
+        var snapshot = sessions.list.getSnapshot();
+        if (!snapshot) return null;
+        var id = snapshot.current;
+        if (id === undefined || id === null) {
+          var selected = snapshot.selected;
+          id = typeof selected === "string" ? selected : (selected && selected.id);
+        }
+        if (id === undefined || id === null) id = snapshot.selectedId;
+        return id === undefined || id === null ? null : String(id);
+      } catch (error) {
+        return null;
       }
-      beat();
-      var timer = setInterval(beat, 4000);
-      return function () {
-        clearInterval(timer);
-        writeTerminalPrefs(workspace, { terminalOpen: 0 });
-        /* NOTE: Do NOT clear the localStorage marker here. We need it to distinguish
-         * between intentional closes (user explicitly closed panel) and automatic
-         * closes (DSH clearing panels during session switch). The restore loop checks
-         * the age of this marker to decide whether to reopen. */
-      };
+    }
+
+    /**
+     * Is the terminal tab's body on screen?
+     *
+     * The body mounts exactly while the tab is open — including while the column
+     * sits on its rail, which the framework keeps mounted and only slides away —
+     * so this one probe answers "is the terminal there?" without reading the
+     * framework's private layout.
+     */
+    function terminalPanelPresent() {
+      try {
+        return document.querySelector('[data-dsh-ui-extras="terminals"]') !== null;
+      } catch (error) {
+        return false;
+      }
+    }
+
+    /**
+     * Is the right column expanded? 'null' when its seat is not rendered at all.
+     *
+     * Both attributes are the framework's own: the panel carries
+     * 'data-sidebar-right-panel' while it renders, and 'data-sidebar-right-open'
+     * only while it is expanded.
+     */
+    function rightbarExpanded() {
+      try {
+        if (document.querySelector("[data-sidebar-right-panel]") === null) return null;
+        return document.querySelector("[data-sidebar-right-open]") !== null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    /** Record the intent in memory and in the workspace's layout document. */
+    function rememberTerminalIntent(workspace, want, expanded) {
+      terminalIntent.want = want === true;
+      terminalIntent.known = true;
+      if (expanded === true || expanded === false) terminalIntent.rail = expanded === false;
+      if (!workspace) return;
+      var patch = {};
+      patch[TERMINAL_WANT_KEY] = terminalIntent.want ? 1 : 0;
+      patch[TERMINAL_RAIL_KEY] = terminalIntent.rail ? 1 : 0;
+      patch.terminalSeen = Math.floor(Date.now() / 1000);
+      writeTerminalPrefs(workspace, patch);
+    }
+
+    /** Update just the rail half of the intent, and only when it changed. */
+    function updateTerminalRail(workspace, rail) {
+      if (rail === terminalIntent.rail) return;
+      terminalIntent.rail = rail;
+      if (!workspace) return;
+      var patch = {};
+      patch[TERMINAL_RAIL_KEY] = rail ? 1 : 0;
+      patch.terminalSeen = Math.floor(Date.now() / 1000);
+      writeTerminalPrefs(workspace, patch);
+    }
+
+    /**
+     * Read one workspace's persisted intent into memory (once per page load).
+     *
+     * A panel that mounted while this was in flight has already answered the
+     * question from the reader's own action, and wins: the late answer only fills
+     * in what is still unknown.
+     */
+    function loadTerminalIntent(workspace) {
+      if (!workspace) return Promise.resolve(terminalIntent);
+      return loadPanelLayout(workspace).then(function (layout) {
+        var wanted = Number(layout[TERMINAL_WANT_KEY] || 0) === 1;
+        var rail = Number(layout[TERMINAL_RAIL_KEY] || 0) === 1;
+        if (!terminalIntent.known) {
+          terminalIntent.want = wanted;
+          terminalIntent.rail = rail;
+        }
+        terminalIntent.known = true;
+        return layout;
+      });
     }
 
     /**
@@ -5332,35 +5428,6 @@ window.__ModuleLoader__.load({
      * jump, and writing it while nobody asked is what made it look like the panel
      * resized itself.
      */
-    /**
-     * The frame element that owns the three column tracks.
-     *
-     * Identified by its CONTENT, not by a class name: the frame's class is a
-     * build-time hash, and the earlier `div[class*="frame"]` lookup silently found
-     * nothing — which is why the remembered width was never written at all. The
-     * grid is the element whose inline `grid-template-columns` has three tracks;
-     * `[data-rightbar-col]` (the framework's own marker) is the fallback, because
-     * its parent is that grid.
-     */
-    function findLayoutFrame() {
-      try {
-        var best = null;
-        var nodes = document.querySelectorAll("div");
-        for (var i = 0; i < nodes.length; i++) {
-          var style = nodes[i].style ? String(nodes[i].style.gridTemplateColumns || "") : "";
-          if (style === "") continue;
-          var parts = style.split(/\s+/u).filter(function (part) { return part.length > 0; });
-          if (parts.length === 3) return nodes[i];
-          if (best === null && style.indexOf("minmax") >= 0) best = nodes[i];
-        }
-        if (best !== null) return best;
-        var col = document.querySelector("[data-rightbar-col]");
-        if (col && col.parentElement) return col.parentElement;
-        return null;
-      } catch (error) {
-        return null;
-      }
-    }
 
     /**
      * The right sidebar's resize handle, and the drag callback its React props carry.
@@ -5784,16 +5851,41 @@ window.__ModuleLoader__.load({
         handle.addEventListener("pointercancel", stop);
       }
 
-      // While this panel is on screen it keeps refreshing its heartbeat; the host
-      // reads a stale value as "the page went away with the panel open", and the
-      // next page then reopens it. Closing the tab clears the flag immediately,
-      // so a deliberate close stays closed.
+      // ---------------------------------------------------------- terminal intent
+      //
+      // The right Sidebar is PER SESSION: the framework mints one store per
+      // session, and a session starts COLLAPSED with no tabs. A new workflow
+      // therefore does not lose this terminal — the new session's column never had
+      // it, and no registration can change that. What this panel CAN do is record
+      // what the reader wants, which is what lets the watcher below put the tab
+      // back:
+      //   * the body mounting IS the reader opening the terminal, so that is when
+      //     the intent becomes "yes" — per workspace, persisted, so a reload and an
+      //     app restart keep it;
+      //   * it is never cleared on unmount: switching to the files tab, collapsing
+      //     the column and closing the tab all unmount this body, and the first two
+      //     are not a decision. Guessing wrong in that direction is exactly what
+      //     made the terminal disappear for good in the earlier build.
+      // The re-open itself happens only on a SESSION SWITCH or at boot — never
+      // while the reader works in the current session — so a closed tab still means
+      // a terminal-free session until the next workflow starts.
       react.useEffect(function () {
-        /* Persist to localStorage when panel mounts: survives session switches.
-         * Our restore loop checks this even when host heartbeat is already cleared. */
-        try { var k="dsh.ui-extras.term.opened"; localStorage.setItem(k,"1"); } catch(e){}
-        return startTerminalHeartbeat(workspaceDir);
-      }, [workspaceDir]);
+        if (!docked || !workspaceDir) return undefined;
+        rememberTerminalIntent(workspaceDir, true, rightbarExpanded());
+        // The column can move between its rail and its panel while this body stays
+        // mounted, so the rail half is re-read; only a change is written.
+        var railTimer = setInterval(function () {
+          var expanded = rightbarExpanded();
+          if (expanded !== null) updateTerminalRail(workspaceDir, expanded === false);
+        }, 2000);
+        return function () {
+          clearInterval(railTimer);
+          // Nothing is written here on purpose (see above). The line is for
+          // diagnosis only: it is the one record of WHEN the body left the screen.
+          if (pageGoingAway) return;
+          reportToHost("terminal panel", "unmounted in session " + String(sessionIdOf(props.sessions)));
+        };
+      }, [docked, workspaceDir]);
 
       // Record the right sidebar's width, but ONLY when the user actually drags
       // its resize handle. Passive observation was the earlier bug: the framework
@@ -7437,248 +7529,198 @@ window.__ModuleLoader__.load({
         return startConnectionWatchdog();
       }, "ui-extras: connection watchdog");
 
-      // Restore the terminal panel's open state and column width after a reload.
+      // ------------------------------------------------------ terminal presence
       //
-      // ONE source of truth, guarded so it cannot double-open and cannot fight the
-      // framework over the width:
-      //   * the panel is re-opened once, when the previous page had it open (the
-      //     heartbeat), and only after the sidebar's session seat is mounted;
-      //   * the column width is written ONCE, right after the frame first renders,
-      //     and then never again — the earlier bug was a watcher that re-applied
-      //     the width forever and, worse, mistook the framework's 45% default for
-      //     the user's own size and saved it.
-      var restoreAttempts = 0;
-      // Declared before the function that stops it: the restore runs asynchronously
-      // and would otherwise reach a `const` in its temporal dead zone.
-      var restoreTimer = null;
+      // The tab body records "the reader wants a terminal here". This block is the
+      // other half: put the tab back on screen when a NEW SESSION takes it away,
+      // and at page load when the previous page — or the last run of the app — left
+      // it open.
+      //
+      // One bounded attempt per event is the whole mechanism:
+      //   * a 0.8-second loop compares the CURRENT session ('list.current', the
+      //     documented field) and acts only when it CHANGES, so nothing runs while
+      //     the reader works inside one session;
+      //   * 'openTab' is called at most eight times, half a second apart, because a
+      //     switch briefly has no sidebar seat and the framework answers "no session
+      //     surface is mounted". That answer is the expected first reply, not a
+      //     failure;
+      //   * the outcome is VERIFIED on the DOM (the tab body renders a
+      //     'data-dsh-ui-extras=terminals' node), never assumed.
+      //
+      // What this replaced: the earlier build watched the sidebar's DOM subtree for
+      // mutations, so every line of terminal output "restarted the cycle", reset the
+      // attempt budget and reset the timer before its first tick — thousands of
+      // lines a minute in state\ui-extras-client.log, and not one re-opened tab. It
+      // also polled the layout endpoint every 3 seconds to ask the same question.
+      var TERMINAL_RESTORE_TRIES = 8;
+      var terminalWatcher = { session: null, timer: null };
 
-      /**
-       * One full state dump, written to the host log.
-       *
-       * The browser is invisible from here, so this reports every side of the
-       * question at once: whether the layout is stored, whether the sidebar says it
-       * is expanded, what the frame's grid actually measures, which storage keys the
-       * framework keeps, and whether the terminal tab is among them. Without this
-       * the diagnosis is guesswork.
-       */
-      function dumpPanelState(tag, workspace) {
-        try {
-          // Same detector the restore uses, so the log proves whether the write
-          // will find its target.
-          var frame = findLayoutFrame();
-          var frameInfo = "none";
-          if (frame) {
-            frameInfo = String(frame.className).slice(0, 48) + " grid=" +
-              String(frame.style.gridTemplateColumns || "").slice(0, 60);
-          }
-          var col = document.querySelector("[data-rightbar-col]");
-          var colWidth = "none";
-          if (col) {
-            colWidth = String(Math.round(col.getBoundingClientRect().width)) + "px";
-          }
-          var expanded = "n/a";
-          try {
-            expanded = String(ctx.sidebarRight.isExpanded());
-          } catch (error) {
-            expanded = "error";
-          }
-          var keys = [];
-          for (var j = 0; j < window.localStorage.length && j < 40; j++) {
-            var key = window.localStorage.key(j);
-            if (key !== null) keys.push(key);
-          }
-          // What the framework itself remembers: if the terminal kind appears in its
-          // layout key, re-opening is the framework's job and not ours.
-          var viewInfo = "none";
-          try {
-            var raw = window.localStorage.getItem("dsh.workspace.view.v5");
-            if (raw !== null) {
-              var parsed = JSON.parse(raw);
-              var text = JSON.stringify(parsed);
-              viewInfo = "len=" + String(text.length) +
-                " hasTerminalKind=" + String(text.indexOf(TERMINAL_KIND) >= 0) +
-                " topKeys=" + Object.keys(parsed).slice(0, 6).join("/");
-            }
-          } catch (error) {
-            viewInfo = "unreadable";
-          }
-          reportToHost("panel state (" + tag + ")",
-            "expanded=" + expanded +
-            " rightbarCol=" + colWidth +
-            " frame=[" + frameInfo + "]" +
-            " view={" + viewInfo + "}" +
-            " keys={" + keys.join(",") + "}");
-        } catch (error) {
-          reportToHost("panel state (" + tag + ")", "failed: " + String(error && error.message ? error.message : error));
-        }
+      /** The workspace this page's terminal intent belongs to. */
+      function terminalWorkspace() {
+        return pickSessionWorkspace(ctx.sessions) || selectedWorkspaceOf(ctx.workspaces) || hostWorkspace;
       }
 
-      function tryRestoreTerminal() {
-        restoreAttempts++;
-        if (restoreAttempts > 25) {
-          if (restoreTimer !== null) clearInterval(restoreTimer);
-          reportToHost("terminal restore", "gave up after " + String(restoreAttempts) + " tries");
+      /** One short state line, so the next diagnosis needs no guesswork. */
+      function reportPanelState(tag) {
+        try {
+          var columnWidth = rightbarColumnWidth();
+          reportToHost("terminal state (" + tag + ")",
+            "panel=" + String(terminalPanelPresent()) +
+            " expanded=" + String(rightbarExpanded()) +
+            " railWanted=" + String(terminalIntent.rail) +
+            " want=" + String(terminalIntent.want) +
+            " known=" + String(terminalIntent.known) +
+            " col=" + String(Math.round(columnWidth || 0)) +
+            " session=" + String(sessionIdOf(ctx.sessions)));
+        } catch (error) { }
+      }
+
+      /** Put the tab back the way the reader left the column. */
+      function settleTerminalTab(reason) {
+        // 'openTab' reveals the column; a reader who kept it on its rail gets the
+        // rail back — and only a DEMONSTRABLY expanded column is toggled, because
+        // toggleExpanded flips rather than sets.
+        var railed = false;
+        if (terminalIntent.rail === true) {
+          try {
+            if (typeof ctx.sidebarRight.isExpanded === "function" && ctx.sidebarRight.isExpanded() === true) {
+              ctx.sidebarRight.toggleExpanded();
+              railed = true;
+            }
+          } catch (error) { }
+        }
+        reportToHost("terminal restore", reason + ": re-opened" + (railed ? " (column back on its rail)" : ""));
+        // The framework starts every session's column at its own default width, so
+        // the width the reader chose is asked for again — the helper itself stops
+        // as soon as the column measures what was wanted.
+        applyRememberedWidth(terminalWorkspace(), 12);
+      }
+
+      /**
+       * Open the terminal tab, then verify it — then try again, at most maxTries times.
+       *
+       * The retry exists for exactly one reason: right after a session switch the new
+       * seat has not published its binding yet, so the framework answers "no session
+       * surface is mounted". That answer is expected, not a failure.
+       *
+       * The WAIT is done by watching for the column, not by a blind timer: a blind
+       * 500 ms retry was measured re-opening a tab the reader had just closed, because
+       * it landed after their click. Waiting for 'data-sidebar-right-panel' first, and
+       * polling every 150 ms, keeps that window as short as the framework allows — and
+       * one call is enough in practice, so the budget below is only a safety net.
+       */
+      function ensureTerminalTab(reason, attempt, maxTries, gapMs) {
+        if (terminalPanelPresent()) {
+          settleTerminalTab(reason);
           return;
         }
         if (!ctx.sidebarRight || typeof ctx.sidebarRight.openTab !== "function") {
+          reportToHost("terminal restore", reason + ": the sidebarRight service is unavailable");
           return;
         }
-        var workspace = hostWorkspace || selectedWorkspaceOf(ctx.workspaces);
-        if (!workspace) {
+        var budget = maxTries || TERMINAL_RESTORE_TRIES;
+        var gap = typeof gapMs === "number" ? gapMs : 150;
+        // The column renders a moment before its binding exists; opening into a
+        // column that is not there yet is a guaranteed throw.
+        if (rightbarExpanded() === null) {
+          if (attempt >= budget) {
+            reportToHost("terminal restore", reason + ": gave up after " + String(attempt) + " tries (no column)");
+            reportPanelState("gave up");
+            return;
+          }
+          setTimeout(function () { ensureTerminalTab(reason, attempt + 1, budget, gap); }, gap);
           return;
         }
-
-        fetch(LAYOUT_ROUTE + "?workspace=" + encodeURIComponent(workspace), { headers: { Accept: "application/json" } })
-          .then(function (response) { return response.json(); })
-          .then(function (body) {
-            var layout = body && body.ok === true && body.layout ? body.layout : {};
-            var beat = Number(layout.terminalOpen || 0);
-            var age = beat <= 0 ? -1 : Math.floor(Date.now() / 1000) - beat;
-
-            reportToHost("terminal restore", "beat=" + String(beat) + " age=" + String(age) +
-              " width=" + String(layout.rightbarWidth || 0));
-            dumpPanelState("after fetch", workspace);
-
-            // Determine whether to reopen the terminal tab:
-            // - If beat > 0 and recent → terminal was definitely on screen
-            // - If beat === 0 and our localStorage marker exists AND was set recently →
-            //   likely just closed by a session switch (which happens faster than manual close)
-            var shouldOpen = false;
-            if (beat > 0 && age >= 0 && age <= 1800) {
-              shouldOpen = true;
-            } else {
-              /* Check if the terminal was recently opened per our own tracking. */
-              try {
-                var termKey = "dsh.ui-extras.term.opened";
-                var tsRaw = localStorage.getItem(termKey);
-                if (tsRaw !== null) {
-                  var tsNum = Number(tsRaw);
-                  if (!isNaN(tsNum) && tsNum > 0) {
-                    var nowSec = Math.floor(Date.now() / 1000);
-                    var openAge = nowSec - tsNum;
-                    /* If terminal was opened within the last 60 seconds, it was likely
-                     * closed automatically by DSH during session switch. Reopen it.
-                     * For older opens, trust that a manual close was intentional. */
-                    if (openAge < 60 && beat === 0) {
-                      shouldOpen = true;
-                      reportToHost("terminal restore", "recently-closed detected (age=" + String(openAge) + ")");
-                    }
-                  }
-                }
-              } catch(e) {}
-            }
-            if (shouldOpen) {
-              /* Clean up marker after restoring — prevents endless restore loops. */
-              try { localStorage.removeItem("dsh.ui-extras.term.opened"); } catch(e) {}
-              var opened = "ok";
-              try {
-                ctx.sidebarRight.openTab(TERMINAL_KIND);
-              } catch (error) {
-                opened = "threw: " + String(error && error.message ? error.message : error);
-              }
-              // Verified, not assumed: the tab body logs its own mount, so a
-              // successful call that still shows nothing is distinguishable from a
-              // call that threw.
-              reportToHost("terminal restore", "openTab " + opened +
-                ", isExpanded=" + String((function () {
-                  try { return ctx.sidebarRight.isExpanded(); } catch (error) { return "error"; }
-                })()));
-              // Opening the tab does NOT show the column: the right sidebar can be
-              // on its rail, and then the tab exists while nothing of it is on
-              // screen — which is exactly what "the panel did not come back" looks
-              // like. The expansion happens only here, i.e. only when the panel was
-              // genuinely open before, so a deliberate collapse is still respected.
-              var wasCollapsed = false;
-              try {
-                wasCollapsed = typeof ctx.sidebarRight.isExpanded === "function" && ctx.sidebarRight.isExpanded() === false;
-              } catch (error) {
-                wasCollapsed = false;
-              }
-              if (wasCollapsed) {
-                try {
-                  ctx.sidebarRight.toggleExpanded();
-                  reportToHost("terminal restore", "column was collapsed; expanded it");
-                } catch (error) {
-                  reportToHost("terminal restore", "expand failed: " + String(error && error.message ? error.message : error));
-                }
-              }
-              // Re-opening resets the column, so the width goes back with it.
-              applyTerminalPrefs(workspace, layout);
-              applyRememberedWidth(workspace, 20);
-              // What the page looks like AFTER the restore, which is the state the
-              // next reload has to reproduce.
-              setTimeout(function () { dumpPanelState("after restore", workspace); }, 3000);
-              // Re-open the interval: it keeps checking after every session change, so a new workflow that
-              // briefly closes the terminal will cause it to reopen if the user had it visible moments ago.
-              clearInterval(restoreTimer);  // stop the old one-shot timer
-              tryRestoreTimer = setInterval(tryRestoreTerminal, 1500);
-            }
-          })
-          .catch(function () { });
-      }
-
-      restoreTimer = setInterval(tryRestoreTerminal, 1000);
-      var tryRestoreTimer = null;
-      ctx.effect(function () { return function () { if (restoreTimer !== null) clearInterval(restoreTimer); if (tryRestoreTimer !== null) clearInterval(tryRestoreTimer); }; }, "ui-extras: terminal restore");
-
-      // Automatic terminal reopen on new workflow / session change.
-      // Three complementary mechanisms ensure reliability across all DSH builds.
-
-      /* Reset helper: clears all intervals AND resets the attempt budget */
-      function resetAndRestart() {
-        try { if (restoreTimer !== null) clearInterval(restoreTimer); } catch(e2) {}
-        try { if (tryRestoreTimer !== null) clearInterval(tryRestoreTimer); } catch(e2) {}
-        restoreAttempts = 0;  // allow full budget again for the new session
-        reportToHost("terminal restore", "cycle restarted, budget reset");
-        tryRestoreTimer = setInterval(tryRestoreTerminal, 1500);
-      }
-
-      /* Method 2 — MutationObserver on the sidebar DOM.
-       * Every time DSH re-renders the right-bar (new workflow), childList mutations fire. */
-      try {
-        var domTarget = document.querySelector('[data-rightbar]') || document.getElementById('root');
-        if (domTarget) {
-          var _mutObs = new MutationObserver(function () {
-            reportToHost("terminal restore", "DOM mutation detected");
-            resetAndRestart();
-          });
-          _mutObs.observe(domTarget, { childList: true, subtree: true });
-          ctx.effect(function () { return function () { try { _mutObs.disconnect(); } catch(e) {}; }; }, "ui-extras: terminal restore DOM watch");
-        }
-      } catch(e) {}
-
-      /* Method 3 — Periodic layout polling.
-       * When the heartbeat disappears (beat goes to 0 or becomes stale), restart. */
-      var _lastLayoutHash = '';
-      setInterval(function () {
+        var answer = "ok";
         try {
-          var w = hostWorkspace || selectedWorkspaceOf(ctx.workspaces);
-          if (!w) return;
-          fetch(LAYOUT_ROUTE + "?workspace=" + encodeURIComponent(w), { headers: { Accept: "application/json" } })
-            .then(function (r) { return r.json(); })
-            .then(function (body) {
-              if (body && body.ok && body.layout) {
-                var hash = JSON.stringify(body.layout);
-                if (hash !== _lastLayoutHash) {
-                  _lastLayoutHash = hash;
-                  var beat = Number(body.layout.terminalOpen || 0);
-                  var nowSec = Math.floor(Date.now() / 1000);
-                  var age = beat > 0 ? nowSec - beat : -1;
-                  if (beat <= 0 || age > 60) {
-                    reportToHost("terminal restore", "layout poll: beat gone/old, restarting");
-                    resetAndRestart();
-                  }
-                }
-              }
-            })
-            .catch(function () {});
-        } catch(e) {}
-      }, 3000);
+          ctx.sidebarRight.openTab(TERMINAL_KIND);
+        } catch (error) {
+          answer = String(error && error.message ? error.message : error);
+        }
+        // The two transient answers are the new session's seat not being there YET.
+        var transient = answer.indexOf("no session surface is mounted") >= 0 ||
+          answer.indexOf("no tab type is registered") >= 0;
+        if (answer !== "ok" && !transient) {
+          reportToHost("terminal restore", reason + ": " + answer);
+          return;
+        }
+        setTimeout(function () {
+          if (terminalPanelPresent()) {
+            settleTerminalTab(reason);
+            return;
+          }
+          if (attempt >= budget) {
+            reportToHost("terminal restore", reason + ": gave up after " + String(attempt) + " tries" +
+              (answer !== "ok" ? " (" + answer + ")" : ""));
+            reportPanelState("gave up");
+            return;
+          }
+          ensureTerminalTab(reason, attempt + 1, budget, gap);
+        }, transient ? gap : 350);
+      }
 
-      // A dump early in the page's life, before any restore runs: it shows what the
-      // framework restored on its own, plus how the resize handle is reachable.
+      /**
+       * The whole watcher: one comparison per tick, work only on a session change.
+       *
+       * 'list.current' comes from the in-memory snapshot, so a tick costs nothing
+       * and the network is touched only when a switch actually happened.
+       */
+      function watchTerminalPresence() {
+        var session = sessionIdOf(ctx.sessions);
+        if (session === null || session === terminalWatcher.session) return;
+        var first = terminalWatcher.session === null;
+        terminalWatcher.session = session;
+        if (first) {
+          // Boot: no body has mounted yet, so the persisted intent decides. The
+          // workspace is resolved the way the PANEL resolves it (the Session's own
+          // cwd first) — resolving it the other way round restored a terminal of
+          // project B against the host's own directory.
+          if (terminalIntent.known) {
+            reportPanelState("boot");
+            if (terminalIntent.want) ensureTerminalTab("boot restore", 1, 40);
+            return;
+          }
+          loadTerminalIntent(terminalWorkspace()).then(function () {
+            reportPanelState("boot");
+            if (terminalIntent.want) ensureTerminalTab("boot restore", 1, 40);
+          });
+          return;
+        }
+        // A SESSION SWITCH — a new workflow. The terminal of the previous session
+        // lives in that session's column; this one never had it.
+        if (!terminalIntent.want) {
+          reportToHost("terminal restore", "session switch: nothing to re-open");
+          return;
+        }
+        ensureTerminalTab("re-open after the session switch", 1);
+      }
+
+      terminalWatcher.timer = setInterval(watchTerminalPresence, 800);
+      ctx.effect(function () {
+        // The first tick is not waited for: a page that reloaded WITH a session
+        // already selected should not spend a second with an empty column.
+        watchTerminalPresence();
+        return function () { clearInterval(terminalWatcher.timer); };
+      }, "ui-extras: terminal presence watcher");
+
+      ctx.effect(function () {
+        var onLeaving = function () { pageGoingAway = true; };
+        window.addEventListener("pagehide", onLeaving);
+        window.addEventListener("beforeunload", onLeaving);
+        return function () {
+          window.removeEventListener("pagehide", onLeaving);
+          window.removeEventListener("beforeunload", onLeaving);
+        };
+      }, "ui-extras: terminal page-hide marker");
+
+      // The one-off key an earlier build used; the intent lives in the layout
+      // document now, so a stale marker would only mislead the next diagnosis.
+      try { window.localStorage.removeItem("dsh.ui-extras.term.opened"); } catch (error) { }
+
+      // What the resize handle looks like, once: a missing handle belongs in the log
+      // instead of only in a width that quietly failed to come back.
       setTimeout(function () {
-        dumpPanelState("page load", hostWorkspace || selectedWorkspaceOf(ctx.workspaces));
+        reportPanelState("page load");
         probeHandleOnce();
       }, 2500);
 

@@ -88,10 +88,45 @@ csonka `harness.url`-t hagyott, és utána **minden** olvasó a régi tokent lá
 | `tray.log` | tálca | a tálca naplója (minden művelet és hiba) |
 | `restart.log` | `restart-node.js` | a Web UI-ból indított újraindítások naplója |
 | `restart-harness.log` / `.err.log` | `restart-node.js` | a Web UI-ból indított **szerver** naplója (a friss token innen kerül a `harness.url`-ba) |
+| `panel-layout.json` | `dsh-ui-extras` host fele | munkaterületenként a terminál-panel emlékezett állapota (`rightbarWidth`, `active`, `search`, `terminalWanted`, `terminalRail`, `height:run-N`) |
 
 > **A `~\.dsh\dsh-web\harness.url` fájlt már NEM használjuk.** Korábban oda is
 > írtunk tokent, és egy megszakadt írás csonka fájlt hagyott ott. Az igazság
 > forrása a `state\harness.url`.
+
+### 3.1 A terminál fül új munkafolyamat után
+
+A jobb oldali sáv fülkészlete **munkamenetenkénti** (a DSH minden sessionhöz külön
+tárat nyit, és egy új session összecsukott, üres sávval indul). Ezért egy új
+munkafolyamat **nem tudja megtartani** a terminál fület: a héj sosem tette bele az
+új session sávjába. Amit a plugin tehet — és amit tesz — az az **újranyitás**.
+
+A mechanizmus két fele:
+
+- **Szándék** (`terminalWanted` a `panel-layout.json`-ban, munkaterületenként):
+  akkor íródik 1-re, amikor a terminál panel megjelenik. Bezárás
+  (fül-váltás, sáv összecsukása, a fül bezárása) **nem** törli: ezek közül kettő
+  nem döntés, és a korábbi build épp ezen a találgatáson veszítette el a terminált.
+- **Újranyitás**: kizárólag **session-váltáskor** és **lap-betöltéskor** fut, egy
+  watcherrel (`watchTerminalPresence`), legfeljebb néhány próbával, a panel DOM-ján
+  ellenőrizve. A jelenlegi sessionben dolgozva semmi nem nyílik újra, ezért egy
+  kézzel bezárt fül bezárva is marad a következő munkafolyamatig.
+
+> **Telepítés után egyszer:** a javítás az első **lap-újratöltés** után lép
+> életbe (a kliens bundle a szerverről jön). Utána a ▶ gombbal nyisd meg egyszer a
+> terminált — ez írja be a szándékot —, és onnantól minden új munkafolyamat után
+> magától visszajön, az alkalmazás újraindítása után is.
+
+Ellenőrzés (élő szerver + headless Edge, a jobb oldali sáv valódi viselkedésén):
+
+```
+node tools\probe-terminal-restore.mjs
+node tools\check-plugin.mjs
+```
+
+A `check-plugin.mjs` a mechanizmus **alakját** is pineli (nincs `terminalOpen`
+szívverés, egy watcher, nincs DOM-figyelő a sidebar fáján, a DOM-on ellenőrzött
+újranyitás), hogy a régi hurok ne kerülhessen vissza.
 
 ## 4. A robot panel (4180)
 

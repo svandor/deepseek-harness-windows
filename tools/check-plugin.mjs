@@ -688,5 +688,43 @@ const undefinedCalls = [...called.entries()]
 if (undefinedCalls.length) fail(`client.js calls functions it never defines: ${undefinedCalls.join(", ")}`);
 else ok(`every called function is defined or a known global (${called.size} call sites checked)`);
 
+/* --- 7) the terminal re-open mechanism ------------------------------------ */
+
+/**
+ * Pin the SHAPE of the terminal re-open, not just its syntax.
+ *
+ * The bug this replaces was a mechanism, not a typo: the panel answered "was the
+ * terminal open?" with a heartbeat that its own unmount wrote back as 0, and a
+ * restore loop that watched the sidebar's DOM subtree for mutations. Terminal
+ * output therefore restarted the loop before its first tick could run (thousands
+ * of log lines a minute, and no re-opened tab), and because the right sidebar is
+ * PER SESSION, a new session — whose column is empty by design — never got the tab
+ * back at all.
+ *
+ * The replacement is an explicit per-workspace intent plus one watcher, and those
+ * three properties are cheap to assert here:
+ *   * the intent is a real stored decision (`terminalWanted`), not a decaying clock;
+ *   * nothing writes the heartbeat that used to overwrite it;
+ *   * the re-open is driven by one named watcher, so a second loop cannot be added
+ *     back without this check noticing.
+ */
+if (/TERMINAL_WANT_KEY\s*=\s*"terminalWanted"/u.test(clientText)) {
+  ok('the terminal intent is stored explicitly (terminalWanted)');
+} else fail('client.js no longer stores the terminal intent under terminalWanted');
+
+if (/\bterminalOpen\b/u.test(clientText)) fail('client.js still mentions the decaying terminalOpen heartbeat');
+else ok('the decaying terminalOpen heartbeat is gone');
+
+if (/function watchTerminalPresence\s*\(/u.test(clientText)) ok('one named watcher drives the re-open (watchTerminalPresence)');
+else fail('client.js has no watchTerminalPresence; the re-open lost its single entry point');
+
+if (/\.observe\(\s*domTarget/u.test(clientText)) fail('a DOM mutation watcher is back on the sidebar subtree (it restarted the old restore)');
+else ok('no DOM mutation watcher is subscribed to the sidebar subtree');
+
+// The presence probe is what makes the restore VERIFIED rather than assumed: a tab
+// body that never rendered must not be reported as "re-opened".
+if (clientText.includes('[data-dsh-ui-extras="terminals"]')) ok('the re-open is verified on the rendered tab body');
+else fail('client.js no longer verifies the re-open against the terminal tab body');
+
 console.log(failures ? `\n${failures} problem(s)` : '\nall checks passed');
 process.exit(failures ? 1 : 0);
