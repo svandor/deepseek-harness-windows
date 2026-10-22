@@ -542,6 +542,20 @@ namespace DshWindow
         private System.Windows.Threading.DispatcherTimer _tokenWatch;
         private DateTime _tokenWatchSince;
 
+        // ── panel-életjel (2026-10-22) ─────────────────────────────────────
+        // MIÉRT: a WebView2 renderere képes úgy beragadni, hogy a háttér (a node
+        // harness) közben egészséges marad — mért eset: a renderer 127%-on
+        // pörgött egy magon, a panel nem válaszolt, a naplóba közben semmi sem
+        // került, és a felhasználó csak az ablak újraindításával tudta helyre
+        // tenni. Ezért a host MAGA kérdez rá minden panelre: ha a renderer nem
+        // válaszol, a panelt automatikusan újratölti.
+        private System.Windows.Threading.DispatcherTimer _healthWatch;
+        private bool _healthBusy;
+        private int _healthFails;
+        private int _reloads;
+        private DateTime _reloadWindow = DateTime.MinValue;
+        private DateTime _pluginStamp = DateTime.MinValue;
+
         /// <summary>The child HWND WebView2 renders into (focus target).</summary>
         internal IntPtr ChildHandle { get { return _child; } }
 
@@ -898,6 +912,9 @@ namespace DshWindow
                 }
             };
 
+            // A beragadt renderer észlelése (lásd StartHealthWatch).
+            StartHealthWatch(core);
+
             // Guarantee the dark theme even if the stored UI preference is
             // missing: the frontend keys off body[data-ds-dark-theme].
             //
@@ -969,6 +986,151 @@ namespace DshWindow
             {
                 Logger.Info("token watch not started: " + ex.Message);
             }
+        }
+
+        /// <summary>
+        /// Panel-életjel: 15 másodpercenként egy triviális szkriptet futtat a
+        /// rendererben. Ha az nyolc másodpercen belül nem válaszol, a renderer
+        /// beragadt — két egymást követő kihagyás után a panel újratöltődik.
+        ///
+        /// MIÉRT ÍGY: a háttér (node) ilyenkor végig egészséges, ezért a
+        /// megszokott „szerverhiba" jelzések nem segítenek; egyedül a renderer
+        /// kérdezhető meg közvetlenül. A `Runtime.evaluate` helyett a magasabb
+        /// szintű `ExecuteScriptAsync` kell, mert az a UI-szálon marad.
+        /// </summary>
+        private void StartHealthWatch(CoreWebView2 core)
+        {
+            try
+            {
+                if (_healthWatch != null) return;
+                _pluginStamp = PluginClientStamp();
+                _healthWatch = new System.Windows.Threading.DispatcherTimer
+                {
+                    Interval = TimeSpan.FromSeconds(15)
+                };
+                _healthWatch.Tick += async (s, e) =>
+                {
+                    try { await CheckHealthAsync(core); }
+                    catch (Exception ex) { Logger.Info("pane health: " + ex.Message); }
+                };
+                _healthWatch.Start();
+                Logger.Info("pane " + (_paneIndex + 1) + ": health watch started (15s, 8s timeout)");
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("pane health watch not started: " + ex.Message);
+            }
+        }
+
+        private async System.Threading.Tasks.Task CheckHealthAsync(CoreWebView2 core)
+        {
+            if (_disposed || _healthBusy || core == null) return;
+            _healthBusy = true;
+            try
+            {
+                // ── ELAVULT KLIENS-KÓD (2026-10-22) ────────────────────────
+                // MÉRT HIBA: a panelben egy 2026-09-26-i kliens-build futott,
+                // benne a terminal-restore végtelen újrapróbálkozásával — ez
+                // pörgette a renderert 127%-on és fagyasztotta meg a panelt.
+                // A forrás akkorra már javítva volt, csak a betöltött példány
+                // volt régi. Ezért: ha a plugin forrása a lap betöltése óta
+                // megváltozott, a panelt újra kell tölteni — különben a
+                // felhasználó egy javított kód MELLETT is a hibásat futtatja.
+                DateTime stamp = PluginClientStamp();
+                if (_pluginStamp != DateTime.MinValue && stamp != _pluginStamp)
+                {
+                    _pluginStamp = stamp;
+                    Logger.Info("pane " + (_paneIndex + 1)
+                        + ": a kliens-plugin forrasa megvaltozott — ujratoltes, hogy ne a regi kod fusson");
+                    ReloadPane("elavult kliens-kod");
+                    return;
+                }
+
+                System.Threading.Tasks.Task<string> probe = core.ExecuteScriptAsync("1");
+                System.Threading.Tasks.Task finished = await System.Threading.Tasks.Task.WhenAny(
+                    probe, System.Threading.Tasks.Task.Delay(8000));
+                if (!ReferenceEquals(finished, probe))
+                {
+                    _healthFails++;
+                    Logger.Error("pane " + (_paneIndex + 1) + ": a renderer nem valaszol ("
+                        + _healthFails + ". meres) — beragadt");
+                    if (_healthFails >= 2) ReloadPane("beragadt renderer");
+                    return;
+                }
+                // A válasz megérkezett: a renderer él.
+                if (_healthFails > 0)
+                {
+                    Logger.Info("pane " + (_paneIndex + 1) + ": a renderer ujra valaszol");
+                }
+                _healthFails = 0;
+            }
+            catch (Exception ex)
+            {
+                _healthFails++;
+                Logger.Error("pane " + (_paneIndex + 1) + ": health probe hiba: " + ex.Message);
+                if (_healthFails >= 3) ReloadPane("health probe hiba");
+            }
+            finally
+            {
+                _healthBusy = false;
+            }
+        }
+
+        /// <summary>
+        /// A panel újratöltése — sebességkorláttal.
+        ///
+        /// Két esetben hívjuk: a renderer beragadt, vagy a kliens-plugin forrása
+        /// megváltozott a lap betöltése óta (elavult kód futna tovább).
+        ///
+        /// A korlát azért kell, mert egy őszintén lassú oldal (nagy session
+        /// kirajzolása) is okozhat kihagyott életjelet; 15 percenként legfeljebb
+        /// három újratöltést engedünk, utána a host feladja és naplózza, hogy ne
+        /// alakuljon ki újratöltési hurok.
+        /// </summary>
+        private void ReloadPane(string reason)
+        {
+            DateTime now = DateTime.UtcNow;
+            if (_reloadWindow == DateTime.MinValue || (now - _reloadWindow).TotalMinutes > 15)
+            {
+                _reloadWindow = now;
+                _reloads = 0;
+            }
+            if (_reloads >= 3)
+            {
+                Logger.Error("pane " + (_paneIndex + 1)
+                    + ": 3 automatikus ujratoltes 15 perc alatt — a tovabbi ujratoltes leallitva");
+                return;
+            }
+            _reloads++;
+            _healthFails = 0;
+            Logger.Info("pane " + (_paneIndex + 1) + ": automatikus ujratoltes (" + reason + ")");
+            try
+            {
+                CoreWebView2 core = Core;
+                if (core == null) return;
+                core.Navigate(_url);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("pane " + (_paneIndex + 1) + ": ujratoltes hiba: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// A kliens-plugin forrásának utolsó írási ideje, vagy DateTime.MinValue.
+        ///
+        /// Ezzel ismerhető fel, hogy a lap régi kódot futtat: ha a fájl a lap
+        /// betöltése óta megváltozott, a betöltött modul elavult.
+        /// </summary>
+        private static DateTime PluginClientStamp()
+        {
+            try
+            {
+                string root = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".."));
+                string file = Path.Combine(root, "plugins", "dsh-ui-extras", "lib", "client.js");
+                return File.Exists(file) ? File.GetLastWriteTimeUtc(file) : DateTime.MinValue;
+            }
+            catch { return DateTime.MinValue; }
         }
 
         /// <summary>
@@ -1169,6 +1331,7 @@ namespace DshWindow
             if (_disposed) return;
             _disposed = true;
             try { if (_tokenWatch != null) _tokenWatch.Stop(); } catch { }
+            try { if (_healthWatch != null) _healthWatch.Stop(); } catch { }
             try { if (_controller != null) _controller.Close(); } catch { }
             try { if (_controller != null) Marshal.ReleaseComObject(_controller); } catch { }
             base.Dispose(disposing);
@@ -2352,9 +2515,41 @@ namespace DshWindow
         public static void Info(string message) { Write("INFO ", message); }
         public static void Error(string message) { Write("ERROR", message); }
 
+        // ── fókusz-napló fojtó (2026-10-22) ────────────────────────────────
+        // MIÉRT: a fókusz-őr minden ablak-aktiváláskor több sort ír (restore,
+        // handover, keeper, lost/got focus), és mért esetben másodpercenként
+        // többször ismétlődött — a state\window.log 183 KB-ra hízott egyetlen
+        // délelőtt alatt. A napló írása lemezen, zárolt kritikus szakaszban
+        // történik, vagyis a fókusz-visszaállításról szóló sorok versenyeznek a
+        // felhasználó gépelésével. Ezért a fókusz-sorokat másodpercenként
+        // legfeljebb kettőre korlátozzuk; a hibákra (ERROR) nem vonatkozik.
+        private static readonly object FocusGate = new object();
+        private static DateTime _focusLogWindow = DateTime.MinValue;
+        private static int _focusLogCount;
+
+        private static bool FocusLogSuppressed(string message)
+        {
+            if (message == null) return false;
+            if (message.Length < 6) return false;
+            if (!message.StartsWith("focus ", StringComparison.Ordinal)) return false;
+            lock (FocusGate)
+            {
+                DateTime now = DateTime.UtcNow;
+                if (_focusLogWindow == DateTime.MinValue || (now - _focusLogWindow).TotalSeconds >= 1)
+                {
+                    _focusLogWindow = now;
+                    _focusLogCount = 0;
+                }
+                if (_focusLogCount >= 2) return true;
+                _focusLogCount++;
+                return false;
+            }
+        }
+
         private static void Write(string level, string message)
         {
             if (string.IsNullOrEmpty(Path)) return;
+            if (level == "INFO " && FocusLogSuppressed(message)) return;
             try
             {
                 lock (Gate)

@@ -238,3 +238,51 @@ if ($LauncherLocked) {
   Write-Host '          A hasznalathoz csukd be az indítót, majd futtasd:'
   Write-Host '            Move-Item bin\DshLauncher.exe.new bin\DshLauncher.exe -Force'
 }
+
+# --- natív tálca (DshTray.exe) -----------------------------------------------
+# Ez váltja ki a tray\dsh-tray.ps1 (72 KB PowerShell) és a PowerShell watchdog
+# ciklust: egyetlen folyamat tartja életben a harness node-ot, a fallback proxyt
+# és az ablakot, és ez futtatja az ütemezett karbantartást is.
+$TraySrc = Join-Path $Root 'src\DshTray.cs'
+$TrayExe = Join-Path $OutDir 'DshTray.exe'
+if (Test-Path $TraySrc) {
+  $trayRefs = @(
+    (Resolve-FrameworkAssembly 'mscorlib.dll'),
+    (Resolve-FrameworkAssembly 'System.dll'),
+    (Resolve-FrameworkAssembly 'System.Core.dll'),
+    (Resolve-FrameworkAssembly 'System.Drawing.dll'),
+    (Resolve-FrameworkAssembly 'System.Windows.Forms.dll')
+  )
+
+  $TrayLocked = $false
+  if (Test-Path $TrayExe) {
+    try {
+      $probe = [System.IO.File]::Open($TrayExe, 'Open', 'ReadWrite', 'None')
+      $probe.Close()
+    }
+    catch { $TrayLocked = $true }
+  }
+  $TrayTarget = if ($TrayLocked) { "$TrayExe.new" } else { $TrayExe }
+
+  $trayArgs = @(
+    '-nologo', '-noconfig', '-target:winexe', '-platform:anycpu',
+    '-langversion:7.3', '-optimize+', '-utf8output',
+    "-out:$TrayTarget"
+  )
+  if (Test-Path $Icon) { $trayArgs += "-win32icon:$Icon" }
+  $trayArgs += ($trayRefs | ForEach-Object { "-r:$_" })
+  $trayArgs += $TraySrc
+
+  & $csc @trayArgs 2>&1 | ForEach-Object { Write-Host $_ }
+  if ($LASTEXITCODE -ne 0) { throw "A tálca fordítása sikertelen (exit $LASTEXITCODE)." }
+
+  $tinfo = Get-Item $TrayTarget
+  Write-Host ("KÉSZ    : {0} ({1:N0} byte)" -f $tinfo.FullName, $tinfo.Length)
+  if ($TrayLocked) {
+    Write-Host ''
+    Write-Host 'FIGYELEM: a futo talca foglalja a bin\DshTray.exe fajlt, ezert az uj valtozat'
+    Write-Host "          ide kerult: $TrayTarget"
+    Write-Host '          A hasznalathoz allitsd le a talcat, majd futtasd:'
+    Write-Host '            Move-Item bin\DshTray.exe.new bin\DshTray.exe -Force'
+  }
+}

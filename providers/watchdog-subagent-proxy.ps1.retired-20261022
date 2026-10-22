@@ -89,14 +89,16 @@ function Ensure-Ollama {
         Invoke-RestMethod "http://127.0.0.1:$OllamaPort/api/version" -TimeoutSec 3 | Out-Null
         return $true
     } catch {
-        $exe = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama app.exe'
-        if (Test-Path $exe) {
-            Start-Process -FilePath $exe -WindowStyle Hidden -ErrorAction SilentlyContinue
-            Write-Log "OLLAMA INDITAS: nem valaszolt a $OllamaPort porton — 'ollama app.exe' elindítva (helyi tartalék)"
-            Say 'Az Ollama nem válaszolt — elindítottam (helyi tartalék).' 'Yellow'
-        } else {
-            Write-Log "FIGYELMEZTETES: az Ollama nem valaszol, es a futtathato nem talalhato: $exe"
-        }
+        # 2026-10-22: NEM indítjuk el automatikusan.
+        # MERVE: a javított lánc-sorrend (az ollama a lánc VÉGÉN, az élő
+        # Alibaba-célok mögött) mellett 10 082 naplósor alatt EGYETLEN kérést
+        # sem szolgált ki (deepseek-flash 152, alibaba 29, ollama 0), viszont
+        # melegen tartva 6,6 GB VRAM-ot és ~93% GPU-terhelést foglal — ez volt
+        # az egyik tényező a 2026-10-22-i fagyásban.
+        # Ha mégis kell (pl. minden felhős cél elesett), indítsd kézzel:
+        #   Start-Process "$env:LOCALAPPDATA\Programs\Ollama\ollama app.exe"
+        # A proxy ilyenkor egyszerűen kihagyja a helyi célt (cooldown), nem áll meg.
+        Write-Log "OLLAMA OFF: nem valaszol a $OllamaPort porton — szandekosan NEM inditjuk (on-demand cel, lasd a megjegyzest)"
         return $false
     }
 }

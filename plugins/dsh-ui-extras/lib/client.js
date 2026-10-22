@@ -5281,6 +5281,39 @@ window.__ModuleLoader__.load({
      */
     var terminalIntent = { want: false, rail: false, known: false };
 
+    // ── PÁNKÉNTI PILLANATKÉP (2026-10-22) ──────────────────────────────────
+    // MIÉRT: a fenti 'terminalWanted' a MUNKATERÜLET layout-dokumentumában él,
+    // és csak akkor íródik, amikor a terminál megnyílik — a bezárás soha nem
+    // kerül bele. Ezért az a jelentése: „ebben a projektben VALAHA nyitottak
+    // terminált", nem az, hogy kilépéskor nyitva volt-e. Következmény: aki
+    // egyszer megnyitotta, annál minden indításnál visszajött — minden olyan
+    // panelen, amely ugyanazt a munkaterületet mutatta.
+    //
+    // A helyes jel az, ami KILÉPÉSKOR tényleg a képernyőn volt. Ezt panelek
+    // szerint kell tárolni, és erre a localStorage a pontos eszköz: minden
+    // panel saját WebView2-profilt használ (state\webview2\pane-N), tehát a
+    // localStorage panelek szerinti, és túléli az alkalmazás újraindítását is.
+    var TERMINAL_EXIT_SNAPSHOT_KEY = "dsh-ui-extras:terminal-at-exit";
+
+    /** Mit mutatott EZ a panel kilépéskor: true/false, vagy null (még nincs adat). */
+    function readPaneSnapshot() {
+      try {
+        var v = window.localStorage.getItem(TERMINAL_EXIT_SNAPSHOT_KEY);
+        return v === null ? null : v === "1";
+      } catch (error) {
+        return null;
+      }
+    }
+
+    /** A pillanatnyi állapot rögzítése panelek szerint. */
+    function writePaneSnapshot(present) {
+      try {
+        window.localStorage.setItem(TERMINAL_EXIT_SNAPSHOT_KEY, present ? "1" : "0");
+      } catch (error) {
+        // Privát mód / tiltott tároló: a viselkedés marad a régi (munkaterületi).
+      }
+    }
+
     /** True once the page is unloading: its unmounts are not the reader's doing. */
     var pageGoingAway = false;
 
@@ -5368,10 +5401,15 @@ window.__ModuleLoader__.load({
     function loadTerminalIntent(workspace) {
       if (!workspace) return Promise.resolve(terminalIntent);
       return loadPanelLayout(workspace).then(function (layout) {
-        var wanted = Number(layout[TERMINAL_WANT_KEY] || 0) === 1;
         var rail = Number(layout[TERMINAL_RAIL_KEY] || 0) === 1;
         if (!terminalIntent.known) {
-          terminalIntent.want = wanted;
+          // A panel SAJÁT kilépéskori állapota dönt. Ha még nincs ilyen (ez az
+          // első indítás a javítás után), ZÁRVA indulunk: a munkaterületi
+          // 'terminalWanted' ugyanis csak azt jelenti, hogy „valaha nyitottak
+          // itt terminált", és pont ez okozta, hogy minden panelen visszajött.
+          // Egyszer meg kell nyitni ott, ahol kell — onnantól megjegyzi.
+          var atExit = readPaneSnapshot();
+          terminalIntent.want = atExit === null ? false : atExit;
           terminalIntent.rail = rail;
         }
         terminalIntent.known = true;
@@ -7704,7 +7742,12 @@ window.__ModuleLoader__.load({
       }, "ui-extras: terminal presence watcher");
 
       ctx.effect(function () {
-        var onLeaving = function () { pageGoingAway = true; };
+        // Kilépéskor MENTJÜK, mi volt a képernyőn — ez lesz a következő indítás
+        // visszaállítási döntése (panelek szerint).
+        var onLeaving = function () {
+          pageGoingAway = true;
+          writePaneSnapshot(terminalPanelPresent());
+        };
         window.addEventListener("pagehide", onLeaving);
         window.addEventListener("beforeunload", onLeaving);
         return function () {
@@ -7712,6 +7755,25 @@ window.__ModuleLoader__.load({
           window.removeEventListener("beforeunload", onLeaving);
         };
       }, "ui-extras: terminal page-hide marker");
+
+      // Pane-szintű pillanatkép fenntartása: 3 másodpercenként, de csak
+      // változáskor, és csak a boot-döntés után (az első 8 másodpercben a
+      // visszaállítás fut, ilyenkor a terminál még jogosan nincs a képernyőn).
+      // Erre azért van szükség a pagehide mellett, mert egy összeomlás vagy
+      // kényszerített leállás nem feltétlenül küld lap-elhagyás eseményt.
+      ctx.effect(function () {
+        var armed = false;
+        var last = null;
+        var armTimer = setTimeout(function () { armed = true; }, 8000);
+        var timer = setInterval(function () {
+          if (!armed) return;
+          var present = terminalPanelPresent();
+          if (present === last) return;
+          last = present;
+          writePaneSnapshot(present);
+        }, 3000);
+        return function () { clearTimeout(armTimer); clearInterval(timer); };
+      }, "ui-extras: terminal exit snapshot");
 
       // The one-off key an earlier build used; the intent lives in the layout
       // document now, so a stale marker would only mislead the next diagnosis.
