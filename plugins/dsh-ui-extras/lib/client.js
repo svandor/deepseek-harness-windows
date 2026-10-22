@@ -5276,6 +5276,10 @@ window.__ModuleLoader__.load({
       return function () {
         clearInterval(timer);
         writeTerminalPrefs(workspace, { terminalOpen: 0 });
+        /* NOTE: Do NOT clear the localStorage marker here. We need it to distinguish
+         * between intentional closes (user explicitly closed panel) and automatic
+         * closes (DSH clearing panels during session switch). The restore loop checks
+         * the age of this marker to decide whether to reopen. */
       };
     }
 
@@ -5785,6 +5789,9 @@ window.__ModuleLoader__.load({
       // next page then reopens it. Closing the tab clears the flag immediately,
       // so a deliberate close stays closed.
       react.useEffect(function () {
+        /* Persist to localStorage when panel mounts: survives session switches.
+         * Our restore loop checks this even when host heartbeat is already cleared. */
+        try { var k="dsh.ui-extras.term.opened"; localStorage.setItem(k,"1"); } catch(e){}
         return startTerminalHeartbeat(workspaceDir);
       }, [workspaceDir]);
 
@@ -7532,9 +7539,37 @@ window.__ModuleLoader__.load({
               " width=" + String(layout.rightbarWidth || 0));
             dumpPanelState("after fetch", workspace);
 
-            // The heartbeat is cleared only when the tab is CLOSED, so a non-zero
-            // beat means the panel was on screen. Older than half an hour is stale.
+            // Determine whether to reopen the terminal tab:
+            // - If beat > 0 and recent → terminal was definitely on screen
+            // - If beat === 0 and our localStorage marker exists AND was set recently →
+            //   likely just closed by a session switch (which happens faster than manual close)
+            var shouldOpen = false;
             if (beat > 0 && age >= 0 && age <= 1800) {
+              shouldOpen = true;
+            } else {
+              /* Check if the terminal was recently opened per our own tracking. */
+              try {
+                var termKey = "dsh.ui-extras.term.opened";
+                var tsRaw = localStorage.getItem(termKey);
+                if (tsRaw !== null) {
+                  var tsNum = Number(tsRaw);
+                  if (!isNaN(tsNum) && tsNum > 0) {
+                    var nowSec = Math.floor(Date.now() / 1000);
+                    var openAge = nowSec - tsNum;
+                    /* If terminal was opened within the last 60 seconds, it was likely
+                     * closed automatically by DSH during session switch. Reopen it.
+                     * For older opens, trust that a manual close was intentional. */
+                    if (openAge < 60 && beat === 0) {
+                      shouldOpen = true;
+                      reportToHost("terminal restore", "recently-closed detected (age=" + String(openAge) + ")");
+                    }
+                  }
+                }
+              } catch(e) {}
+            }
+            if (shouldOpen) {
+              /* Clean up marker after restoring — prevents endless restore loops. */
+              try { localStorage.removeItem("dsh.ui-extras.term.opened"); } catch(e) {}
               var opened = "ok";
               try {
                 ctx.sidebarRight.openTab(TERMINAL_KIND);
@@ -7573,15 +7608,72 @@ window.__ModuleLoader__.load({
               // What the page looks like AFTER the restore, which is the state the
               // next reload has to reproduce.
               setTimeout(function () { dumpPanelState("after restore", workspace); }, 3000);
-              // Done: one restore per page, not one per second.
-              clearInterval(restoreTimer);
+              // Re-open the interval: it keeps checking after every session change, so a new workflow that
+              // briefly closes the terminal will cause it to reopen if the user had it visible moments ago.
+              clearInterval(restoreTimer);  // stop the old one-shot timer
+              tryRestoreTimer = setInterval(tryRestoreTerminal, 1500);
             }
           })
           .catch(function () { });
       }
 
       restoreTimer = setInterval(tryRestoreTerminal, 1000);
-      ctx.effect(function () { return function () { if (restoreTimer !== null) clearInterval(restoreTimer); }; }, "ui-extras: terminal restore");
+      var tryRestoreTimer = null;
+      ctx.effect(function () { return function () { if (restoreTimer !== null) clearInterval(restoreTimer); if (tryRestoreTimer !== null) clearInterval(tryRestoreTimer); }; }, "ui-extras: terminal restore");
+
+      // Automatic terminal reopen on new workflow / session change.
+      // Three complementary mechanisms ensure reliability across all DSH builds.
+
+      /* Reset helper: clears all intervals AND resets the attempt budget */
+      function resetAndRestart() {
+        try { if (restoreTimer !== null) clearInterval(restoreTimer); } catch(e2) {}
+        try { if (tryRestoreTimer !== null) clearInterval(tryRestoreTimer); } catch(e2) {}
+        restoreAttempts = 0;  // allow full budget again for the new session
+        reportToHost("terminal restore", "cycle restarted, budget reset");
+        tryRestoreTimer = setInterval(tryRestoreTerminal, 1500);
+      }
+
+      /* Method 2 — MutationObserver on the sidebar DOM.
+       * Every time DSH re-renders the right-bar (new workflow), childList mutations fire. */
+      try {
+        var domTarget = document.querySelector('[data-rightbar]') || document.getElementById('root');
+        if (domTarget) {
+          var _mutObs = new MutationObserver(function () {
+            reportToHost("terminal restore", "DOM mutation detected");
+            resetAndRestart();
+          });
+          _mutObs.observe(domTarget, { childList: true, subtree: true });
+          ctx.effect(function () { return function () { try { _mutObs.disconnect(); } catch(e) {}; }; }, "ui-extras: terminal restore DOM watch");
+        }
+      } catch(e) {}
+
+      /* Method 3 — Periodic layout polling.
+       * When the heartbeat disappears (beat goes to 0 or becomes stale), restart. */
+      var _lastLayoutHash = '';
+      setInterval(function () {
+        try {
+          var w = hostWorkspace || selectedWorkspaceOf(ctx.workspaces);
+          if (!w) return;
+          fetch(LAYOUT_ROUTE + "?workspace=" + encodeURIComponent(w), { headers: { Accept: "application/json" } })
+            .then(function (r) { return r.json(); })
+            .then(function (body) {
+              if (body && body.ok && body.layout) {
+                var hash = JSON.stringify(body.layout);
+                if (hash !== _lastLayoutHash) {
+                  _lastLayoutHash = hash;
+                  var beat = Number(body.layout.terminalOpen || 0);
+                  var nowSec = Math.floor(Date.now() / 1000);
+                  var age = beat > 0 ? nowSec - beat : -1;
+                  if (beat <= 0 || age > 60) {
+                    reportToHost("terminal restore", "layout poll: beat gone/old, restarting");
+                    resetAndRestart();
+                  }
+                }
+              }
+            })
+            .catch(function () {});
+        } catch(e) {}
+      }, 3000);
 
       // A dump early in the page's life, before any restore runs: it shows what the
       // framework restored on its own, plus how the resize handle is reachable.
