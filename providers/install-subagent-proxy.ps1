@@ -79,8 +79,27 @@ $lnkPath = Join-Path $startupDir 'DSH subagent proxy watchdog.lnk'
 $oldLnk = Join-Path $startupDir 'DSH subagent proxy.lnk'
 $logonTaskName = "$TaskName (logon)"
 
-if (-not (Test-Path $watchdog)) { throw "Nem találom: $watchdog" }
-if (-not (Test-Path $starter)) { throw "Nem találom: $starter" }
+# ── kivonultatott watchdog-lánc (2026-10-22) ──────────────────────────────
+# A PowerShell/VBS watchdogot a natív bin\DshTray.exe váltotta fel; a régi
+# szkriptek .retired-20261022 néven maradtak meg. Ha ezt a telepítőt valaki
+# mégis lefuttatja, NE regisztráljon újra wscript-alapú ütemezett feladatot:
+# az a már nem létező start-watchdog-hidden.vbs-re mutatna, és 5 percenként
+# "A szkriptfájl nem található" hibadobozt dobna (mért hiba, 2026-10-22).
+# Ilyenkor inkább tisztítsuk el az itt maradt régi indítókat, és lépjünk ki.
+if (-not (Test-Path $watchdog) -or -not (Test-Path $starter)) {
+    Write-Host "A watchdog-lánc kivonultatva (a proxy felügyeletét a bin\DshTray.exe látja el) — nincs mit telepíteni." -ForegroundColor Yellow
+    foreach ($tn in @($TaskName, $logonTaskName)) {
+        $null = & schtasks.exe /Delete /TN $tn /F 2>&1
+        if ($LASTEXITCODE -eq 0) { Write-Host "  Régi ütemezett feladat törölve: '$tn'" -ForegroundColor Green }
+    }
+    foreach ($l in @($lnkPath, $oldLnk)) {
+        if (Test-Path $l) {
+            Remove-Item $l -Force -ErrorAction SilentlyContinue
+            Write-Host "  Régi Startup parancsikon törölve: $(Split-Path $l -Leaf)" -ForegroundColor Green
+        }
+    }
+    return
+}
 if (-not (Test-Path $reportDir)) { New-Item -ItemType Directory -Path $reportDir -Force | Out-Null }
 
 # ── eltávolítás ───────────────────────────────────────────────────────────
