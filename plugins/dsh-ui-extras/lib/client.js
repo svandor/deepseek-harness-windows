@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Browser half of the DSH UI extras plugin: the extended statistics row.
  *
  * Hand-written bundle in the same shape the built client plugins use. The
@@ -2184,77 +2184,156 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Auto-modell Elő cél-overlay (2026-10-20, Útvonal B).
+     * Auto-modell cél-overlay PANELENKÉNT (2026-10-22).
      *
-     * A DSH modellválasztó boot-pillanatképből dolgozik, ezért a statikus
-     * név nem frissül automatikusan. Ez a modul a proxy `/healthz` végpontjának
-     * `intelligent.decisions` szekciójából lekérdezett konkrét modellt felülírja
-     * a picker triggerében — tiszta DOM overlay, nincs React függés.
+     * MIÉRT PANELENKÉNT: a DSH a modell-listában egyetlen GLOBÁLIS "Auto" sort
+     * lát (a proxy `settings.yaml`-ba írt címkéje is globális volt, ezért a
+     * három panel ugyanazt mutatta). A tényleges cél viszont session-önként
+     * más lehet. A host (`/ui-extras/auto-target?session=<id>`) a
+     * `llm/stream` waterfallon feljegyzett első-felhasználói-üzenet hash-ből
+     * kérdezi le a proxy `/healthz`-ét, ezért minden panel a SAJÁT sessionje
+     * id-ját küldi be.
      *
-     * Polling: 5 s. MutationObserverrel védi a React újrarajzolását.
+     * A címke csak akkor íródik felül, ha a picker tényleg az "Auto" sort
+     * mutatja — egy konkrét modell kiválasztását nem bántjuk.
+     *
+     * Polling: 5 s. A MutationObserver rAF-ra ütemezve patchel, hogy a
+     * streamelés token-mutációi ne futtassanak DOM-keresést minden tokenre.
      */
-    function startAutoTargetOverlay() {
+    function startAutoTargetOverlay(ctx) {
       try {
-        /** Panel-azonosító: egyedi string, hogy minden panel más szöveget jelöljen. */
+        /** Az EBBEN a panelben érvényes Auto-cél (null = nincs / nem tudjuk). */
         var desired = null;
+        /** Melyik session-höz tartozik a `desired` (session-váltáskor eldobjuk). */
+        var desiredSession = null;
         var observer = null;
+        var timer = null;
+        var scheduled = false;
 
-        /** Patch one model-pickerről a span textContent-et az elso Auto-val. */
-        function patchLabel() {
-          if (!desired || typeof document === 'undefined') return;
-          var buttons = document.querySelectorAll('button[aria-haspopup="menu"][title]');
-          for (var i = 0; i < buttons.length; i++) {
-            var btn = buttons[i];
-            var title = btn.getAttribute('title') || '';
-            if (title.indexOf('Auto') !== 0) continue;
-            var span = btn.querySelector('span:not([class*="Icon"]):not([class*="icon"]):not([class*="iconData"])');
-            if (!span) {
-              // fallback: elsо span belso elem
-              for (var j = 0; j < btn.children.length; j++) {
-                if (btn.children[j].nodeName === 'SPAN' && !btn.children[j].getAttribute('style')) {
-                  span = btn.children[j]; break;
-                }
-              }
+        /** Az aktuális session id ebben a panelben (minden panel saját kliens). */
+        function sessionIdNow() {
+          try {
+            var sessions = ctx && ctx.sessions;
+            var snapshot = sessions && sessions.list && typeof sessions.list.getSnapshot === "function"
+              ? sessions.list.getSnapshot()
+              : null;
+            if (snapshot === null || snapshot === undefined) return null;
+            var id = snapshot.current;
+            if (id === undefined || id === null) id = snapshot.selectedId;
+            if (id === undefined || id === null) {
+              var selected = snapshot.selected;
+              id = typeof selected === "string" ? selected : (selected && selected.id);
             }
-            if (span !== null) {
-              var newText = 'Auto → ' + desired;
-              if (span.textContent !== newText) {
-                span.textContent = newText;
-                btn.setAttribute('title', newText);
-              }
-            }
-            break;
+            return id === undefined || id === null ? null : String(id);
+          } catch (error) {
+            return null;
           }
         }
 
-        /** Fetch auto target from host API endpoint. */
+        /**
+         * A panel model-picker gombja (csak ha az "Auto" sort mutatja).
+         *
+         * A LÁTHATÓ szöveget nézzük, nem a title attribútumot: a DSH a
+         * kiválasztott modell nevét a trigger szövegébe teszi, a title/aria
+         * pedig a teljes "Modell választása, jelenlegi: …" mondat (lokalizálva).
+         * A régi overlay ezért (title.startsWith('Auto')) soha nem talált
+         * gombot magyar felületen — a címke a globális settings.yaml érték
+         * maradt.
+         */
+        function findPicker() {
+          if (typeof document === "undefined") return null;
+          var buttons = document.querySelectorAll('button[aria-haspopup="menu"]');
+          for (var i = 0; i < buttons.length; i++) {
+            var button = buttons[i];
+            var text = (button.textContent || "").replace(/^\s+/, "");
+            var title = button.getAttribute("title") || "";
+            if (text.indexOf("Auto") !== 0 && title.indexOf("Auto") !== 0) continue;
+            var span = button.querySelector('span:not([class*="Icon"]):not([class*="icon"]):not([class*="iconData"])');
+            if (span === null) {
+              for (var j = 0; j < button.children.length; j++) {
+                if (button.children[j].nodeName === "SPAN") { span = button.children[j]; break; }
+              }
+            }
+            if (span === null) continue;
+            return { button: button, span: span };
+          }
+          return null;
+        }
+
+        /** A picker szövegének beállítása: "Auto" vagy "Auto → <cél>". */
+        function patchLabel() {
+          if (typeof document === "undefined") return;
+          var picker = findPicker();
+          if (picker === null) return;
+          var button = picker.button;
+          var span = picker.span;
+          var base = span.__dshAutoBase;
+          if (typeof base !== "string") {
+            base = span.textContent || "Auto";
+            // Egy korábbi patchelés nyomára ne építsünk.
+            if (base.indexOf("Auto → ") === 0) base = "Auto";
+            span.__dshAutoBase = base;
+          }
+          var next = desired === null ? base : "Auto → " + desired;
+          if (span.textContent !== next) span.textContent = next;
+          // A title-t CSAK akkor írjuk, ha az maga a modellnév (angol felület);
+          // a magyar "Modell választása, jelenlegi: …" mondatot nem bántjuk.
+          var title = button.getAttribute("title") || "";
+          if (title.indexOf("Auto") === 0 && title !== next) button.setAttribute("title", next);
+        }
+
+        /** Egy patch a következő képkockára (a MutationObserver vihar ellen). */
+        function schedulePatch() {
+          if (scheduled) return;
+          scheduled = true;
+          var run = function () { scheduled = false; patchLabel(); };
+          if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+          else setTimeout(run, 16);
+        }
+
+        /** A panel SAJÁT sessionjének Auto-célja a hosttól. */
         function pollAutoTarget() {
+          var sessionId = sessionIdNow();
+          if (sessionId === null) {
+            if (desired !== null || desiredSession !== null) {
+              desired = null;
+              desiredSession = null;
+              schedulePatch();
+            }
+            return;
+          }
           try {
-            fetch('/ui-extras/auto-target', { method: 'GET', credentials: 'same-origin' })
-              .then(function (r) { return r.json(); })
+            fetch("/ui-extras/auto-target?session=" + encodeURIComponent(sessionId), {
+              method: "GET",
+              credentials: "same-origin"
+            })
+              .then(function (response) { return response.json(); })
               .then(function (data) {
-                if (data?.ok && data?.target?.label) {
-                  if (data.target.label !== desired) {
-                    desired = String(data.target.label);
-                    patchLabel();
-                  }
+                if (sessionIdNow() !== sessionId) return; // közben sessiont váltottunk
+                // `known === true` KELL: a régi host (session nélküli) válasza a
+                // GLOBÁLIS célt adná vissza, az pedig épp a javítandó hiba.
+                var label = data && data.ok && data.known === true && data.target && typeof data.target.label === "string" && data.target.label.length > 0
+                  ? String(data.target.label)
+                  : null;
+                if (label !== desired || desiredSession !== sessionId) {
+                  desired = label;
+                  desiredSession = sessionId;
+                  schedulePatch();
                 }
               })
-              .catch(function () { /* proxy down; tolerált */ });
+              .catch(function () { /* host/proxy áll: a címke marad */ });
           } catch (_e) { /* non-browser context; tolerált */ }
         }
 
-        // Inditás (+ 1x per 5s)
         pollAutoTarget();
-        setInterval(pollAutoTarget, 5000);
+        timer = setInterval(pollAutoTarget, 5000);
 
-        // MutationObserver: React újrarendezés esetén újra patchel
-        observer = new MutationObserver(patchLabel);
+        observer = new MutationObserver(schedulePatch);
         observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true });
 
-        // Cleanup: page unload vagy plugin unmount esetén
-        window.addEventListener('beforeunload', function () {
+        window.addEventListener("beforeunload", function () {
           if (observer) observer.disconnect();
+          if (timer !== null) clearInterval(timer);
         });
       } catch (_err) {
         reportToHost("auto-live", "startAutoTargetOverlay init failed :: " + String(_err && _err.stack ? _err.stack : _err));
@@ -8147,8 +8226,8 @@ window.__ModuleLoader__.load({
         document.head.appendChild(style);
       });
 
-      // Auto-modell Elő címkéje (a DSH model-pickert frissíti a proxy allapon).
-      safeRun("auto live target overlay", startAutoTargetOverlay);
+      // Auto-modell Elő címkéje PANELENKÉNT (a panel a saját sessionje id-ját küldi).
+      safeRun("auto live target overlay", function () { startAutoTargetOverlay(ctx); });
     }
     var inject = ["slots", "locale", "theme", "sessions", "workspaces", "settingsScope", "sidebarRightTabs", "sidebarRight"];
 

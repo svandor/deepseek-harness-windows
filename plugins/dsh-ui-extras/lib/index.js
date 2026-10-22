@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Host half of the UI extras plugin.
  *
  * Routes (all server-side, so the browser never needs a credential):
@@ -96,7 +96,7 @@ const REPO_ROOT = join(PACKAGE_ROOT, "..", "..");
 const BALANCE_URL = "https://api.deepseek.com/user/balance";
 
 /** Services this host plugin needs. */
-const inject = ["webServer", "credentials"];
+const inject = ["webServer", "credentials", "sessions"];
 
 /** How long a balance answer stays fresh before the route asks again. */
 const CACHE_MILLISECONDS = 60000;
@@ -3786,32 +3786,174 @@ function apply(ctx) {
     handler: (req, res) => handleGithubAction(req, res)
   }), "ui-extras: github action route");
 
-  // ── Auto-route aktuális célja a model-pickertől (2026-10-20) ───────────────
-  // Miért kell ez a host végpont? A böngészőből közvetlenül nem éri el a proxy
-  // /healthz-ét CORS-ok miatt; ezt a szerver oldalon átjárózzuk.
+  // ── Auto-route célja PANELENKÉNT (2026-10-22) ─────────────────────────────
+  // MERT HIBA: a proxy a `settings.yaml` `auto-router.models[].name` mezőjébe
+  // írt címkével dolgozott, az viszont EGY, GLOBÁLIS bejegyzés — a három
+  // párhuzamos panel ezért mindig ugyanazt a modellt mutatta. A proxynál a
+  // címke-írás ki van kapcsolva (config.json `autoLabel.enabled: false`), a
+  // tényleges cél pedig innen, session-önként jön.
+  //
+  // MIÉRT A HOST SZÁMOL: a proxy a kérést a `messages` listából azonosítja
+  // (FNV-1a az ELSŐ felhasználói üzenet szövegéből, 1200 karakterig — lásd
+  // proxy.mjs `firstUserKeyOf`). A böngésző ezt nem tudja hűségesen
+  // kiszámolni: a DSH a beszélgetést konvertálva küldi (a rendszerprompt a
+  // kliensen nem is látszik), egy hosszú session ablaka pedig nem is
+  // tartalmazza az első üzenetet. A host az `llm/stream` waterfallon minden
+  // kérésnél megkapja a `sessionId`-t ÉS a `messages` listát — ugyanazt,
+  // amiből a proxy hash-el —, így itt egyszer, pontosan kiszámolható; a
+  // proxy `/healthz?session=<hash>` szűrője pedig visszaadja a session saját
+  // Auto-célját.
+  //
+  // Kikapcsolás: config.json `autoLabel.enabled: true` visszaállítja a régi,
+  // globális viselkedést (a kliens ekkor is a host végpontot kérdezi).
   const HEALTHZ_URL = process.env.PROXY_HEALTH_URL ?? 'http://127.0.0.1:4123/healthz';
-  let lastAutoTarget = null;
-  function fetchAutoTarget() {
+  /** dsh session id -> a proxy session-kulcsa (firstUser hash). */
+  const firstUserBySessionId = new Map();
+  const FIRST_USER_SESSIONS_MAX = 500;
+
+  /**
+   * Az első felhasználói üzenet szövege PONTOSAN úgy, ahogy a pi-ai adapter a
+   * proxy elé küldi: a nem üres `text` blokkok összefűzve ("" közt), a
+   * `tool-result` blokkok kimaradnak. Ha kép/fájl blokk van, a proxy JSON-t
+   * hashel, amit innen nem lehet hűségesen előállítani -> null (nincs címke).
+   */
+  function firstUserTextOf(messages) {
+    if (!Array.isArray(messages)) return null;
+    for (const message of messages) {
+      if (!message || message.role !== 'user') continue;
+      const blocks = Array.isArray(message.content) ? message.content : [];
+      let text = '';
+      let representable = true;
+      for (const block of blocks) {
+        if (!block) continue;
+        if (block.type === 'text') {
+          if (typeof block.text === 'string' && block.text.length > 0) text += block.text;
+          continue;
+        }
+        if (block.type === 'tool-result') continue;
+        representable = false;
+        break;
+      }
+      if (!representable) return null;
+      if (text.length === 0) continue; // az üres user-üzenet kiesik a küldésből
+      return text;
+    }
+    return null;
+  }
+
+  /** A proxy FNV-1a-ja (proxy.mjs `firstUserKeyOf`): 32 bit, kisbetűs hex. */
+  function fnv1aHex(text) {
+    let hash = 2166136261;
+    for (let i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
+  }
+
+  /**
+   * A pi-ai `sanitizeSurrogates` párja: a magányos szürrogátumokat dobja ki.
+   * Csak a hibás UTF-16-ot érinti, a normál szöveget (emoji-párral együtt) nem.
+   */
+  const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+  /** Egy kérésből rögzíti a session -> firstUser hash párost (LRU-szerű). */
+  function rememberSessionFirstUser(options) {
+    const sessionId = options?.sessionId;
+    if (sessionId === undefined || sessionId === null) return;
+    const text = firstUserTextOf(options?.messages);
+    if (text === null) return;
+    const id = String(sessionId);
+    firstUserBySessionId.delete(id);
+    firstUserBySessionId.set(id, fnv1aHex(text.replace(LONE_SURROGATE, '').slice(0, 1200)));
+    while (firstUserBySessionId.size > FIRST_USER_SESSIONS_MAX) {
+      const oldest = firstUserBySessionId.keys().next().value;
+      firstUserBySessionId.delete(oldest);
+    }
+  }
+
+  // Ugyanaz a hallgatási minta, mint a beépített dsh-session-checkpoint-policy
+  // `apply()`-jében: opciók nélküli `ctx.on("llm/stream", ...)`.
+  ctx.effect(() => ctx.on("llm/stream", function (options, next) {
+    try { rememberSessionFirstUser(options); } catch { /* a kérést nem törhetjük el */ }
+    return next();
+  }), "ui-extras: session first-user key");
+
+  /** Egy proxy /healthz hívás; hiba esetén null. */
+  function fetchProxyHealth(query) {
     try {
-      return fetch(HEALTHZ_URL, { signal: AbortSignal.timeout(3000) })
+      return fetch(HEALTHZ_URL + query, { signal: AbortSignal.timeout(3000) })
         .then(r => r.json())
         .catch(() => null);
     } catch { return Promise.resolve(null); }
   }
+
+  /**
+   * A session első felhasználói üzenetének hash-e a DSH ÉLŐ session-állapotából.
+   *
+   * Miért kell a `llm/stream` mellett ez is: a feljegyzett térkép csak azután
+   * tud válaszolni, ha abban a sessionben már ment kérés (a harness
+   * újraindítása után tehát a panel addig "Auto"-t mutatna). A `SessionStore`
+   * viszont a megnyitott sessionhöz `deriveMessages()`-szel odaadja a
+   * modellnek küldendő üzenetlistát — ugyanazt, amiből a proxy hash-el.
+   */
+  function firstUserKeyOfSession(sessionId) {
+    try {
+      const store = ctx.sessions;
+      if (!store || typeof store.get !== "function") return null;
+      const session = store.get(sessionId);
+      if (!session || typeof session.deriveMessages !== "function") return null;
+      const text = firstUserTextOf(session.deriveMessages());
+      if (text === null) return null;
+      const key = fnv1aHex(text.replace(LONE_SURROGATE, '').slice(0, 1200));
+      // Eltároljuk: a deriveMessages() egy hosszú sessionön nem ingyen van, a
+      // panel viszont 5 másodpercenként kérdez. A következő valós kérés
+      // (llm/stream) úgyis felülírja a friss értékkel.
+      const id = String(sessionId);
+      if (!firstUserBySessionId.has(id)) {
+        firstUserBySessionId.set(id, key);
+        while (firstUserBySessionId.size > FIRST_USER_SESSIONS_MAX) {
+          const oldest = firstUserBySessionId.keys().next().value;
+          firstUserBySessionId.delete(oldest);
+        }
+      }
+      return key;
+    } catch {
+      return null;
+    }
+  }
+
   ctx.effect(() => ctx.webServer.register({
     kind: "exact",
     path: "/ui-extras/auto-target",
-    handler: (_req, res) => {
-      fetchAutoTarget().then(data => {
-        if (data?.intelligent?.decisions) {
-          const auto = data.intelligent.decisions.find(d => d.route === 'auto');
-          if (auto && auto.label) {
-            lastAutoTarget = { label: auto.label, at: auto.at || Date.now() };
-          }
-        }
-        sendJson(res, { ok: true, target: lastAutoTarget });
+    handler: (req, res) => {
+      const url = new URL(req.url ?? "/", "http://dsh.invalid");
+      const sessionId = url.searchParams.get("session");
+      // Elsőként a KÉRÉSBŐL feljegyzett kulcs (az pontosan az, amit a proxy
+      // utoljára hashelt); ha az még nincs, az élő session állapotából.
+      const key = sessionId === null
+        ? null
+        : firstUserBySessionId.get(sessionId) ?? firstUserKeyOfSession(sessionId);
+      if (key === null) {
+        // Ebben a sessionben még nem ment kérés (vagy kép/fájl az első
+        // üzenetben): nincs mit mutatni — a panel sima "Auto"-t mutat.
+        sendJson(res, { ok: true, known: false, target: null });
+        return;
+      }
+      fetchProxyHealth("?session=" + encodeURIComponent(key)).then(data => {
+        const sessions = Array.isArray(data?.intelligent?.sessions) ? data.intelligent.sessions : [];
+        // Elméletben egy firstUser hash-hez több session is tartozhat (ha két
+        // beszélgetés első üzenete szó szerint azonos). A panel az, amelyik az
+        // imént kérést adott, ezért a LEGFRISSEBB találat a sajátja.
+        const matches = sessions.filter(s => s && (s.firstUser === key || s.session === key));
+        matches.sort((a, b) => Number(a.idleSec ?? 1e9) - Number(b.idleSec ?? 1e9));
+        const hit = matches[0] ?? null;
+        const target = hit && typeof hit.label === 'string' && hit.label.length > 0
+          ? { label: hit.label, reason: hit.reason ?? null, idleSec: hit.idleSec ?? null, firstUser: key }
+          : null;
+        sendJson(res, { ok: true, known: true, target });
       }).catch(err => {
-        sendJson(res, { ok: false, error: err?.message ?? String(err), target: lastAutoTarget });
+        sendJson(res, { ok: false, known: true, error: err?.message ?? String(err), target: null });
       });
     }
   }), "ui-extras: auto-target route");

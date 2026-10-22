@@ -8,6 +8,8 @@
 
   Amit beállít:
     1) Ütemezett feladat: "HáziRobot due" — 15 percenként futtatja az esedékes jobokat
+       (rejtett VBS indítóval: a wscript nem hoz létre konzolablakot — lásd a 2. lépés
+       MÉRT HIBA megjegyzését; a már létező feladatot a register-hidden-task.ps1 állítja át)
     2) Startup parancsikon: "HáziRobot panel" — bejelentkezéskor indul a webhook-fogadó
     3) bot\secrets.json a mintából (ha még nincs)
     4) Ellenőrzés: job-definíciók, panel, avatar
@@ -87,16 +89,28 @@ if (-not (Test-Path $secrets)) {
 # FONTOS: a `schtasks /TR` elhasal, ha az útvonal szóközt tartalmaz (ez mért hiba
 # volt: 'Invalid argument/option - C:\Szerver\Deepseek'). Ezért a ScheduledTasks
 # modult használjuk, ami az argumentumokat rendesen átadja.
-Write-Step "Ütemezett feladat: $taskName (15 percenként)"
-$psExe = (Get-Command powershell.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source
-if (-not $psExe) { $psExe = 'powershell.exe' }
-$taskArg = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$bot\run-job.ps1`" due"
+#
+# MÉRT HIBA (2026-10-22, 23:31:01): a feladat közvetlenül a powershell.exe-t
+# indította `-WindowStyle Hidden`-nel, és a konzolablak LÁTHATÓAN létrejött,
+# elvette a fókuszta (mért: a foreground a powershell ConsoleWindowClass lett,
+# a DSH ablaka elvesztette), majd a PowerShell elrejtette — 15 percenként egy
+# fél másodperces villanás. A `-WindowStyle Hidden` ugyanis csak a létrehozás
+# UTÁN hívja a ShowWindow(SW_HIDE)-ot. A megoldás a VBS-burkoló: a wscript
+# `Run(cmd, 0, True)` egyáltalán nem hoz létre konzolablakot, és megvárja a
+# szkript végét (a Task Scheduler a valódi exit kódot látja).
+Write-Step "Ütemezett feladat: $taskName (15 percenként, rejtett VBS indítóval)"
+$wscript = Join-Path $env:SystemRoot 'System32\wscript.exe'
+$hiddenLauncher = Join-Path $bot 'run-job-hidden.vbs'
+$taskArg = "//nologo `"$hiddenLauncher`" due"
+if (-not (Test-Path $hiddenLauncher)) {
+    Write-Host "  FIGYELEM: hiányzik a $(Split-Path $hiddenLauncher -Leaf) — a feladat látható konzollal indulna." -ForegroundColor Yellow
+}
 if ($DryRun) {
-  Write-Host "  (dry-run) Register-ScheduledTask -TaskName `"$taskName`" -Execute `"$psExe`" -Argument $taskArg -Every 15 min"
+    Write-Host "  (dry-run) Register-ScheduledTask -TaskName `"$taskName`" -Execute `"$wscript`" -Argument $taskArg -Every 15 min"
 } else {
   $ErrorActionPreference = 'Continue'
   try {
-    $action = New-ScheduledTaskAction -Execute $psExe -Argument $taskArg -WorkingDirectory $bot
+    $action = New-ScheduledTaskAction -Execute $wscript -Argument $taskArg -WorkingDirectory $bot
     $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date.AddMinutes(1) `
       -RepetitionInterval (New-TimeSpan -Minutes 15)
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `

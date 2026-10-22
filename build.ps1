@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Builds the native DSH window launcher (bin\DshWindow.exe).
 
@@ -26,6 +26,7 @@ $ErrorActionPreference = 'Stop'
 $Root    = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Src     = Join-Path $Root 'src\DshWindow.cs'
 $LauncherSrc = Join-Path $Root 'src\DshLauncher.cs'
+$PendingUpdateSrc = Join-Path $Root 'src\PendingUpdate.cs'
 $OutDir  = Join-Path $Root 'bin'
 $LibDir  = Join-Path $Root 'lib'
 $Exe     = Join-Path $OutDir 'DshWindow.exe'
@@ -170,6 +171,7 @@ if (Test-Path $Icon) { $cscArgs += "-win32icon:$Icon" }
 else { Write-Host "FIGYELEM: nincs $Icon, az ablak alapértelmezett ikonnal indul." }
 $cscArgs += ($refs | ForEach-Object { "-r:$_" })
 $cscArgs += $Src
+if (Test-Path $PendingUpdateSrc) { $cscArgs += $PendingUpdateSrc }
 
 Write-Host "Fordító : $csc"
 Write-Host "WebView2: $wv2Core"
@@ -182,12 +184,16 @@ if (-not (Test-Path $CompileTarget)) { throw "A fordítás lefutott, de nem kés
 
 $info = Get-Item $CompileTarget
 Write-Host ("KÉSZ    : {0} ({1:N0} byte)" -f $info.FullName, $info.Length)
+
+# --- automatikus csere --------------------------------------------------------
+# A futo ablak foglalja a bin\DshWindow.exe-t, ezert .new-ba fordultunk.
+# A cseret NEM itt vegezzuk (a build folyamat kozben zarolhat), hanem a
+# DshLauncher / DshTray / DshWindow indulasakor: azok a PendingUpdate.Apply-val
+# athelyezik a varakozo .new fajlt, amint a cel nem zarolt. Igy kezi parancs
+# NELKUL, a kovetkezo inditasnal mar a friss program fut.
 if ($ExeLocked) {
   Write-Host ''
-  Write-Host 'FIGYELEM: a futo ablak foglalja a bin\DshWindow.exe fajlt, ezert az uj valtozat'
-  Write-Host "          ide kerult: $CompileTarget"
-  Write-Host '          A hasznalathoz csukd be az ablakot, majd futtasd:'
-  Write-Host '            Move-Item bin\DshWindow.exe.new bin\DshWindow.exe -Force'
+  Write-Host 'A futo ablak foglalja az exe-t: a csere a kovetkezo inditasnal AUTOMATIKUSAN megtortenik.'
 }
 
 # --- launcher exe ------------------------------------------------------------
@@ -224,6 +230,7 @@ $launcherArgs = @(
 if (Test-Path $Icon) { $launcherArgs += "-win32icon:$Icon" }
 $launcherArgs += ($launcherRefs | ForEach-Object { "-r:$_" })
 $launcherArgs += $LauncherSrc
+if (Test-Path $PendingUpdateSrc) { $launcherArgs += $PendingUpdateSrc }
 
 & $csc @launcherArgs
 if ($LASTEXITCODE -ne 0) { throw "Az indító fordítása sikertelen (exit $LASTEXITCODE)." }
@@ -272,6 +279,7 @@ if (Test-Path $TraySrc) {
   if (Test-Path $Icon) { $trayArgs += "-win32icon:$Icon" }
   $trayArgs += ($trayRefs | ForEach-Object { "-r:$_" })
   $trayArgs += $TraySrc
+  if (Test-Path $PendingUpdateSrc) { $trayArgs += $PendingUpdateSrc }
 
   & $csc @trayArgs 2>&1 | ForEach-Object { Write-Host $_ }
   if ($LASTEXITCODE -ne 0) { throw "A tálca fordítása sikertelen (exit $LASTEXITCODE)." }

@@ -728,6 +728,16 @@ namespace DshTray
         [STAThread]
         private static void Main()
         {
+            // Függő frissítés alkalmazása: a build által hátrahagyott
+            // *.exe.new fájlok cseréje, amint a célfájl nincs zárolva.
+            try
+            {
+                string root = System.IO.Path.GetFullPath(
+                    System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".."));
+                PendingUpdate.Apply(root);
+            }
+            catch { }
+
             // Egyetlen tálca-példány: a második indítás egyszerűen kilép.
             bool created;
             _mutex = new Mutex(true, "DshTraySingleInstance", out created);

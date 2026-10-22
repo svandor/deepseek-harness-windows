@@ -1,4 +1,4 @@
-// DshLauncher - the pinnable entry point of the DeepSeek Harness tray.
+﻿// DshLauncher - the pinnable entry point of the DeepSeek Harness tray.
 //
 // Why this exists: Windows 11 refuses to pin (or drag to the taskbar) any
 // shortcut whose target is not a real executable - a .cmd/.bat/.ps1 target gives
@@ -28,6 +28,16 @@ internal static class DshLauncher
     private static int Main(string[] args)
     {
         string root = ResolveRoot();
+
+        // Függő frissítés alkalmazása MINDEN induláskor (2026-01-XX).
+        //
+        // MIÉRT: a build nem tudja felülírni a bin\DshWindow.exe-t, amíg az ablak
+        // fut, ezért .new néven hagyja. Eddig ezt a felhasználónak kellett kézzel
+        // átmozgatnia — cmd.exe-ben ráadásul a Move-Item parancs sem létezik, így
+        // a frissítés csendben elmaradt, és továbbra is a régi exe futott.
+        // Most az indító a legelső dolgaként athelyezi a várakozó .new fájlt,
+        // amint a célfájl már nem zárolt (azaz az ablak bezárult).
+        PendingUpdate.Apply(root);
 
         if (args.Length > 0 && (args[0] == "--help" || args[0] == "-h" || args[0] == "/?"))
         {

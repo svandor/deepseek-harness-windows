@@ -75,6 +75,20 @@ namespace DshWindow
             Logger.Init(opts.LogFile);
             Logger.Info("launcher start: pid=" + Process.GetCurrentProcess().Id + " args=" + string.Join(" ", args));
 
+            // Függő frissítések alkalmazása: a saját exénket futás közben nem
+            // lehet kicserélni (ezt a zárolás-próba kihagyja), de a tálcáét és
+            // az indítóét igen. Így a frissítés akkor is eljut, ha a felhasználó
+            // közvetlenül ezt az ablakot indítja el.
+            try
+            {
+                string rootDir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".."));
+                PendingUpdate.Apply(rootDir);
+            }
+            catch (Exception updateError)
+            {
+                Logger.Info("pending update skipped: " + updateError.Message);
+            }
+
             // A futo peldany kora: a hibakeresesnel ez donti el, hogy a javitott
             // vagy egy korabbi exe fut-e (a talca "Megnyitas" gombja ugyanis a
             // MAR futo ablakot hozza eloterbe, uj ablakot nem nyit).
@@ -542,18 +556,6 @@ namespace DshWindow
         private System.Windows.Threading.DispatcherTimer _tokenWatch;
         private DateTime _tokenWatchSince;
 
-        // ── panel-életjel (2026-10-22) ─────────────────────────────────────
-        // MIÉRT: a WebView2 renderere képes úgy beragadni, hogy a háttér (a node
-        // harness) közben egészséges marad — mért eset: a renderer 127%-on
-        // pörgött egy magon, a panel nem válaszolt, a naplóba közben semmi sem
-        // került, és a felhasználó csak az ablak újraindításával tudta helyre
-        // tenni. Ezért a host MAGA kérdez rá minden panelre: ha a renderer nem
-        // válaszol, a panelt automatikusan újratölti.
-        private System.Windows.Threading.DispatcherTimer _healthWatch;
-        private int _healthFails;
-        private int _reloads;
-        private DateTime _reloadWindow = DateTime.MinValue;
-        private DateTime _pluginStamp = DateTime.MinValue;
 
         /// <summary>The child HWND WebView2 renders into (focus target).</summary>
         internal IntPtr ChildHandle { get { return _child; } }
@@ -988,129 +990,22 @@ namespace DshWindow
         }
 
         /// <summary>
-        /// Panel-életjel: 60 másodpercenként egy triviális szkriptet futtat a
-        /// rendererben. Ha az 60 másodpercen belül nem válaszol, a renderer
-        /// beragadt — öt egymást követő kihagyás után a panel újratöltődik.
+        /// Panel-életjel: KIKAPCSOLVA.
         ///
-        /// MIÉRT ÍGY: a háttér (node) ilyenkor végig egészséges, ezért a
-        /// megszokott „szerverhiba" jelzések nem segítenek; egyedül a renderer
-        /// kérdezhető meg közvetlenül. A `Runtime.evaluate` helyett a magasabb
-        /// szintű `ExecuteScriptAsync` kell, mert az a UI-szálon marad.
+        /// A korábbi változat 15 másodpercenként szkriptet futtatott a rendererben,
+        /// és ha az 8 másodpercen belül nem válaszolt, Automatikusan ÚJRATÖLTÖTTE
+        /// a panelt. Egy nagy beszélgetés kirajzolása vagy egy lassú hálózati
+        /// válasz miatt ez hamis "beragadt renderer" jelzést adott, és a panel
+        /// újratöltése adatvesztéssel járt.
+        ///
+        /// A felhasználó kérésére a paneleket SOHA nem töltjük újra automatikusan:
+        /// ez a metódus szándékosan nem csinál semmit. Ha egy panel valóban
+        /// megakad, azt a felhasználó manuálisan állítja helyre (újraindítás).
         /// </summary>
-        /// ── életjel-figyelő szigorítás (2026-01-XX) ─────────────────────────
-        // MIÉRT KELL ÚJRA: az előző javítás `_healthBusy` duplaguardot használt
-        // (RunHealthProbe-ben ÉS CheckHealthAsync-ben), ami versenyfeltételt
-        // okozott: amikor CheckHealthAsync vége lett, _healthBusy=false-re állt,
-        // majd a RunHealthProbe finally újra leállította — közben a Tick handler
-        // már engedte az újabb belépést → gyors egymás utáni probe → több
-        // bemeneti ponton is _healthFails++ → ReloadPane-robbanás. Ez okozta a
-        // felhasználó által tapasztalt "lefagyasztás/újraindítás" ciklust.
-        // FIX: egyetlen megbízható forrásból, az alatti _checkInFlight flaggel.
-        private volatile bool _checkInFlight;
-
-                private void StartHealthWatch(CoreWebView2 core)
+        private void StartHealthWatch(CoreWebView2 core)
         {
-            // COMPLETELY DISABLED: no timer, no probe, no auto-reload ever.
-            Logger.Info("pane " + (_paneIndex + 1) + ": health watch disabled — no auto-reload");
+            Logger.Info("pane " + (_paneIndex + 1) + ": health watch disabled — panels are never reloaded automatically");
         }
-
-        private async System.Threading.Tasks.Task CheckHealthAsync(CoreWebView2 core)
-        {
-            if (_disposed || core == null) return;
-            try
-            {
-                // ── ELAVULT KLIENS-KÓD (2026-10-22) ────────────────────────
-                // MÉRT HIBA: a panelben egy 2026-09-26-i kliens-build futott,
-                // benne a terminal-restore végtelen újrapróbálkozásával — ez
-                // pörgette a renderert 127%-on és fagyasztotta meg a panelt.
-                // A forrás akkorra már javítva volt, csak a betöltött példány
-                // volt régi. Ezért: ha a plugin forrása a lap betöltése óta
-                // megváltozott, a panelt újra kell tölteni — különben a
-                // felhasználó egy javított kód MELLETT is a hibásat futtatja.
-                DateTime stamp = PluginClientStamp();
-                if (_pluginStamp != DateTime.MinValue && stamp != _pluginStamp)
-                {
-                    _pluginStamp = stamp;
-                    Logger.Info("pane " + (_paneIndex + 1)
-                        + ": a kliens-plugin forrasa megvaltozott — ujratoltes, hogy ne a regi kod fusson");
-                    ReloadPane("elavult kliens-kod");
-                    return;
-                }
-
-                System.Threading.Tasks.Task<string> probe = core.ExecuteScriptAsync("1");
-                // SOKKÁ HOSSZABB TIMEOUT: egy nagy betöltés/újrarajzolás akár
-                // 30-45 mp is lehet; az eredeti 8 s minden ilyenkor hibásan
-                // ReloadPane-t indított → "lefagyott és újrarelődött" hatás.
-                System.Threading.Tasks.Task finished = await System.Threading.Tasks.Task.WhenAny(
-                    probe, System.Threading.Tasks.Task.Delay(60000));
-                if (!ReferenceEquals(finished, probe))
-                {
-                    _healthFails++;
-                    Logger.Error("pane " + (_paneIndex + 1) + ": a renderer nem valaszol ("
-                        + _healthFails + ". meres) — beragadt");
-                    // A küszöböt 2-ről 5-re emeltem: 5 × 15s = ~75 percig
-                    // tarthat elviselni egy lassú lapot anélkül, hogy automatikus
-                    // újratöltés történnék. Ez megakadályozza a gyakori
-                    // RestartPane-robbanást, ami okozta a felhasználó
-                    // által látott "lefagyás/újraindítás" ciklust.
-                    if (_healthFails >= 5) ReloadPane("beragadt renderer");
-                    return;
-                }
-                // A válasz megérkezett: a renderer él.
-                if (_healthFails > 0)
-                {
-                    Logger.Info("pane " + (_paneIndex + 1) + ": a renderer ujra valaszol");
-                }
-                _healthFails = 0;
-            }
-            catch (Exception ex)
-            {
-                _healthFails++;
-                Logger.Error("pane " + (_paneIndex + 1) + ": health probe hiba: " + ex.Message);
-                if (_healthFails >= 5) ReloadPane("health probe hiba");
-            }
-        }
-
-        /// <summary>
-        /// A panel újratöltése — sebességkorláttal.
-        ///
-        /// Két esetben hívjuk: a renderer beragadt, vagy a kliens-plugin forrása
-        /// megváltozott a lap betöltése óta (elavult kód futna tovább).
-        ///
-        /// A korlát azért kell, mert egy őszintén lassú oldal (nagy session
-        /// kirajzolása) is okozhat kihagyott életjelet; 15 percenként legfeljebb
-        /// három újratöltést engedünk, utána a host feladja és naplózza, hogy ne
-        /// alakuljon ki újratöltési hurok.
-        /// </summary>
-        private void ReloadPane(string reason)
-        {
-            DateTime now = DateTime.UtcNow;
-            if (_reloadWindow == DateTime.MinValue || (now - _reloadWindow).TotalMinutes > 15)
-            {
-                _reloadWindow = now;
-                _reloads = 0;
-            }
-            if (_reloads >= 3)
-            {
-                Logger.Error("pane " + (_paneIndex + 1)
-                    + ": 3 automatikus ujratoltes 15 perc alatt — a tovabbi ujratoltes leallitva");
-                return;
-            }
-            _reloads++;
-            _healthFails = 0;
-            Logger.Info("pane " + (_paneIndex + 1) + ": automatikus ujratoltes (" + reason + ")");
-            try
-            {
-                CoreWebView2 core = Core;
-                if (core == null) return;
-                core.Navigate(_url);
-            }
-            catch (Exception ex)
-            {
-                Logger.Error("pane " + (_paneIndex + 1) + ": ujratoltes hiba: " + ex.Message);
-            }
-        }
-
         /// <summary>
         /// A kliens-plugin forrásának utolsó írási ideje, vagy DateTime.MinValue.
         ///
@@ -1326,7 +1221,6 @@ namespace DshWindow
             if (_disposed) return;
             _disposed = true;
             try { if (_tokenWatch != null) _tokenWatch.Stop(); } catch { }
-            try { if (_healthWatch != null) _healthWatch.Stop(); } catch { }
             try { if (_controller != null) _controller.Close(); } catch { }
             try { if (_controller != null) Marshal.ReleaseComObject(_controller); } catch { }
             base.Dispose(disposing);

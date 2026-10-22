@@ -7,7 +7,7 @@
   "defaultRoute": "deepseek-chat",
   "_autoLabel_megjegyzes": "A DSH modellvalaszto az 'Auto' sort a ~/.dsh/settings.yaml `auto-router.models[].name` mezojebol nevzi. Ha enabled (alap: true), a proxy minden 'auto' route-dontes utan IDE IRJA a tenylegesen hasznalt konkret celt, pl. `Auto (alibaba-intl/qwen3.8-flash)` — a statikus 'kep / csucs / hosszu kontextus szerint' szoveg helyett. A harness a settings.yaml valtozasat élore figyeli (dsh-settings-file chokidar watche, 'external edits hot-publish'), igy ujrainditas nelkul latszik. CAPCSOK: (1) a picker bejegyzes GLOBALIS, nem sessiononkenti — a LEGUTOBBI dontes celjat irjuk ki (ket parhuzamos session elterhet); (2) csak tenyleges valtozasnal ir (debounceMs), h a hot-reload ne forogjon minden lepesnel; (3) az iras soha nem zavarja be a szolgalatot, hibat csak naplazza. `dropProviderPrefix: true` ra csak a modell nevet tartja meg a provider elolel (pl. `qwen3.8-flash`), de a Szingapuru/EU kulonbseg akkor latszik elol — elore jar a teljes `alibaba-intl/qwen3.8-flash`. `resetOnStart` (alap: true) és `idleResetMinutes` (alap: 10, 0 = ki): a proxy indulaskor, illetve ennyi tétlenség után a cimket sima `Auto`-ra allitja vissza, hogy egy uj valasztas ne egy korabbi beszelgetes celpontjat mutassa; az elso keres utan ujra a tenyleges cel latszik.",
   "autoLabel": {
-    "enabled": true,
+    "enabled": false,
     "route": "auto",
     "provider": "auto-router",
     "model": "auto",
@@ -17,6 +17,7 @@
     "resetOnStart": true,
     "idleResetMinutes": 10
   },
+  "_autoLabel_20261022": "KIKAPCSOLVA (enabled: false). MERT HIBA: a settings.yaml `name:` mezoje GLOBALIS, ezert a proxy minden 'auto' dontes utan atirta a katalógus-bejegyzest, es a harom parhuzamos panel MINDIG ugyanazt a cimket mutatta (a legutobbi dontes ceijat) — panelenkenti cel nem volt. Mostantol a katalógus sima 'Auto' marad, a tenyleges celt pedig panelenkent a dsh-ui-extras host vegpontja adja: GET /ui-extras/auto-target?session=<dsh session id> -> { target: { label, reason, idleSec } }. A host a `llm/stream` waterfallon jegyzi fel session-onkent az elso felhasznaloi uzenet hash-et (ugyanaz az FNV-1a, amit a proxy /healthz `intelligent.sessions[].firstUser` mezoje hasznal), es a /healthz?session=<hash> szurovel kerdezi le a sajat session celjat. A proxy a kikapcsolas ellenere is visszaallitja a cimket sima 'Auto'-ra (indulaskor es config hot-reloadnal), hogy ne ragadjon be korabbi celpont.",
   "corsOrigins": [ "http://127.0.0.1:3080", "http://localhost:3080" ],
   "connectTimeoutMs": 120000,
   "stallTimeoutMs": 90000,

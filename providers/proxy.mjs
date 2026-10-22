@@ -202,6 +202,9 @@ function applyConfigReload() {
     REQUIRED_ENV = next.requiredAnyEnv ?? {};
     const ov = overrideState();
     log(`CONFIG ujratoltve (hot-reload). Napi felulbiralat: ${ov.active ? ov.routes.join(', ') : 'nincs'}`);
+    // Kikapcsolt cimke-iras: a korabban beirt konkret celpontot torolni kell,
+    // kulonben a valaszto tovabbra is azt mutatna (a mezo globalis).
+    if (!autoLabelConfig().enabled) resetAutoLabel('config hot-reload');
   } catch (e) {
     log(`CONFIG ujratoltes SIKERTELEN (a regi tartalom marad): ${e?.message ?? e}`);
   }
@@ -390,6 +393,35 @@ const SESSION_MAX = 800;
  */
 const SESSION_REPORT = new Map();
 const SESSION_REPORT_MAX = 200;
+// A jelentesi terkep PERZISZTALVA (2026-10-22). Miert: a panelenkenti "Auto"
+// cel a /healthz?session=<firstUser> szurobol jon, a proxy ujrainditese viszont
+// memoriaval egyutt nullazta — a harom panel a restart utan percekig csak sima
+// "Auto"-t mutatott, ujra egyforman. A fajl a restartot tuleli; a bejegyzesek
+// ideje megmarad, igy az idleSec oszinte marad.
+const SESSION_REPORT_PATH = path.join(HERE, 'reports', 'session-targets.json');
+(function loadSessionReport() {
+  try {
+    const data = JSON.parse(readFileSync(SESSION_REPORT_PATH, 'utf8'));
+    const entries = Array.isArray(data?.sessions) ? data.sessions : [];
+    for (const e of entries) {
+      if (!e || typeof e.key !== 'string' || typeof e.label !== 'string' || e.label.length === 0) continue;
+      SESSION_REPORT.set(e.key, {
+        firstUser: typeof e.firstUser === 'string' ? e.firstUser : null,
+        label: e.label,
+        reason: typeof e.reason === 'string' ? e.reason : null,
+        at: typeof e.at === 'string' ? e.at : new Date().toISOString(),
+      });
+    }
+  } catch { /* meg nincs mentes — elso indulas */ }
+})();
+let sessionReportSaveTimer = null;
+function saveSessionReport() {
+  try {
+    mkdirSync(path.dirname(SESSION_REPORT_PATH), { recursive: true });
+    const sessions = [...SESSION_REPORT.entries()].map(([key, v]) => ({ key, ...v }));
+    writeFileSync(SESSION_REPORT_PATH, JSON.stringify({ at: new Date().toISOString(), sessions }), 'utf8');
+  } catch { /* nem kritikus: a jelentes nem szolgalati utvonal */ }
+}
 function noteSessionTarget(key, firstUser, label, reason) {
   if (typeof key !== 'string' || key.length === 0 || typeof label !== 'string' || label.length === 0) return;
   SESSION_REPORT.set(key, {
@@ -403,6 +435,9 @@ function noteSessionTarget(key, firstUser, label, reason) {
     if (oldest === undefined) break;
     SESSION_REPORT.delete(oldest);
   }
+  if (sessionReportSaveTimer !== null) clearTimeout(sessionReportSaveTimer);
+  sessionReportSaveTimer = setTimeout(() => { sessionReportSaveTimer = null; saveSessionReport(); }, 2000);
+  sessionReportSaveTimer.unref?.();
 }
 const DECISIONS = [];                  // utolso par dontes a /healthz-hez
 // A keret-fogyas becslese — PERZISZTALVA (2026-10-15). Korabban minden
@@ -433,7 +468,7 @@ function rememberDecision(entry) {
   if (DECISIONS.length > 12) DECISIONS.shift();
   // ── az "Auto" cimke szinkronizalasa a DSH modellvalasztohoz (2026-10-20) ──
   const cfg = autoLabelConfig();
-  if (cfg !== null && entry?.route === cfg.route && typeof entry.label === 'string' && entry.label.length > 0) {
+  if (cfg.enabled && entry?.route === cfg.route && typeof entry.label === 'string' && entry.label.length > 0) {
     if (autoLabelTimer !== null) clearTimeout(autoLabelTimer);
     const label = entry.label;
     autoLabelTimer = setTimeout(() => {
@@ -489,12 +524,22 @@ let autoLabelLast = null;
 let autoLabelTimer = null;
 let autoLabelIdleTimer = null;
 
-/** Az `autoLabel` config blokk feloldasa; `null`, ha ki van kapcsolva. */
+/**
+ * Az `autoLabel` config blokk feloldasa.
+ *
+ * 2026-10-22: az `enabled` flag mar NEM kapcsolja ki a blokkot magat, csak a
+ * dontesenkenti irast. Miert: a settings.yaml `name:` mezoje GLOBALIS, ezert
+ * ket parhuzamos panel mindig ugyanazt a cimket mutatta. A panelenkenti címke
+ * a dsh-ui-extras host vegpontjan megy (`/ui-extras/auto-target?session=`),
+ * a katalógus-bejegyzes pedig marad sima "Auto". A `resetAutoLabel` viszont
+ * akkor is lefut, ha az iras ki van kapcsolva — kulonben egy korabbi celpont
+ * beragadna a valasztoba.
+ */
 function autoLabelConfig() {
   const c = CONFIG.autoLabel;
-  if (c && c.enabled === false) return null;
   const home = process.env.DSH_HOME ?? path.join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.dsh');
   return {
+    enabled: c?.enabled !== false,
     file: c?.settingsFile || path.join(home, 'settings.yaml'),
     provider: c?.provider || autoLabelDefaults.provider,
     model: c?.model || autoLabelDefaults.model,
@@ -518,7 +563,6 @@ function autoLabelConfig() {
  */
 function writeAutoLabel(rawLabel) {
   const cfg = autoLabelConfig();
-  if (cfg === null) return;
   // A cel `provider/model` alaku; az elso perjelen hasitunk, ugyanugy, mint a
   // splitTarget() — a modell-id magaban is tartalmazhat perjelt.
   let label = String(rawLabel ?? '');
@@ -568,7 +612,6 @@ function writeAutoLabel(rawLabel) {
  */
 function resetAutoLabel(reason) {
   const cfg = autoLabelConfig();
-  if (cfg === null) return;
   if (autoLabelIdleTimer !== null) {
     clearTimeout(autoLabelIdleTimer);
     autoLabelIdleTimer = null;
@@ -1575,8 +1618,10 @@ server.listen(PORT, HOST, () => {
   }
   // Indulaskor a cimke sima "Auto": a korabbi folyamat altal (esetleg egy
   // eszkalalas utan) otthagyott celpont nem maradhat bent a valasztoban.
+  // Kikapcsolt cimke-iras eseten is lefut, hogy egy korabbi celpont NE
+  // ragadjon be: a panelenkenti cel a dsh-ui-extras host vegpontjan latszik.
   const labelCfg = autoLabelConfig();
-  if (labelCfg !== null && labelCfg.resetOnStart) resetAutoLabel('indulás');
+  if (!labelCfg.enabled || labelCfg.resetOnStart) resetAutoLabel('indulás');
 });
 
 server.on('error', (err) => {

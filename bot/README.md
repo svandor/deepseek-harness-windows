@@ -547,6 +547,7 @@ Ugyanaz az avatar és állapot, e-mail nélkül; ez a **webhook-fogadó** is
 |---|---|
 | Nincs e-mail | `bot/state/outbox/*.eml` (dry-run), `config.json` `email.dryRun`, `BOT_EMAIL_SEND=1` az éles küldéshez |
 | A job nem fut le ütemezésre | `schtasks /Query /TN "HáziRobot due" /V /FO LIST`, `bot/state/bot.log` |
+| **15 percenként felugrik egy fekete konzolablak** | A feladat művelete még közvetlenül a `powershell.exe`-t indítja. A `-WindowStyle Hidden` csak létrehozás UTÁN rejti el a konzolt — ezért fél másodpercre látszik és elviszi a fókuszt (mért hiba, 2026-10-22 23:31:01). Javítás normál PowerShell-ablakból: `.\register-hidden-task.ps1` — ez `wscript.exe` + `run-job-hidden.vbs` indítóra állítja a feladatot, ami egyáltalán nem hoz létre konzolablakot. |
 | A panel nem válaszol | `node panel/server.mjs --port=4180` kézzel; a port foglalt-e |
 
 Naplók: `bot/state/bot.log` (JSONL), riportok: `bot/reports/<dátum>/`,
