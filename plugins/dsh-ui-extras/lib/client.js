@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Browser half of the DSH UI extras plugin: the extended statistics row.
  *
  * Hand-written bundle in the same shape the built client plugins use. The
@@ -1278,12 +1278,13 @@ window.__ModuleLoader__.load({
       "balanceTitle": "Élő egyenleg a DeepSeek számláról, szerveroldali lekérdezéssel.",
       "balanceErrorTitle": "A szerveroldali egyenleg-lekérdezés nem sikerült: ",
       "spendPair": "DSH / Alibaba",
-      "spendPairTitle": "Bal oldal: a DeepSeek számlán ELÉRHETŐ egyenleg (feltöltött + jóváírt grátisz). Jobb oldal: az Alibaba-számla mínusz előjellel (pay-as-you-go, nincs előre feltöltött egyenleg).",
+      "spendPairTitle": "Bal oldal: a DeepSeek számlán ELÉRHETŐ egyenleg (feltöltött + jóváírt grátisz). Jobb oldal: az Alibaba kifizetendő tartozása (OutstandingAmount) — fizetés után nullázódik, pay-as-you-go.",
       "spendPairBalance": "DeepSeek egyenleg (a grátisszal együtt): {balance} {currency} — a konzollal egyező, elérhető összeg.",
       "spendPairBalanceBreakdown": "Bontás: feltöltött {toppedUp} + jóváírt (grátisz) {granted} = {total}.",
       "spendPairBill": "Alibaba számla ({cycle}): {amount} {currency} fizetendő.",
       "spendPairBillCycle": "Ciklus zárása: {close} — {daysLeft} nap; a terhelés a zárás után esedékes.",
       "spendPairBillAvailable": "Elérhető egyenleg: {available} · {models} modell-tétel a számlán.",
+      "spendPairOutstanding": "Kifizetendő tartozás (fizetés után 0): {outstanding}.",
       "spendPairBillMissing": "Alibaba számla: nem elérhető ({error}).",
       "spendPairBillHint": "A jobb oldali érték a DSH-naplóból becsült költés.",
       "spendPairAlibaba": "Naplóból becsült költés: -{spent} (EU {eu} · Szingapúr {sg}, keretből {sgFree}).",
@@ -1293,6 +1294,7 @@ window.__ModuleLoader__.load({
       "usageProviderFree": "{label}: ingyenes · {requests} kérés · {tokens} zseton",
       "usageAlibabaSgQuota": "Szingapúri ingyenes keret ({model}): {used} / {quota} zseton ({percent}) — jóváírva {free}, fizetve {paid}",
       "usageAlibabaNote": "Alibaba-árak: EU (Frankfurt) és Szingapúr (International) listaár.",
+      "usageTaxNote": "Megjegyzés: az {dsFee} % DSH-díj és a {aliVat} % magyar ÁFA miatt ezek bruttó árak — az összehasonlítás valós költségeket mutat.",
       "usageAlibabaNote2": "Proxy-útvonalon (worker/auto) a napló a route nevét rögzíti — ott a költség közelítés.",
       "usageBalanceLine": "DeepSeek-egyenleg (a grátisszal együtt): {balance}",
       "costTitle": "Költség: a hivatalos ártáblából, kérésenként számolva (USD).",
@@ -1528,12 +1530,13 @@ window.__ModuleLoader__.load({
       "balanceTitle": "Live balance from the DeepSeek account, queried on the host.",
       "balanceErrorTitle": "The host-side balance query failed: ",
       "spendPair": "DSH / Alibaba",
-      "spendPairTitle": "Left: the AVAILABLE balance on the DeepSeek account (topped-up + granted). Right: the Alibaba invoice with a minus sign (pay-as-you-go, no prepaid balance).",
+      "spendPairTitle": "Left: the AVAILABLE balance on the DeepSeek account (topped-up + granted). Right: Alibaba outstanding payable debt — resets to 0 after payment, pay-as-you-go.",
       "spendPairBalance": "DeepSeek balance (granted included): {balance} {currency} — the available amount, matching the console.",
       "spendPairBalanceBreakdown": "Breakdown: topped-up {toppedUp} + granted {granted} = {total}.",
       "spendPairBill": "Alibaba invoice ({cycle}): {amount} {currency} payable.",
       "spendPairBillCycle": "Cycle closes: {close} — {daysLeft} days; the charge is due after the close.",
       "spendPairBillAvailable": "Available balance: {available} · {models} model line items.",
+      "spendPairOutstanding": "Outstanding payable (becomes 0 after payment): {outstanding}.",
       "spendPairBillMissing": "Alibaba invoice: unavailable ({error}).",
       "spendPairBillHint": "The right-hand value is the spend estimated from the DSH logs.",
       "spendPairAlibaba": "Estimated from logs: -{spent} (EU {eu} · Singapore {sg}, from quota {sgFree}).",
@@ -1543,6 +1546,7 @@ window.__ModuleLoader__.load({
       "usageProviderFree": "{label}: free · {requests} requests · {tokens} tokens",
       "usageAlibabaSgQuota": "Singapore free quota ({model}): {used} / {quota} tokens ({percent}) — credited {free}, paid {paid}",
       "usageAlibabaNote": "Alibaba prices: EU (Frankfurt) and Singapore (International) list prices.",
+      "usageTaxNote": "Note: amounts are gross — {dsFee}% DSH fee + {aliVat}% Hungarian VAT included for accurate comparison.",
       "usageAlibabaNote2": "On proxy routes (worker/auto) the log stores the route name — cost there is an approximation.",
       "usageBalanceLine": "DeepSeek balance: {balance}",
       "costTitle": "Cost: computed per request from the official price table (USD).",
@@ -2191,6 +2195,7 @@ window.__ModuleLoader__.load({
      */
     function startAutoTargetOverlay() {
       try {
+        /** Panel-azonosító: egyedi string, hogy minden panel más szöveget jelöljen. */
         var desired = null;
         var observer = null;
 
@@ -2212,7 +2217,7 @@ window.__ModuleLoader__.load({
               }
             }
             if (span !== null) {
-              var newText = 'Auto (' + desired + ')';
+              var newText = 'Auto → ' + desired;
               if (span.textContent !== newText) {
                 span.textContent = newText;
                 btn.setAttribute('title', newText);
@@ -2427,6 +2432,11 @@ window.__ModuleLoader__.load({
       // local, so the window has to be local too.
       var peakWindowLocal = peakWindowsLocalText(now);
 
+      // DSH díj és Alibaba ÁFA-megjelölés: a valós összehasonlítás két aránya.
+      // Itt definiáljuk őket — az előtte lévő provider-sorok használják.
+      var ALIBABA_VAT_RATE = 1.27;
+      var DSH_FEE_RATE = 1.06;
+
       // The cost and the daily average are NOT pills any more: a real figure
       // needs the whole history and the rate that applied per request, so both
       // live in this row's tooltip instead of posing as session numbers.
@@ -2540,9 +2550,19 @@ window.__ModuleLoader__.load({
                 tokens: formatCount(provider.tokens || 0)
               }));
             } else {
+              // A provider-költségek listára (nettó). A valós összehasonlításhoz:
+              // DeepSeek = ×1.06 (+6 % DSH-díj), Alibaba = ×1.27 (+27 % magyar ÁFA).
+              var adjustedCost = 0;
+              if ((provider.family || "") === "deepseek") {
+                adjustedCost = (provider.costUsd || 0) * DSH_FEE_RATE;
+              } else if ((provider.family || "").startsWith("alibaba")) {
+                adjustedCost = (provider.costUsd || 0) * ALIBABA_VAT_RATE;
+              } else {
+                adjustedCost = provider.costUsd || 0;
+              }
               providerLines.push(t("usageProviderLine", {
                 label: provider.label || provider.family,
-                cost: formatUsd(provider.costUsd || 0),
+                cost: formatUsd(adjustedCost),
                 requests: formatCount(provider.requests || 0),
                 tokens: formatCount(provider.tokens || 0)
               }));
@@ -2557,12 +2577,14 @@ window.__ModuleLoader__.load({
                 used: formatCount(sgTop.tokens || 0),
                 quota: formatCount(sgInfo.quotaTokensPerModel || 0),
                 percent: Math.round((sgTop.usedShare || 0) * 1000) / 10 + "%",
-                free: formatUsd(sgInfo.freeUsd || 0),
-                paid: formatUsd(sgInfo.paidUsd || 0)
+                free: formatUsd((sgInfo.freeUsd || 0) * ALIBABA_VAT_RATE),
+                paid: formatUsd((sgInfo.paidUsd || 0) * ALIBABA_VAT_RATE)
               }));
             }
           }
           providerLines.push(t("usageAlibabaNote"));
+          // DSH díj és Alibaba ÁFA-megjelölés: az értékek bruttó árakat mutatnak.
+          providerLines.push(t("usageTaxNote", { dsFee: (DSH_FEE_RATE - 1) * 100, aliVat: (ALIBABA_VAT_RATE - 1) * 100 }));
           providerLines.push(t("usageAlibabaNote2"));
           tooltipLines.push("");
           for (var lineIndex = 0; lineIndex < providerLines.length; lineIndex++) {
@@ -2597,9 +2619,10 @@ window.__ModuleLoader__.load({
         // BAL oldal: a DeepSeek szamlan ELERHETO egyenleg (a
         // /ui-extras/balance valaszabol, a sajat penznemeben) — ez a kerdes
         // targya: "a DSH-bol a hatralevot kell mutatni".
-        // JOBB oldal: az Alibaba-koltes az idoszakban, MINUSZ elojellel — az
-        // Alibaba pay-as-you-go, nincs elore feltoltott egyenlege, ezert ott
-        // a koltes a "negativ egyenleg".
+        // JOBB oldal: az Alibaba kivetelen tartozasa (OutstandingAmount) —
+        // fizetes utan 0 lesz. Ha nincs OutstandingAmount, fallback
+        // PretaxGrossAmount (a teljes ciklus koszsa +27% АFA).
+        // Pay-as-you-go, nincsen elore feltoltott egyenlege.
         // 2026-10-19: a pillen a TELJES elerheto egyenleg megy (total =
         // feltoltott + jovairt/gratisz), mert a webes konzol is ezt mutatja —
         // a feltoltott resz onmagaban kevesebbnek tunt a valos egyenlegnel.
@@ -2611,9 +2634,22 @@ window.__ModuleLoader__.load({
           ? (formatMoney(dshShown, balanceCurrency) || t("balanceUnavailable"))
           : (balance.status === "loading" ? t("balanceLoading") : t("balanceUnavailable"));
         var alibabaBillData = alibabaBillState.status === "ready" ? alibabaBillState.data : null;
-        var aliAmount = alibabaBillData !== null && typeof alibabaBillData.pretaxAmount === "number"
+        // 2026-01-XX: DSH +6 % díjat számít fel, az Alibaba 27 % ÁFÁT raktal a
+        // negatív egyenlegre. A összehasonlításhoz a bruttó értékeket használjuk:
+        // Alibaba = pretaxGrossAmount (vagy ×1.27 ha nincs), DSH = log ×1.06.
+        // MEGJEGYZÉS: ALIBABA_VAT_RATE és DSH_FEE_RATE a függvény tetején vannak definiálva (line ~2435).
+        var aliPretax = alibabaBillData !== null && typeof alibabaBillData.pretaxAmount === "number"
           ? alibabaBillData.pretaxAmount
-          : (spend.alibabaUsd || 0);
+          : null;
+        var aliOutstanding = alibabaBillData !== null && typeof alibabaBillData.outstandingAmount === "number"
+          ? alibabaBillData.outstandingAmount
+          : null;
+        // OutstandingAmount: ez a valodi kivetelen tartozas — fizetes utan 0 lesz.
+        // Ha nincs vagy negativ, fallback PretaxGrossAmount (a ciklus kozonti brutto).
+        var aliPretaxGross = alibabaBillData !== null
+          ? (alibabaBillData.pretaxGrossAmount ?? (aliPretax !== null ? aliPretax * ALIBABA_VAT_RATE : null))
+          : null;
+        var aliAmount = (aliOutstanding > 0) ? aliOutstanding : (aliPretaxGross ?? (aliPretax ?? (spend.alibabaUsd || 0)));
         var aliSpendText = "-" + formatUsd(aliAmount);
         // FORDULONAP: a szamla a ciklus (naptari honap) zarasa utan esedekes.
         // A ciklus-vegat a cycle mezobol szamoljuk (a honap 0. napja = utolso nap).
@@ -2640,9 +2676,13 @@ window.__ModuleLoader__.load({
           }),
         ];
         if (alibabaBillData !== null) {
+          // A számla bruttó összege: PretaxGrossAmount, vagy ha nincs,
+          // akkor PretaxAmount × 1.27 (27 % magyar ÁFA).
+          var billGross = alibabaBillData.pretaxGrossAmount
+            ?? (alibabaBillData.pretaxAmount ? alibabaBillData.pretaxAmount * ALIBABA_VAT_RATE : 0);
           spendTitleLines.push(t("spendPairBill", {
             cycle: String(alibabaBillData.cycle || ""),
-            amount: formatUsd(alibabaBillData.pretaxAmount || 0),
+            amount: formatUsd(billGross),
             currency: String(alibabaBillData.currency || "USD")
           }));
           if (cycleClose !== null) {
@@ -2652,22 +2692,34 @@ window.__ModuleLoader__.load({
             available: formatUsd(alibabaBillData.availableAmount || 0),
             models: String((alibabaBillData.models || []).length)
           }));
+          // Kivetelen tartozas (OutstandingAmount): fizetes utan 0 lesz.
+          if (alibabaBillData.outstandingAmount != null) {
+            spendTitleLines.push(t("spendPairOutstanding", {
+              outstanding: formatUsd(alibabaBillData.outstandingAmount)
+            }));
+          }
         } else {
           spendTitleLines.push(t("spendPairBillMissing", {
             error: String((alibabaBillState.data && alibabaBillState.data.error) || "nincs adat")
           }));
           spendTitleLines.push(t("spendPairBillHint"));
         }
+        // A napló-alapú költés listára (nettó). Az Alibaba bruttó = ×1.27, a DSH
+        // nettó + díj = ×1.06.
+        var aliLogGross = (spend.alibabaUsd || 0) * ALIBABA_VAT_RATE;
         spendTitleLines.push(t("spendPairAlibaba", {
-          spent: formatUsd(spend.alibabaUsd || 0),
-          eu: formatUsd(spend.alibabaEuUsd || 0),
-          sg: formatUsd(spend.alibabaSgUsd || 0),
-          sgFree: formatUsd(spend.alibabaSgFreeUsd || 0)
+          spent: formatUsd(aliLogGross),
+          eu: formatUsd((spend.alibabaEuUsd || 0) * ALIBABA_VAT_RATE),
+          sg: formatUsd((spend.alibabaSgUsd || 0) * ALIBABA_VAT_RATE),
+          sgFree: formatUsd((spend.alibabaSgFreeUsd || 0) * ALIBABA_VAT_RATE)
         }));
+        // A DSH +6 % díjat számít fel, így az összehasonlításban ×1.06.
+        var dsHFee = (spend.deepseekUsd || 0) * DSH_FEE_RATE;
+        var totalWithFees = dsHFee + aliLogGross;
         spendTitleLines.push(t("spendPairWindow", {
           days: String(usageSummary && usageSummary.days ? usageSummary.days : 30),
-          deepseek: formatUsd(spend.deepseekUsd || 0),
-          total: formatUsd(spend.totalUsd || 0)
+          deepseek: formatUsd(dsHFee),
+          total: formatUsd(totalWithFees)
         }));
         for (var spendLineIndex = 0; spendLineIndex < providerLines.length; spendLineIndex++) {
           spendTitleLines.push(providerLines[spendLineIndex]);

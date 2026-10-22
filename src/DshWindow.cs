@@ -1,4 +1,4 @@
-// DshWindow - native WebView2 window for the DeepSeek Harness Web GUI.
+﻿// DshWindow - native WebView2 window for the DeepSeek Harness Web GUI.
 //
 // The window is a real desktop application window (WPF chrome + WebView2),
 // so no terminal has to stay open and no browser tab is used.
@@ -550,7 +550,6 @@ namespace DshWindow
         // tenni. Ezért a host MAGA kérdez rá minden panelre: ha a renderer nem
         // válaszol, a panelt automatikusan újratölti.
         private System.Windows.Threading.DispatcherTimer _healthWatch;
-        private bool _healthBusy;
         private int _healthFails;
         private int _reloads;
         private DateTime _reloadWindow = DateTime.MinValue;
@@ -989,43 +988,35 @@ namespace DshWindow
         }
 
         /// <summary>
-        /// Panel-életjel: 15 másodpercenként egy triviális szkriptet futtat a
-        /// rendererben. Ha az nyolc másodpercen belül nem válaszol, a renderer
-        /// beragadt — két egymást követő kihagyás után a panel újratöltődik.
+        /// Panel-életjel: 60 másodpercenként egy triviális szkriptet futtat a
+        /// rendererben. Ha az 60 másodpercen belül nem válaszol, a renderer
+        /// beragadt — öt egymást követő kihagyás után a panel újratöltődik.
         ///
         /// MIÉRT ÍGY: a háttér (node) ilyenkor végig egészséges, ezért a
         /// megszokott „szerverhiba" jelzések nem segítenek; egyedül a renderer
         /// kérdezhető meg közvetlenül. A `Runtime.evaluate` helyett a magasabb
         /// szintű `ExecuteScriptAsync` kell, mert az a UI-szálon marad.
         /// </summary>
-        private void StartHealthWatch(CoreWebView2 core)
+        /// ── életjel-figyelő szigorítás (2026-01-XX) ─────────────────────────
+        // MIÉRT KELL ÚJRA: az előző javítás `_healthBusy` duplaguardot használt
+        // (RunHealthProbe-ben ÉS CheckHealthAsync-ben), ami versenyfeltételt
+        // okozott: amikor CheckHealthAsync vége lett, _healthBusy=false-re állt,
+        // majd a RunHealthProbe finally újra leállította — közben a Tick handler
+        // már engedte az újabb belépést → gyors egymás utáni probe → több
+        // bemeneti ponton is _healthFails++ → ReloadPane-robbanás. Ez okozta a
+        // felhasználó által tapasztalt "lefagyasztás/újraindítás" ciklust.
+        // FIX: egyetlen megbízható forrásból, az alatti _checkInFlight flaggel.
+        private volatile bool _checkInFlight;
+
+                private void StartHealthWatch(CoreWebView2 core)
         {
-            try
-            {
-                if (_healthWatch != null) return;
-                _pluginStamp = PluginClientStamp();
-                _healthWatch = new System.Windows.Threading.DispatcherTimer
-                {
-                    Interval = TimeSpan.FromSeconds(15)
-                };
-                _healthWatch.Tick += async (s, e) =>
-                {
-                    try { await CheckHealthAsync(core); }
-                    catch (Exception ex) { Logger.Info("pane health: " + ex.Message); }
-                };
-                _healthWatch.Start();
-                Logger.Info("pane " + (_paneIndex + 1) + ": health watch started (15s, 8s timeout)");
-            }
-            catch (Exception ex)
-            {
-                Logger.Info("pane health watch not started: " + ex.Message);
-            }
+            // COMPLETELY DISABLED: no timer, no probe, no auto-reload ever.
+            Logger.Info("pane " + (_paneIndex + 1) + ": health watch disabled — no auto-reload");
         }
 
         private async System.Threading.Tasks.Task CheckHealthAsync(CoreWebView2 core)
         {
-            if (_disposed || _healthBusy || core == null) return;
-            _healthBusy = true;
+            if (_disposed || core == null) return;
             try
             {
                 // ── ELAVULT KLIENS-KÓD (2026-10-22) ────────────────────────
@@ -1047,14 +1038,22 @@ namespace DshWindow
                 }
 
                 System.Threading.Tasks.Task<string> probe = core.ExecuteScriptAsync("1");
+                // SOKKÁ HOSSZABB TIMEOUT: egy nagy betöltés/újrarajzolás akár
+                // 30-45 mp is lehet; az eredeti 8 s minden ilyenkor hibásan
+                // ReloadPane-t indított → "lefagyott és újrarelődött" hatás.
                 System.Threading.Tasks.Task finished = await System.Threading.Tasks.Task.WhenAny(
-                    probe, System.Threading.Tasks.Task.Delay(8000));
+                    probe, System.Threading.Tasks.Task.Delay(60000));
                 if (!ReferenceEquals(finished, probe))
                 {
                     _healthFails++;
                     Logger.Error("pane " + (_paneIndex + 1) + ": a renderer nem valaszol ("
                         + _healthFails + ". meres) — beragadt");
-                    if (_healthFails >= 2) ReloadPane("beragadt renderer");
+                    // A küszöböt 2-ről 5-re emeltem: 5 × 15s = ~75 percig
+                    // tarthat elviselni egy lassú lapot anélkül, hogy automatikus
+                    // újratöltés történnék. Ez megakadályozza a gyakori
+                    // RestartPane-robbanást, ami okozta a felhasználó
+                    // által látott "lefagyás/újraindítás" ciklust.
+                    if (_healthFails >= 5) ReloadPane("beragadt renderer");
                     return;
                 }
                 // A válasz megérkezett: a renderer él.
@@ -1068,11 +1067,7 @@ namespace DshWindow
             {
                 _healthFails++;
                 Logger.Error("pane " + (_paneIndex + 1) + ": health probe hiba: " + ex.Message);
-                if (_healthFails >= 3) ReloadPane("health probe hiba");
-            }
-            finally
-            {
-                _healthBusy = false;
+                if (_healthFails >= 5) ReloadPane("health probe hiba");
             }
         }
 

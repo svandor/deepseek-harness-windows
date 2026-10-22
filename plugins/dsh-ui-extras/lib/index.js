@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Host half of the UI extras plugin.
  *
  * Routes (all server-side, so the browser never needs a credential):
@@ -100,7 +100,6 @@ const inject = ["webServer", "credentials"];
 
 /** How long a balance answer stays fresh before the route asks again. */
 const CACHE_MILLISECONDS = 60000;
-
 /** Repository discovery limits: enough for a workspace, cheap to answer. */
 const MAX_DEPTH = 3;
 const MAX_REPOSITORIES = 20;
@@ -303,7 +302,29 @@ async function queryAlibabaBilling() {
     bssCall("QueryAccountBalance", "2017-12-14", {}, keyId, keySecret).catch(() => null),
     bssCall("DescribeInstanceBill", "2017-12-14", { BillingCycle: cycle, Granularity: "MONTHLY", MaxResults: "100" }, keyId, keySecret).catch(() => null)
   ]);
-  const item = bill?.Data?.Items?.Item?.[0] ?? null;
+  // BUGFIX korábbi: item[0]-t használtunk, ami CSAK EGY tétel volt.
+  // Új: ÖSSZES tétel OutstandingAmount-át adjuk össze → ez a KIVITELEN
+  // egyenleg. Fizetés után 0 lesz. Ha nincs OutstandingAmount, fallback
+  // PretaxAmount (az a bruttó használat, függetlenül a kifizetéstől).
+  const items = bill?.Data?.Items?.Item ?? null;
+  const itemList = Array.isArray(items) ? items : [];
+  let totalPretaxGross = 0;
+  let totalPretax = 0;
+  let totalOutstanding = 0;
+  let currency = "USD";
+  for (const itm of itemList) {
+    currency = itm?.Currency ?? currency;
+    totalPretax += Number(itm?.PretaxAmount ?? 0);
+    totalPretaxGross += Number(itm?.PretaxGrossAmount ?? 0);
+    totalOutstanding += Number(itm?.OutstandingAmount ?? 0);
+  }
+  // Ha az API nem adta vissza PretaxGrossAmount-ot (régi BSS verzió), számoljuk ki:
+  if (totalPretaxGross === 0 && totalPretax > 0) {
+    totalPretaxGross = totalPretax * 1.27;
+  }
+  // OutstandingAmount: ez a VALÓDI kivetelen egyenleg (kifizetés után 0).
+  // Ha 0 vagy negatív, fallback PretaxGrossAmount (a ciklus teljes költése).
+  let displayAmount = totalOutstanding > 0 ? totalOutstanding : totalPretaxGross;
   const raw = instances?.Data?.Items?.Item ?? instances?.Data?.Items ?? [];
   const list = Array.isArray(raw) ? raw : [];
   const byModel = new Map();
@@ -315,18 +336,20 @@ async function queryAlibabaBilling() {
   return {
     ok: bill?.Success === true,
     cycle,
-    currency: item?.Currency ?? "USD",
-    pretaxAmount: item?.PretaxAmount ?? null,
-    pretaxGrossAmount: item?.PretaxGrossAmount ?? null,
+    currency: currency,
+    pretaxAmount: totalPretax > 0 ? totalPretax : null,
+    pretaxGrossAmount: totalPretaxGross > 0 ? totalPretaxGross : null,
+    outstandingAmount: totalOutstanding > 0 ? totalOutstanding : null,
     availableAmount: balance?.Data?.AvailableAmount ?? null,
     availableCashAmount: balance?.Data?.AvailableCashAmount ?? null,
     accountId: bill?.Data?.AccountID ?? null,
+    itemCount: itemList.length,
     models: [...byModel.entries()].map(([model, costUsd]) => ({ model, costUsd })).sort((a, b) => b.costUsd - a.costUsd).slice(0, 12),
     error: bill?.Success === true ? null : (bill?.Message ?? "a BSS valasz nem ertelmezheto")
   };
 }
 
-/** Serve the Alibaba bill (rovid cache, mint az egyenleg). */
+/** Serve the Alibaba bill (shorter cache so post-payment shows quickly). */
 async function handleAlibabaBilling(res) {
   try {
     const now = Date.now();
