@@ -93,7 +93,7 @@ window.__ModuleLoader__.load({
      * disk or an older one the browser kept: the plugin URL carries a revision
      * query, and a stale page looks exactly like a failing one.
      */
-    var BUILD = "2026-09-27.2";
+    var BUILD = "2026-10-22.3";
 
     /**
      * One-time cleanup of this plugin's leftovers in the browser.
@@ -5280,6 +5280,11 @@ window.__ModuleLoader__.load({
      * read it back.
      */
     var terminalIntent = { want: false, rail: false, known: false };
+    // A visszaállítás (openTab) átmenetileg kinyitja a sávot, ami a body
+    // mount-kor futó `rememberTerminalIntent`-tel FELÜLÍRNÁ a betöltött vasúti
+    // állapotot — így a panel a következő tickre már „kinyitva" maradt. Ez az
+    // időbélyeg őrzi, hogy a restore ablakban ne írjuk felül a rail értéket.
+    var terminalRestoreUntil = 0;
 
     // ── PÁNKÉNTI PILLANATKÉP (2026-10-22) ──────────────────────────────────
     // MIÉRT: a fenti 'terminalWanted' a MUNKATERÜLET layout-dokumentumában él,
@@ -5294,6 +5299,11 @@ window.__ModuleLoader__.load({
     // panel saját WebView2-profilt használ (state\webview2\pane-N), tehát a
     // localStorage panelek szerinti, és túléli az alkalmazás újraindítását is.
     var TERMINAL_EXIT_SNAPSHOT_KEY = "dsh-ui-extras:terminal-at-exit";
+    // A jobb oldali sáv vasútra csukott állapota PÁNENKÉNT. A munkaterületi
+    // `terminalRail` MEGOSZTOTT a panelek között, ezért egy kiterjesztett panel
+    // `rail=false` értéke felülírta a többi, vasútra csukott panel értékét, és
+    // induláskor azok is kinyíltak — ezért kell külön, panelekre bontott kulcs.
+    var TERMINAL_EXIT_RAIL_KEY = "dsh-ui-extras:terminal-at-exit-rail";
 
     /** Mit mutatott EZ a panel kilépéskor: true/false, vagy null (még nincs adat). */
     function readPaneSnapshot() {
@@ -5305,10 +5315,33 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * Ez a panel vasútra csukva hagyta-e a sávot kilépéskor: true/false, vagy
+     * null, ha még nincs panelekre bontott mentés (ekkor a munkaterületi érték az
+     * alap).
+     */
+    function readPaneRailSnapshot() {
+      try {
+        var v = window.localStorage.getItem(TERMINAL_EXIT_RAIL_KEY);
+        return v === null ? null : v === "1";
+      } catch (error) {
+        return null;
+      }
+    }
+
     /** A pillanatnyi állapot rögzítése panelek szerint. */
     function writePaneSnapshot(present) {
       try {
         window.localStorage.setItem(TERMINAL_EXIT_SNAPSHOT_KEY, present ? "1" : "0");
+      } catch (error) {
+        // Privát mód / tiltott tároló: a viselkedés marad a régi (munkaterületi).
+      }
+    }
+
+    /** A vasúti (összecsukott) állapot rögzítése panelek szerint. */
+    function writePaneRailSnapshot(rail) {
+      try {
+        window.localStorage.setItem(TERMINAL_EXIT_RAIL_KEY, rail ? "1" : "0");
       } catch (error) {
         // Privát mód / tiltott tároló: a viselkedés marad a régi (munkaterületi).
       }
@@ -5371,7 +5404,13 @@ window.__ModuleLoader__.load({
     function rememberTerminalIntent(workspace, want, expanded) {
       terminalIntent.want = want === true;
       terminalIntent.known = true;
-      if (expanded === true || expanded === false) terminalIntent.rail = expanded === false;
+      var restoring = Date.now() < terminalRestoreUntil;
+      if (!restoring && (expanded === true || expanded === false)) {
+        terminalIntent.rail = expanded === false;
+        // A vasúti állapotot PÁNENKÉNT is mentjük, nehogy egy másik panel
+        // kiterjesztett sávja felülírja a következő indításkor.
+        writePaneRailSnapshot(terminalIntent.rail);
+      }
       if (!workspace) return;
       var patch = {};
       patch[TERMINAL_WANT_KEY] = terminalIntent.want ? 1 : 0;
@@ -5382,8 +5421,11 @@ window.__ModuleLoader__.load({
 
     /** Update just the rail half of the intent, and only when it changed. */
     function updateTerminalRail(workspace, rail) {
+      // A restore ablakban a 2 mp-es poll se írja felül a betöltött állapotot.
+      if (Date.now() < terminalRestoreUntil) return;
       if (rail === terminalIntent.rail) return;
       terminalIntent.rail = rail;
+      writePaneRailSnapshot(rail);
       if (!workspace) return;
       var patch = {};
       patch[TERMINAL_RAIL_KEY] = rail ? 1 : 0;
@@ -5401,7 +5443,12 @@ window.__ModuleLoader__.load({
     function loadTerminalIntent(workspace) {
       if (!workspace) return Promise.resolve(terminalIntent);
       return loadPanelLayout(workspace).then(function (layout) {
-        var rail = Number(layout[TERMINAL_RAIL_KEY] || 0) === 1;
+        // PÁNENKÉNTI vasúti állapot dönt. Ha még nincs panelekre bontott mentés
+        // (első indítás a javítás után), ALAPBÓL ÖSSZECSUKVA indulunk: a
+        // munkaterületi `terminalRail` MEGOSZTOTT a panelek között, ezért egy
+        // másik panel kiterjesztett sávja korábban ezt a panelt is kihúzta.
+        var paneRail = readPaneRailSnapshot();
+        var rail = paneRail === null ? true : paneRail;
         if (!terminalIntent.known) {
           // A panel SAJÁT kilépéskori állapota dönt. Ha még nincs ilyen (ez az
           // első indítás a javítás után), ZÁRVA indulunk: a munkaterületi
@@ -7669,6 +7716,9 @@ window.__ModuleLoader__.load({
           setTimeout(function () { ensureTerminalTab(reason, attempt + 1, budget, gap); }, gap);
           return;
         }
+        // A restore megnyitja a sávot; ebben az ablakban a body mount ne írja
+        // felül a betöltött vasúti állapotot (lásd rememberTerminalIntent).
+        terminalRestoreUntil = Date.now() + 2500;
         var answer = "ok";
         try {
           ctx.sidebarRight.openTab(TERMINAL_KIND);
@@ -7747,6 +7797,10 @@ window.__ModuleLoader__.load({
         var onLeaving = function () {
           pageGoingAway = true;
           writePaneSnapshot(terminalPanelPresent());
+          var expanded = rightbarExpanded();
+          if (expanded === true || expanded === false) {
+            writePaneRailSnapshot(expanded === false);
+          }
         };
         window.addEventListener("pagehide", onLeaving);
         window.addEventListener("beforeunload", onLeaving);
@@ -7764,13 +7818,18 @@ window.__ModuleLoader__.load({
       ctx.effect(function () {
         var armed = false;
         var last = null;
+        var lastRail = null;
         var armTimer = setTimeout(function () { armed = true; }, 8000);
         var timer = setInterval(function () {
           if (!armed) return;
           var present = terminalPanelPresent();
-          if (present === last) return;
+          var expanded = rightbarExpanded();
+          var rail = (expanded === true || expanded === false) ? (expanded === false) : null;
+          if (present === last && rail === lastRail) return;
           last = present;
+          lastRail = rail;
           writePaneSnapshot(present);
+          if (rail !== null) writePaneRailSnapshot(rail);
         }, 3000);
         return function () { clearTimeout(armTimer); clearInterval(timer); };
       }, "ui-extras: terminal exit snapshot");
