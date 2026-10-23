@@ -573,14 +573,64 @@ try {
     `közönséges parancs beírásakor a mező NEM rejt (hidden=${JSON.stringify(panel.echoButton && panel.echoButton.hidden)})`);
 
   /**
-   * The terminal's own paper must be darker than the panel: it is the reason the
-   * output is a `pre` with its own background instead of a transparent block over
-   * the sidebar's surface.
+   * The terminal's own paper must match the ACTIVE scheme: a shade deeper than the
+   * panel in dark mode, a shade deeper than the panel in light mode — never a black
+   * hole in a light window, and never so heavy that it reads as the old console.
    */
+  const parseRgb = (value) => {
+    const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/u.exec(String(value || ""));
+    return m ? m.slice(1).map(Number) : null;
+  };
+  const activeScheme = await evaluate(`(() => {
+    const root = document.documentElement;
+    const declared = String(root.style.colorScheme || "").trim().toLowerCase();
+    if (declared === "light" || declared === "dark") return declared;
+    return document.body.hasAttribute("data-ds-dark-theme") ? "dark" : "light";
+  })()`);
   const outputBg = (panel.outputBackground || [])[0] || "";
-  const channels = (/rgba?\((\d+),\s*(\d+),\s*(\d+)/u.exec(outputBg) || []).slice(1).map(Number);
-  check(channels.length === 3 && Math.max(...channels) <= 24,
-    `a terminál ablaka sötét lapot kap (${JSON.stringify(outputBg)})`);
+  const bgChannels = parseRgb(outputBg);
+  const bgMax = bgChannels ? Math.max(...bgChannels) : null;
+  check(bgChannels !== null && (activeScheme === "dark" ? bgMax >= 8 && bgMax <= 40 : bgMax >= 200),
+    `a terminál ablaka a sémához illő lapot kap (${activeScheme}, ${JSON.stringify(outputBg)})`);
+
+  /**
+   * The LIGHT palette, end to end — without touching the user's saved theme.
+   *
+   * The app's own theme presenter switches the scheme in exactly two DOM writes
+   * (`html.style.colorScheme` and the `body[data-ds-dark-theme]` attribute), so
+   * doing those two writes here is a faithful simulation: no setting is persisted,
+   * and the panel has to repaint itself WITHOUT a reload. The page is put back the
+   * way it was before the probe moves on.
+   */
+  const light = await evaluate(`(async () => {
+    const root = document.documentElement;
+    const before = {
+      colorScheme: root.style.colorScheme,
+      dark: document.body.hasAttribute("data-ds-dark-theme")
+    };
+    root.style.colorScheme = "light";
+    document.body.removeAttribute("data-ds-dark-theme");
+    await new Promise((r) => setTimeout(r, 600));
+    const output = document.querySelector('[data-dsh-ui-extras="cmd-output"]');
+    const card = document.querySelector('[data-dsh-ui-extras="terminal"]');
+    const style = output ? getComputedStyle(output) : null;
+    const result = {
+      background: style ? style.backgroundColor : null,
+      color: style ? style.color : null,
+      card: card ? getComputedStyle(card).backgroundColor : null
+    };
+    root.style.colorScheme = before.colorScheme;
+    if (before.dark) document.body.setAttribute("data-ds-dark-theme", "");
+    await new Promise((r) => setTimeout(r, 300));
+    return result;
+  })()`);
+  console.log("világos séma (szimulált):", JSON.stringify(light));
+  const lightBg = parseRgb(light && light.background);
+  const lightFg = parseRgb(light && light.color);
+  check(lightBg !== null && Math.min(...lightBg) >= 200,
+    `világos módban a terminál ablaka világos lapot kap (${JSON.stringify(light && light.background)})`);
+  check(lightFg !== null && Math.max(...lightFg) <= 90,
+    `világos módban a kimenet sötét betűt kap (${JSON.stringify(light && light.color)})`);
 
   /**
    * A SECRET prompt, end to end.

@@ -244,10 +244,13 @@ This **never touches the npx cache**, and it does not affect the built-in featur
     rule: the choice is deliberately NOT remembered (not even in `localStorage`),
     because a stored "reveal" is precisely how a password ends up on screen days
     later.
-  - **The terminal window gets its own, darker paper** (`TERM_SURFACE` / `TERM_CARD` /
-    `TERM_CHROME`): the output is the deepest black, the card and its header one step
-    above it. This is the panel's only deliberately theme-independent palette — it
-    used to ride on the `--dsw-alias-*` variables and read lighter than asked for.
+  - **The terminal window gets its own paper, per scheme** (`TERM_PALETTES`): in dark mode a
+    step deeper than the panel (`#101216` output, `#14171b` card, `#1b1f26` header/directory
+    line/input row), in light mode a light sheet with dark text (`#f3f5f7` / `#eef1f4` /
+    `#e5e9ee`, text `#1f2328`). The scheme is read from the DOM (`html.style.colorScheme` and
+    the `body[data-ds-dark-theme]` attribute the theme presenter writes), watched by a
+    `MutationObserver` — so a theme switch repaints **without a reload**, and light mode never
+    gets a black hole in the panel.
 - **Approval scopes: session, directory, file** (2026-10-18). The yellow card previously had only
   two "remember" options: `Always: <tool>` and `Always: every tool` — that is, for `write`/`edit`
   only the "every edit is automatic" level existed, not "only for this conversation" and "only in

@@ -267,10 +267,13 @@ Ez **soha nem nyúl az npx cache-hez**, és a beépített funkciókat nem érint
     terminál saját szabályára áll vissza: a választás szándékosan NEM marad meg
     (`localStorage`-ban sem), mert egy eltárolt „mutasd” pontosan így tesz jelszót
     a képernyőre napokkal később.
-  - **A terminál ablaka saját, sötétebb lapot kap** (`TERM_SURFACE` / `TERM_CARD` /
-    `TERM_CHROME`): a kimenet a legmélyebb fekete, a kártya és a fejléce egy fokkal
-    világosabb. Ez a panel EGYETLEN szándékosan témától független palettája —
-    korábban a `--dsw-alias-*` változókra épült, és a kértnél világosabb volt.
+  - **A terminál ablaka saját lapot kap, sémánként** (`TERM_PALETTES`): sötét módban
+    egy fokkal mélyebb, mint a panel (`#101216` kimenet, `#14171b` kártya, `#1b1f26`
+    fejléc/könyvtársor/beviteli sor), világos módban világos lap sötét betűvel
+    (`#f3f5f7` / `#eef1f4` / `#e5e9ee`, szöveg `#1f2328`). A sémát a DOM-ból
+    olvassa (`html.style.colorScheme` és a `body[data-ds-dark-theme]`, amit a
+    téma-presenter ír), egy `MutationObserver`-rel kísérve — ezért a témaváltás
+    **újratöltés nélkül** átfest, és világos módban sem lesz fekete lyuk a panelen.
 - **Jóváhagyás-hatókörök: munkamenet, mappa, fájl** (2026-10-18). A sárga kártyán
   korábban csak két „megjegyzés” volt: `Mindig: <eszköz>` és `Mindig: minden
   eszköz` — vagyis a `write`/`edit` esetében csak az „minden edit automatikus”

@@ -5516,21 +5516,87 @@ window.__ModuleLoader__.load({
     var SIZE_OPTIONS = [10, 11, 11.5, 12, 12.5, 13, 14, 15, 16];
 
     /**
-     * The terminal's own paper: one step darker than the panel around it.
+     * The terminal's own paper, in BOTH schemes.
      *
-     * A console is its own dark surface — every terminal emulator paints its own
-     * paper instead of borrowing the window's — and this panel follows that: the
-     * output window is the darkest plane, the card and its chrome sit one step
-     * above it. Deliberately NOT `--dsw-alias-*`: those follow the app theme, and
-     * the terminal read too light against them. This is the ONE fixed palette in
-     * the panel (every other surface stays theme-aware on purpose).
+     * A console paints its own surface instead of borrowing the panel's, but it
+     * still has to follow the app: a black canvas in light mode is a hole in the
+     * window, and the one dark pass this panel had first was heavier than the
+     * surface it sits in. So each palette stays one small step away from the app's
+     * own background, in the direction the theme already points — a shade darker
+     * than the panel in dark mode, a shade deeper than the panel in light mode —
+     * instead of being black or white in its own right.
+     *
+     * `surface` is the output window itself, `card` the frame around it, `chrome`
+     * the header, the directory line and the input row.
      */
-    var TERM_SURFACE = "#08090b";         // the output window: the darkest
-    var TERM_CARD = "#0e1014";            // the card holding it
-    var TERM_CHROME = "#161a1f";          // header, directory line, input row
-    var TERM_BORDER = "rgba(255,255,255,0.11)";
-    var TERM_BORDER_ACTIVE = "rgba(255,255,255,0.26)";
-    var TERM_TEXT = "#d7dade";
+    var TERM_PALETTES = {
+      dark: {
+        surface: "#101216",
+        card: "#14171b",
+        chrome: "#1b1f26",
+        border: "rgba(255,255,255,0.10)",
+        borderActive: "rgba(255,255,255,0.26)",
+        text: "#d7dade",
+        handle: "rgba(255,255,255,0.30)",
+        accent: "#fbbf24",
+        danger: "#ffb4ab",
+        ok: "#86efac",
+        fail: "#fca5a5"
+      },
+      light: {
+        surface: "#f3f5f7",
+        card: "#eef1f4",
+        chrome: "#e5e9ee",
+        border: "rgba(0,0,0,0.12)",
+        borderActive: "rgba(0,0,0,0.30)",
+        text: "#1f2328",
+        handle: "rgba(0,0,0,0.22)",
+        accent: "#b45309",
+        danger: "#b91c1c",
+        ok: "#15803d",
+        fail: "#b91c1c"
+      }
+    };
+
+    /** The theme service, published by `apply(ctx)`; the palette's last resort. */
+    var themeServiceRef = { current: null };
+
+    /**
+     * Which colour scheme the app is painting right now.
+     *
+     * The DOM is asked first, because it is the thing being corrected: the theme
+     * presenter writes the resolved scheme onto the document
+     * (`html.style.colorScheme`, plus `body[data-ds-dark-theme]` while dark) and
+     * that is what every token on the page already follows. The theme service is
+     * the fallback for the moment before the presenter runs, and `dark` is the
+     * last resort — the panel's own host chrome is dark by default.
+     * @returns "light" or "dark", never undefined.
+     */
+    function currentColorScheme() {
+      try {
+        var root = document.documentElement;
+        var declared = root && root.style ? String(root.style.colorScheme || "").trim().toLowerCase() : "";
+        if (declared === "light" || declared === "dark") return declared;
+        var body = document.body;
+        if (body && typeof body.hasAttribute === "function") {
+          if (body.hasAttribute("data-ds-dark-theme")) return "dark";
+        }
+        var service = themeServiceRef.current;
+        var snapshot = service && typeof service.getTheme === "function" ? service.getTheme() : null;
+        var active = snapshot && snapshot.active;
+        var scheme = active && (active.colorScheme || active.id);
+        if (scheme === "light" || scheme === "dark") return scheme;
+        // No marker anywhere: the app boots dark, and a missing attribute is how
+        // light mode looks on a page that HAS booted.
+        if (body && typeof body.hasAttribute === "function") return "light";
+      } catch (error) { }
+      return "dark";
+    }
+
+    /** The palette for a scheme, with the dark one as the safe answer. */
+    function terminalPalette(scheme) {
+      return scheme === "light" ? TERM_PALETTES.light : TERM_PALETTES.dark;
+    }
 
     /**
      * The reader's own terminal appearance, shared by every workspace.
@@ -6315,6 +6381,38 @@ window.__ModuleLoader__.load({
       react.useEffect(function () { forgetOldEchoPref(); }, []);
       var activeFont = FONT_OPTIONS[fontPrefs.font] || FONT_OPTIONS[0];
       var activeSize = SIZE_OPTIONS[fontPrefs.size] || 12;
+
+      /**
+       * The colour scheme the terminal paints for, kept live.
+       *
+       * The palette has to follow a theme switch without a reload (the corner
+       * control and the OS setting both switch it), and the switch is visible in
+       * exactly two places: `html.style.colorScheme` and the `data-ds-dark-theme`
+       * attribute the theme presenter toggles on the body. Watching those two is
+       * cheaper and more honest than polling a service, and it also covers a theme
+       * that is switched by something this panel knows nothing about.
+       */
+      var schemeState = react.useState(currentColorScheme);
+      var colorScheme = schemeState[0];
+      var setColorScheme = schemeState[1];
+
+      react.useEffect(function () {
+        var read = function () {
+          var next = currentColorScheme();
+          setColorScheme(function (previous) { return previous === next ? previous : next; });
+        };
+        read();
+        if (typeof MutationObserver !== "function") return undefined;
+        var observer = new MutationObserver(read);
+        try {
+          observer.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class"] });
+          if (document.body) observer.observe(document.body, { attributes: true, attributeFilter: ["data-ds-dark-theme", "class", "style"] });
+        } catch (error) { }
+        return function () { try { observer.disconnect(); } catch (error) { } };
+      }, []);
+
+      /** This scheme's palette: the output window, its frame and its chrome. */
+      var TERM = terminalPalette(colorScheme);
 
       function chooseFont(next) {
         var value = { font: next, size: fontPrefs.size };
@@ -7171,7 +7269,7 @@ window.__ModuleLoader__.load({
         var running = entry.done !== true;
         var dir = dirs[id] || workspaceDir;
         // The dot is the state: amber while it runs, green/red once it exited.
-        var stateColor = entry.done === true ? (entry.code === 0 ? "#86efac" : "#fca5a5") : "#fbbf24";
+        var stateColor = entry.done === true ? (entry.code === 0 ? TERM.ok : TERM.fail) : TERM.accent;
         var stateTitle = entry.done === true
           ? t("cmdExited") + " " + (entry.code === null ? "?" : String(entry.code))
           : t("cmdRunning");
@@ -7221,16 +7319,16 @@ window.__ModuleLoader__.load({
             // The selected terminal is the one a new command belongs to. It only
             // needs a hint: the loud blue outline read as an alert for something
             // as ordinary as "this is the one the command line talks to".
-            border: "1px solid " + (isActive ? TERM_BORDER_ACTIVE : TERM_BORDER),
+            border: "1px solid " + (isActive ? TERM.borderActive : TERM.border),
             borderRadius: "9px",
-            // The card is a console, not a panel surface: see TERM_CARD.
-            background: TERM_CARD,
-            color: TERM_TEXT,
+            // The card is a console, not a panel surface: see TERM.card.
+            background: TERM.card,
+            color: TERM.text,
             overflow: "hidden"
           },
           children: [
             jsx.jsxs("header", {
-              style: { display: "flex", gap: "6px", alignItems: "center", padding: "4px 6px", background: TERM_CHROME },
+              style: { display: "flex", gap: "6px", alignItems: "center", padding: "4px 6px", background: TERM.chrome },
               children: [
                 jsx.jsxs("button", {
                   type: "button",
@@ -7279,7 +7377,7 @@ window.__ModuleLoader__.load({
                     title: t("cmdStopTree"),
                     "aria-label": t("cmdStopTree"),
                     onClick: function () { killTerminal(id); },
-                    style: { border: 0, background: "transparent", color: "#ffb4ab", cursor: "pointer", font: "inherit" },
+                    style: { border: 0, background: "transparent", color: TERM.danger, cursor: "pointer", font: "inherit" },
                     children: "■"
                   })
                   : null,
@@ -7356,8 +7454,8 @@ window.__ModuleLoader__.load({
                 padding: "2px 8px",
                 fontSize: "11px",
                 opacity: 0.85,
-                background: TERM_CARD,
-                borderBottom: "1px solid " + TERM_BORDER
+                background: TERM.card,
+                borderBottom: "1px solid " + TERM.border
               },
               children: [
                 jsx.jsx("span", {
@@ -7366,7 +7464,7 @@ window.__ModuleLoader__.load({
                 }),
                 // Only a transient state may appear here: it is not a statistic.
                 interrupting[id] === true
-                  ? jsx.jsx("span", { style: { flex: "0 0 auto", color: "#fbbf24" }, children: t("cmdInterrupting") })
+                  ? jsx.jsx("span", { style: { flex: "0 0 auto", color: TERM.accent }, children: t("cmdInterrupting") })
                   : null
               ]
             }),
@@ -7389,8 +7487,8 @@ window.__ModuleLoader__.load({
                 flex: "1 1 auto",
                 overflow: "auto",
                 // The terminal's own paper: darker than the card around it.
-                background: TERM_SURFACE,
-                color: TERM_TEXT,
+                background: TERM.surface,
+                color: TERM.text,
                 // The chosen face and size, from the panel's own toolbar.
                 fontFamily: activeFont.font,
                 fontSize: String(activeSize) + "px",
@@ -7410,14 +7508,14 @@ window.__ModuleLoader__.load({
                 height: "7px",
                 flex: "0 0 auto",
                 cursor: "ns-resize",
-                background: TERM_CHROME,
+                background: TERM.chrome,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 touchAction: "none"
               },
               children: jsx.jsx("span", {
-                style: { width: "24px", height: "2px", borderRadius: "2px", background: "rgba(255,255,255,0.3)" }
+                style: { width: "24px", height: "2px", borderRadius: "2px", background: TERM.handle }
               })
             }),
             // A running command can wait for an answer; shortcuts work here, so a
@@ -7441,7 +7539,7 @@ window.__ModuleLoader__.load({
                   // Comfortable input row: the field needs air above and below the
                   // text, and the controls line up with its height instead of
                   // cramping it ("flat" was the complaint and it is a padding bug).
-                  style: { display: "flex", gap: "4px", alignItems: "center", padding: "5px 6px", background: TERM_CHROME },
+                  style: { display: "flex", gap: "4px", alignItems: "center", padding: "5px 6px", background: TERM.chrome },
                   children: [
                     jsx.jsx("input", {
                       // `text` while the reader types an ordinary command, exactly
@@ -7462,9 +7560,9 @@ window.__ModuleLoader__.load({
                         padding: "5px 8px",
                         lineHeight: "18px",
                         borderRadius: "6px",
-                        background: TERM_SURFACE,
-                        color: TERM_TEXT,
-                        border: "1px solid " + (hideTyped ? "var(--dsw-alias-state-warn-secondary, rgba(251,191,36,0.55))" : TERM_BORDER),
+                        background: TERM.surface,
+                        color: TERM.text,
+                        border: "1px solid " + (hideTyped ? "var(--dsw-alias-state-warn-secondary, rgba(251,191,36,0.55))" : TERM.border),
                         fontFamily: activeFont.font,
                         fontSize: String(activeSize) + "px"
                       }
@@ -7482,7 +7580,7 @@ window.__ModuleLoader__.load({
                         // from the terminal's own rule again (see sendStdin).
                         setEchoMode(hideTyped ? "show" : "hide");
                       },
-                      style: { border: 0, background: "transparent", color: hideTyped ? "#fbbf24" : "inherit", cursor: "pointer", font: "inherit", lineHeight: 1, padding: "0 3px" },
+                      style: { border: 0, background: "transparent", color: hideTyped ? TERM.accent : "inherit", cursor: "pointer", font: "inherit", lineHeight: 1, padding: "0 3px" },
                       children: hideTyped ? "🙈" : "👁"
                     }),
                     jsx.jsx("button", {
@@ -7499,7 +7597,7 @@ window.__ModuleLoader__.load({
                       title: t("cmdInterrupt"),
                       "aria-label": t("cmdInterruptShort"),
                       onClick: function () { interruptTerminal(id); },
-                      style: { border: "1px solid rgba(252,165,165,0.4)", borderRadius: "7px", background: "transparent", color: "#ffb4ab", cursor: "pointer", font: "inherit", lineHeight: 1, padding: "4px 8px" },
+                      style: { border: "1px solid " + (colorScheme === "light" ? "rgba(185,28,28,0.35)" : "rgba(252,165,165,0.4)"), borderRadius: "7px", background: "transparent", color: TERM.danger, cursor: "pointer", font: "inherit", lineHeight: 1, padding: "4px 8px" },
                       children: "^C"
                     })
                   ]
@@ -8028,6 +8126,11 @@ window.__ModuleLoader__.load({
      * hide the built-in pills, and publish the dictionaries.
      */
     function apply(ctx) {
+      // The terminal paints its own paper (see TERM_PALETTES) and asks the theme
+      // service which scheme to paint; the module-level ref is how a component
+      // defined outside this function can reach it.
+      themeServiceRef.current = ctx.theme || null;
+
       // Any uncaught error inside this bundle lands in the host log, so a broken
       // client build is diagnosable without opening DevTools. Installed once.
       try {
