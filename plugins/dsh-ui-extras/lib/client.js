@@ -105,7 +105,7 @@ window.__ModuleLoader__.load({
      * disk or an older one the browser kept: the plugin URL carries a revision
      * query, and a stale page looks exactly like a failing one.
      */
-    var BUILD = "2026-10-22.10";
+    var BUILD = "2026-10-23.1";
 
     /**
      * One-time cleanup of this plugin's leftovers in the browser.
@@ -3853,6 +3853,19 @@ window.__ModuleLoader__.load({
       });
     }
 
+    /**
+     * A nyitott git panel, illetve az őt nyitó ⎇ gomb jelölője.
+     *
+     * Eddig a panelt CSAK a ⎇ ikon (vagy a ✕) zárta be, ezért a chat
+     * használatához mindig vissza kellett kattintani az ikonra. A "mellé
+     * kattintás bezár" viselkedéshez el kell tudni dönteni, hogy a kattintás a
+     * panelen BELÜLRE vagy KÍVÜLRE esett; ez a két jelölő teszi ezt lehetővé.
+     * A gomb jelölése azért kell, mert a pointerdown lezárná a panelt, majd a
+     * gomb kattintása — a friss állapottal — azonnal újra kinyitná.
+     */
+    var GIT_PANEL_MARK = "git-panel";
+    var GIT_TOGGLE_MARK = "git-toggle";
+
     /** Compact icon button used by the corner controls. */
     function CornerButton(props) {
       var hoverState = react.useState(false);
@@ -3861,7 +3874,7 @@ window.__ModuleLoader__.load({
       // `disabled` keeps the button on screen but inert: a control that
       // disappears cannot be used to get out of a stuck state.
       var disabled = props.disabled === true;
-      return jsx.jsx("button", {
+      var attrs = {
         type: "button",
         title: props.title,
         "aria-label": props.title,
@@ -3895,7 +3908,13 @@ window.__ModuleLoader__.load({
           jsx.jsx("span", { "aria-hidden": "true", children: props.icon }),
           props.text ? jsx.jsx("span", { children: props.text }) : null
         ]
-      });
+      };
+      // Csak a jelölést kérő gombok kapnak `data-` attribútumot; a többi
+      // gomb kimenete változatlan marad.
+      if (typeof props.dataName === "string" && props.dataName.length > 0) {
+        attrs["data-dsh-ui-extras"] = props.dataName;
+      }
+      return jsx.jsx("button", attrs);
     }
 
     /**
@@ -3953,6 +3972,75 @@ window.__ModuleLoader__.load({
       var permState = react.useState(false);
       var permOpen = permState[0];
       var setPermOpen = permState[1];
+
+      /**
+       * A git panel "mellé kattintásra bezár" viselkedése.
+       *
+       * A panel a fejléc alatti úszó panel; eddig CSAK a ⎇ ikon vagy a ✕
+       * zárta be, ezért a chat használata előtt mindig vissza kellett
+       * kattintani az ikonra. Mostantól a panelen KÍVÜLRE kattintás (a chat
+       * bemenete, egy üzenet, a fejléc bármely más gombja) bezárja.
+       *
+       * MIÉRT `pointerdown`, és miért CAPTURE fázisban: így a panel már a
+       * kattintás lefutása ELŐTT eltűnik, és a kattintás a mögötte lévő
+       * felületet éri el (pl. a chat bemenete fókuszál), nem egy eltűnő
+       * panelre vár.
+       *
+       * MIÉRT `composedPath()`: shadow DOM esetén az esemény `target`-je a
+       * host elem lenne, a `closest()` pedig a belső csomópontokat nem
+       * látná — a panelen belüli kattintás így "kívülnek" látszana.
+       *
+       * MIÉRT marad ki a ⎇ gomb: a pointerdown lezárná a panelt, majd a gomb
+       * kattintása (a friss állapottal) azonnal újra kinyitná, tehát a gomb
+       * használhatatlannak tűnne.
+       *
+       * Az ESC ugyanezt teszi: a panel popover, nem külön képernyő.
+       */
+      react.useEffect(function () {
+        if (!panelOpen) return undefined;
+
+        /** A kattintás útvonala: composedPath, vagy a target szülei. */
+        function pointerPath(event) {
+          var path = typeof event.composedPath === "function" ? event.composedPath() : null;
+          if (path && path.length > 0) return path;
+          var nodes = [];
+          var node = event.target;
+          while (node) {
+            nodes.push(node);
+            node = node.parentNode;
+          }
+          return nodes;
+        }
+
+        /** Igaz, ha a csomópont a git panelhez (vagy a nyitó gombjához) tartozik. */
+        function belongsToGitPanel(node) {
+          if (!node || node.nodeType !== 1 || typeof node.getAttribute !== "function") return false;
+          var mark = node.getAttribute("data-dsh-ui-extras");
+          if (mark === GIT_PANEL_MARK || mark === GIT_TOGGLE_MARK) return true;
+          // Egy összeomlott panel hibadoboza ugyanoda rajzolódik; abból a
+          // dobozból olvasni és másolni kell tudni, ezért az sem "kívül".
+          return mark === "panel-error" && node.getAttribute("data-dsh-ui-extras-owner") === "git";
+        }
+
+        function onPointerDown(event) {
+          var path = pointerPath(event);
+          for (var i = 0; i < path.length; i++) {
+            if (belongsToGitPanel(path[i])) return;
+          }
+          setPanelOpen(false);
+        }
+
+        function onKeyDown(event) {
+          if (event.key === "Escape" || event.key === "Esc") setPanelOpen(false);
+        }
+
+        document.addEventListener("pointerdown", onPointerDown, true);
+        document.addEventListener("keydown", onKeyDown, true);
+        return function () {
+          document.removeEventListener("pointerdown", onPointerDown, true);
+          document.removeEventListener("keydown", onKeyDown, true);
+        };
+      }, [panelOpen]);
 
       // Visible feedback for the restart / deploy buttons, so pressing them is
       // never a silent no-op.
@@ -4336,6 +4424,9 @@ window.__ModuleLoader__.load({
           jsx.jsx(CornerButton, {
             icon: "⎇",
             title: t("gitOpen"),
+            // A panel "kívülre kattintás bezár" logikája e jelölő alapján
+            // hagyja békén a gombot (lásd GIT_TOGGLE_MARK).
+            dataName: GIT_TOGGLE_MARK,
             active: panelOpen,
             disabled: busy,
             onClick: function () { setPanelOpen(!panelOpen); }
@@ -4402,6 +4493,10 @@ window.__ModuleLoader__.load({
           panelOpen
             ? jsx.jsx(PanelBoundary, {
               name: "Git panel",
+              // A hibadoboz is a git panelhez tartozik: a "kívülre kattintás"
+              // ne zárja be alatta, hogy a hibaüzenet olvasható/másolható
+              // maradjon (lásd a kívülre kattintás effektjét).
+              owner: "git",
               label: t("gitTitle"),
               onClose: function () { setPanelOpen(false); },
               children: jsx.jsx(GitPanel, {
@@ -7726,6 +7821,9 @@ window.__ModuleLoader__.load({
         if (this.state.error !== null) {
           return jsx.jsxs("div", {
             "data-dsh-ui-extras": "panel-error",
+            // Melyik panel doboza ez: a "kívülre kattintás bezár" logika
+            // ebből tudja, hogy a hibadoboz a saját panelé (lásd GIT_PANEL_MARK).
+            "data-dsh-ui-extras-owner": this.props.owner,
             style: {
               position: "absolute",
               top: "30px",
