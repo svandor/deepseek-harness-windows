@@ -113,11 +113,19 @@ Ez **soha nem nyúl az npx cache-hez**, és a beépített funkciókat nem érint
     (d) a kimenet a **végén** áll és ott is marad, (e) a kártya a munkakönyvtárat
     a kimenet felett, a könyvtár sorában **állapot-szöveg és sorszám nélkül**
     mutatja (a sorszám a fejlécben van, a küldés gomb pedig ikon + tooltip),
-    (f) a betűtípus monospace, végül (g) a Ctrl+C megszakítja a futó parancsot — ehhez **saját** terminált indít és markerrel
+    (f) a betűtípus monospace, (g) a bemeneti mező alapból **láttatja** a beírt
+    szöveget, és csak a kimenet utolsó sorában jelzett jelszókérésnél rejt
+    (`type=password`, 🙈), egy kattintásra megmutatva, (h) a terminál ablaka sötét
+    lapot kap, végül (i) a Ctrl+C megszakítja a futó parancsot — ehhez **saját** terminált indít és markerrel
     azonosítja, hogy soha ne állítson le olyan folyamatot, amit nem ő indított.
     A javítás előtt pont ez a három bukott el: a panel a harness könyvtárában
     futtatta az `npm run dev`-et, mert a munkakönyvtárat a host `process.cwd()`-jéből
     vette a kiválasztott session `cwd`-je helyett.
+  - `node tools\check-terminal-echo.mjs` — a fenti (g) pont **statikus** őre: a
+    `SECRET_PROMPT_SHAPE` reguláris kifejezést a kliens bundle-ből olvassa ki, és
+    valódi jelszó-kéréseken (`Password:`, `Jelszó:`, `Enter passphrase for key …:`)
+    valamint naplósorokon (`npm WARN … token expired`, `token: abc123`, `Password?`)
+    ellenőrzi, hogy ne rejtsen el közönséges gépelést, és ne engedjen át jelszót.
 - Az izolált teszt **zöld**: a boot betölt, a plugin szerepel a boot gráfban
   (`dsh-ui-extras/client.js` a `/plugins/??...&rev=...` listában)
 - Böngészős próbák (a host nem látja a böngészőt, ezek nélkül a kliens-hibák
@@ -245,12 +253,24 @@ Ez **soha nem nyúl az npx cache-hez**, és a beépített funkciókat nem érint
     szervere itt látszott, mintha ebben a könyvtárban futna.
   - **Alapmagasság**: a kimenet alapból `170px` … `22vh` (docked), nem `46vh` —
     két terminál is elfér egymás alatt; a húzás és a `⤢` nagyítja.
-  - **A bemeneti mező alapból REJT** (`type=password`), mert a `sudo`/`ssh`/`git`
-    jelszókérés ugyanezen a mezőn jön be, és nincs általános mód annak
-    felismerésére, hogy egy prompt titkos. A 🙈/👁 gomb mutatja/rejti (a választás
-    `localStorage`-ban marad), és ha a kimenet utolsó sorai jelszóra utalnak
-    (`password`, `passphrase`, `jelszó`, `token`, …), a mező kerete sárgára vált és
-    a placeholder erre figyelmeztet.
+  - **A bemeneti mező úgy viselkedik, mint egy terminálé: ami beírsz, LÁTSZIK**
+    (`type=text`), és csak akkor rejt, amikor a kimenet jelszót kér. A korábbi
+    build ezt fordítva csinálta — minden leütést elrejtett, a jelszót viszont
+    megmutatta, amint bekapcsoltad a megjelenítést —, és pontosan ez volt a
+    bejelentett hiba. A döntés a kimenet **utolsó** során múlik
+    (`SECRET_PROMPT_SHAPE`): a titkos szó a sor végéhez közel van, és a sor ott
+    végződik, ahová a válasz kerül (`:` vagy `>`). Így a `Password:`, `Jelszó:`,
+    `Enter passphrase for key …:` és `Password for 'https://…':` rejt, a
+    `npm WARN … token expired` viszont nem — egy régi „token” említés nem rejtheti
+    el a többi parancsot. A 🙈/👁 gomb az ÉPPEN látszó kérdésre ad egyszeri
+    felülírást (megmutatás vagy kézi elrejtés), és a válasz elküldése után minden a
+    terminál saját szabályára áll vissza: a választás szándékosan NEM marad meg
+    (`localStorage`-ban sem), mert egy eltárolt „mutasd” pontosan így tesz jelszót
+    a képernyőre napokkal később.
+  - **A terminál ablaka saját, sötétebb lapot kap** (`TERM_SURFACE` / `TERM_CARD` /
+    `TERM_CHROME`): a kimenet a legmélyebb fekete, a kártya és a fejléce egy fokkal
+    világosabb. Ez a panel EGYETLEN szándékosan témától független palettája —
+    korábban a `--dsw-alias-*` változókra épült, és a kértnél világosabb volt.
 - **Jóváhagyás-hatókörök: munkamenet, mappa, fájl** (2026-10-18). A sárga kártyán
   korábban csak két „megjegyzés” volt: `Mindig: <eszköz>` és `Mindig: minden
   eszköz` — vagyis a `write`/`edit` esetében csak az „minden edit automatikus”

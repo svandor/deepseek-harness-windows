@@ -1443,12 +1443,13 @@ window.__ModuleLoader__.load({
       "cmdFontSize": "Betűméret",
       "cmdHiddenLines": "korábbi sor elrejtve:",
       "cmdSecretPlaceholder": "Titkos bemenet (nem látszik, amit beírsz)",
-      "cmdSecretHint": "Ez a kimenet jelszóra vagy titkos adatra kérdezhet. A mező elrejti a beírt karaktereket; a 🙈/👁 gombbal kapcsolható.",
+      "cmdSecretHint": "Ez a kimenet jelszóra vagy titkos adatra kérdezhet, ezért a mező most elrejti, amit beírsz — akár egy hagyományos terminál. A 🙈/👁 gombbal erre az egy válaszra megmutatható.",
       "cmdEchoShow": "Bevitel megjelenítése",
-      "cmdEchoShowHint": "A beírt szöveg láthatóvá tétele (jelszónál maradjon rejtve)",
+      "cmdEchoShowHint": "A beírt jelszó megmutatása erre az egy kérdésre (a következő kérdésnél újra rejtve lesz)",
       "cmdEchoHide": "Bevitel elrejtése",
       "cmdEchoHideHint": "A beírt szöveg elrejtése (jelszóhoz ez a biztonságos)",
       "cmdStdinPlaceholder": "Bemenet a futó parancsnak (Enter = küldés)",
+      "cmdStdinHint": "Bemenet a futó parancsnak: a beírt szöveg látszik, akár egy terminálban. Enter = küldés, Ctrl+C = megszakítás.",
       "cmdStdinSend": "Küldés",
       "cmdStdinSendHint": "A sor elküldése a folyamat bemenetére",
       "restartHarness": "A Harness újraindítása (friss belépési token; a rendszertálca ikon végzi el, ezért nem szakad félbe)",
@@ -1695,12 +1696,13 @@ window.__ModuleLoader__.load({
       "cmdFontSize": "Font size",
       "cmdHiddenLines": "earlier lines hidden:",
       "cmdSecretPlaceholder": "Secret input (what you type is hidden)",
-      "cmdSecretHint": "This output may be asking for a password or another secret. The field hides what you type; the 🙈/👁 button toggles it.",
+      "cmdSecretHint": "This output may be asking for a password or another secret, so the field hides what you type — the way a terminal does. The 🙈/👁 button reveals it for this one answer.",
       "cmdEchoShow": "Reveal the input",
-      "cmdEchoShowHint": "Show what is typed (keep it hidden for a password)",
+      "cmdEchoShowHint": "Reveal the password for this one prompt (the next prompt is masked again)",
       "cmdEchoHide": "Hide the input",
       "cmdEchoHideHint": "Hide what is typed (this is the safe choice for a password)",
       "cmdStdinPlaceholder": "Input for the running command (Enter sends)",
+      "cmdStdinHint": "Input for the running command: what you type is visible, like in a terminal. Enter sends, Ctrl+C interrupts.",
       "cmdStdinSend": "Send",
       "cmdStdinSendHint": "Send the line to the process input",
       "restartHarness": "Restart the Harness (fresh sign-in token)",
@@ -5514,6 +5516,23 @@ window.__ModuleLoader__.load({
     var SIZE_OPTIONS = [10, 11, 11.5, 12, 12.5, 13, 14, 15, 16];
 
     /**
+     * The terminal's own paper: one step darker than the panel around it.
+     *
+     * A console is its own dark surface — every terminal emulator paints its own
+     * paper instead of borrowing the window's — and this panel follows that: the
+     * output window is the darkest plane, the card and its chrome sit one step
+     * above it. Deliberately NOT `--dsw-alias-*`: those follow the app theme, and
+     * the terminal read too light against them. This is the ONE fixed palette in
+     * the panel (every other surface stays theme-aware on purpose).
+     */
+    var TERM_SURFACE = "#08090b";         // the output window: the darkest
+    var TERM_CARD = "#0e1014";            // the card holding it
+    var TERM_CHROME = "#161a1f";          // header, directory line, input row
+    var TERM_BORDER = "rgba(255,255,255,0.11)";
+    var TERM_BORDER_ACTIVE = "rgba(255,255,255,0.26)";
+    var TERM_TEXT = "#d7dade";
+
+    /**
      * The reader's own terminal appearance, shared by every workspace.
      *
      * Deliberately not part of the per-workspace layout: the face and the size are
@@ -5522,43 +5541,57 @@ window.__ModuleLoader__.load({
      */
     var FONT_PREF_KEY = "dsh-ui-extras.terminalFont";
 
-    /** Whether the input line may show what is typed in it (default: it may not). */
-    var ECHO_PREF_KEY = "dsh-ui-extras.terminalEcho";
-
     /**
-     * The input line is hidden by default, and that default is the point.
+     * How the input line echoes what is typed — the rule every terminal follows.
      *
-     * A `sudo`/`ssh`/`git` prompt asks for a password through the SAME input this
-     * panel uses for ordinary text, and there is no general way to know that a
-     * prompt is a secret one — the process only knows. Masking is therefore the
-     * safe default: an echoed password ends up in a tooltip, a screenshot, a shared
-     * screen or a recording. Anyone who wants to see what they type (a long path, a
-     * one-off command) can reveal it with the eye button, and that choice is
-     * remembered.
+     * A terminal echoes ordinary typing and stops echoing the moment a program
+     * asks for a password (`sudo`, `ssh`, `git`, `npm login`): the console host
+     * switches the echo off, so nothing of the secret ever reaches the screen.
+     * This panel has no console host to switch off — the process only ever sees a
+     * pipe — so the same behaviour has to be built from two parts:
+     *
+     *   * by default the field ECHOES (`type="text"`), which is what a terminal
+     *     does: the command you type stays readable while you type it;
+     *   * the moment the output's LAST line asks for a secret, the field masks
+     *     itself (`type="password"`), and the 🙈/👁 button is the reader's one-off
+     *     override — to peek at a long path, or to hide a secret that arrived
+     *     through a prompt the panel could not recognise.
+     *
+     * The earlier build had this exactly BACKWARDS: the field was masked for every
+     * keystroke and, once echoing was switched on, a password typed into it was
+     * shown in clear — the two behaviours a terminal never has. The choice is
+     * therefore deliberately NOT remembered in localStorage: a stored "reveal" is
+     * precisely how a password ends up on screen days later, and a stored "hide"
+     * is what made every ordinary command unreadable.
      */
-    function readEchoPref() {
-      try {
-        return window.localStorage.getItem(ECHO_PREF_KEY) === "1";
-      } catch (error) {
-        return false;
-      }
-    }
+    var OLD_ECHO_PREF_KEY = "dsh-ui-extras.terminalEcho"; // "1" = reveal everything
 
-    function writeEchoPref(show) {
+    /** Drop the obsolete reveal/hide preference; it inverted the whole idea. */
+    function forgetOldEchoPref() {
       try {
-        window.localStorage.setItem(ECHO_PREF_KEY, show ? "1" : "0");
+        window.localStorage.removeItem(OLD_ECHO_PREF_KEY);
       } catch (error) { }
     }
 
     /**
-     * Whether a line looks like a SECRET prompt.
+     * Whether the line the process is sitting on asks for a SECRET.
      *
-     * Only used to warn the reader (the field is masked either way): the moment a
-     * password prompt appears is exactly when it must be obvious that nothing is
-     * echoed. Words are matched in both languages the panel ships.
+     * Two things make a line a PROMPT rather than a log line: the secret word has
+     * to be near the END of it, and it has to end where the answer would go
+     * (`:` or `>`, the punctuation a prompt uses). `npm WARN ... token expired` is
+     * a log line, and masking ordinary typing because some log mentioned a token
+     * is worse than not masking at all. A line ending in `?` is a yes/no QUESTION
+     * about a password, whose answer is "y", not the password itself, so it is not
+     * a secret prompt either. Only the LAST line is checked, because only the last
+     * line can be the prompt the cursor is standing on. Words are matched in both
+     * languages the panel ships.
      */
+    var SECRET_PROMPT_SHAPE = /(?:pass(?:word|phrase|wd)|jelsz[óo]|\bpin\b|secret|token|api[-_ ]?key)[^\n>]{0,40}[:>]\s*$/iu;
+
     function looksLikeSecretPrompt(line) {
-      return /(password|passphrase|jelszo|jelszó|passwd|\bpin\b|secret|token|api[-_ ]?key)/iu.test(String(line || ""));
+      var text = String(line || "").trim();
+      if (text === "") return false;
+      return SECRET_PROMPT_SHAPE.test(text);
     }
 
     function readFontPrefs() {
@@ -6271,11 +6304,15 @@ window.__ModuleLoader__.load({
       var fontPrefsState = react.useState(readFontPrefs);
       var fontPrefs = fontPrefsState[0];
       var setFontPrefs = fontPrefsState[1];
-      // Whether the input line shows what is typed. False by default: a password
-      // prompt arrives through this very field (see readEchoPref).
-      var echoState = react.useState(readEchoPref);
-      var echoInput = echoState[0];
-      var setEchoInput = echoState[1];
+      // The input line echoes what is typed, like a terminal, and masks itself
+      // only at a secret prompt. "auto" is that rule; "show"/"hide" are the
+      // reader's one-off overrides for the prompt currently on screen (see the
+      // note at looksLikeSecretPrompt). Never persisted — see OLD_ECHO_PREF_KEY.
+      var echoModeState = react.useState("auto");
+      var echoMode = echoModeState[0];
+      var setEchoMode = echoModeState[1];
+      // The old preference inverted this, so it is dropped rather than read.
+      react.useEffect(function () { forgetOldEchoPref(); }, []);
       var activeFont = FONT_OPTIONS[fontPrefs.font] || FONT_OPTIONS[0];
       var activeSize = SIZE_OPTIONS[fontPrefs.size] || 12;
 
@@ -6539,6 +6576,10 @@ window.__ModuleLoader__.load({
             if (body && body.ok === true) {
               setStdin(id, "");
               trackDirectory(id, value);
+              // The next prompt starts from the terminal's own rule again: a peek
+              // at one password must not reveal the next one, and a manual hide
+              // must not outlive the line it was meant for.
+              setEchoMode("auto");
             }
             refreshRuns();
           })
@@ -7180,14 +7221,16 @@ window.__ModuleLoader__.load({
             // The selected terminal is the one a new command belongs to. It only
             // needs a hint: the loud blue outline read as an alert for something
             // as ordinary as "this is the one the command line talks to".
-            border: "1px solid " + (isActive ? "var(--dsw-alias-border-l4, rgba(255,255,255,0.3))" : "var(--dsw-alias-border-l2, rgba(255,255,255,0.12))"),
+            border: "1px solid " + (isActive ? TERM_BORDER_ACTIVE : TERM_BORDER),
             borderRadius: "9px",
-            background: isActive ? "var(--dsw-alias-interactive-bg-active, rgba(255,255,255,0.05))" : "var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.28))",
+            // The card is a console, not a panel surface: see TERM_CARD.
+            background: TERM_CARD,
+            color: TERM_TEXT,
             overflow: "hidden"
           },
           children: [
             jsx.jsxs("header", {
-              style: { display: "flex", gap: "6px", alignItems: "center", padding: "4px 6px", background: "var(--dsw-alias-border-l1, rgba(255,255,255,0.05))" },
+              style: { display: "flex", gap: "6px", alignItems: "center", padding: "4px 6px", background: TERM_CHROME },
               children: [
                 jsx.jsxs("button", {
                   type: "button",
@@ -7313,7 +7356,8 @@ window.__ModuleLoader__.load({
                 padding: "2px 8px",
                 fontSize: "11px",
                 opacity: 0.85,
-                borderBottom: "1px solid var(--dsw-alias-border-l1, rgba(255,255,255,0.06))"
+                background: TERM_CARD,
+                borderBottom: "1px solid " + TERM_BORDER
               },
               children: [
                 jsx.jsx("span", {
@@ -7344,7 +7388,9 @@ window.__ModuleLoader__.load({
                 padding: "6px 8px",
                 flex: "1 1 auto",
                 overflow: "auto",
-                color: "#d6d9dd",
+                // The terminal's own paper: darker than the card around it.
+                background: TERM_SURFACE,
+                color: TERM_TEXT,
                 // The chosen face and size, from the panel's own toolbar.
                 fontFamily: activeFont.font,
                 fontSize: String(activeSize) + "px",
@@ -7364,14 +7410,14 @@ window.__ModuleLoader__.load({
                 height: "7px",
                 flex: "0 0 auto",
                 cursor: "ns-resize",
-                background: "var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,0.03))",
+                background: TERM_CHROME,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 touchAction: "none"
               },
               children: jsx.jsx("span", {
-                style: { width: "24px", height: "2px", borderRadius: "2px", background: "var(--dsw-alias-border-l3, rgba(255,255,255,0.25))" }
+                style: { width: "24px", height: "2px", borderRadius: "2px", background: "rgba(255,255,255,0.3)" }
               })
             }),
             // A running command can wait for an answer; shortcuts work here, so a
@@ -7379,25 +7425,34 @@ window.__ModuleLoader__.load({
             // finished one has no input left to take.
             running
               ? (function () {
-                // A password prompt arrives through this same field, so the mask is
-                // the default and the eye button is the deliberate exception.
-                var secretPrompt = lines.slice(-25).concat(carried === "" ? [] : [carried]).some(looksLikeSecretPrompt);
+                // The cursor stands on the LAST line of the output, so that is the
+                // only line that can be a prompt. Checking a whole screenful is how
+                // an old "token"/"secret" mention used to mask ordinary typing for
+                // the rest of the session.
+                var promptLine = carried !== ""
+                  ? carried
+                  : (lines.length > 0 ? lines[lines.length - 1] : "");
+                var secretPrompt = looksLikeSecretPrompt(promptLine);
+                // The terminal's rule, with the reader's one-off override on top:
+                // echo by default, mask at a secret, and let the 🙈/👁 button flip
+                // exactly the prompt that is on screen.
+                var hideTyped = echoMode === "hide" ? true : (echoMode === "show" ? false : secretPrompt);
                 return jsx.jsxs("div", {
                   // Comfortable input row: the field needs air above and below the
                   // text, and the controls line up with its height instead of
                   // cramping it ("flat" was the complaint and it is a padding bug).
-                  style: { display: "flex", gap: "4px", alignItems: "center", padding: "5px 6px", background: "var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,0.04))" },
+                  style: { display: "flex", gap: "4px", alignItems: "center", padding: "5px 6px", background: TERM_CHROME },
                   children: [
                     jsx.jsx("input", {
-                      // `password` hides every keystroke: a sudo/ssh prompt typed here
-                      // must not end up readable in a tooltip, a screenshot or a
-                      // recording. The eye button next to it turns echoing on for
-                      // ordinary text (long paths, one-off commands).
-                      type: echoInput ? "text" : "password",
+                      // `text` while the reader types an ordinary command, exactly
+                      // like a terminal's echo; `password` the moment the output asks
+                      // for a secret, so a sudo/ssh/git password never ends up in a
+                      // tooltip, a screenshot or a recording.
+                      type: hideTyped ? "password" : "text",
                       autoComplete: "off",
                       value: stdins[id] || "",
-                      placeholder: secretPrompt ? t("cmdSecretPlaceholder") : t("cmdStdinPlaceholder"),
-                      title: secretPrompt ? t("cmdSecretHint") : t("cmdStdinHint"),
+                      placeholder: hideTyped ? t("cmdSecretPlaceholder") : t("cmdStdinPlaceholder"),
+                      title: hideTyped ? t("cmdSecretHint") : t("cmdStdinHint"),
                       spellCheck: false,
                       onKeyDown: function (event) { onTerminalKeyDown(event, id); },
                       onChange: function (event) { setStdin(id, event.currentTarget.value); },
@@ -7407,9 +7462,9 @@ window.__ModuleLoader__.load({
                         padding: "5px 8px",
                         lineHeight: "18px",
                         borderRadius: "6px",
-                        background: "transparent",
-                        color: "inherit",
-                        border: "1px solid " + (secretPrompt ? "var(--dsw-alias-state-warn-secondary, rgba(251,191,36,0.55))" : "var(--dsw-alias-border-l2, rgba(255,255,255,0.18))"),
+                        background: TERM_SURFACE,
+                        color: TERM_TEXT,
+                        border: "1px solid " + (hideTyped ? "var(--dsw-alias-state-warn-secondary, rgba(251,191,36,0.55))" : TERM_BORDER),
                         fontFamily: activeFont.font,
                         fontSize: String(activeSize) + "px"
                       }
@@ -7418,16 +7473,17 @@ window.__ModuleLoader__.load({
                     // costs three times the width of the glyph it explains.
                     jsx.jsx("button", {
                       type: "button",
-                      title: echoInput ? t("cmdEchoHideHint") : t("cmdEchoShowHint"),
-                      "aria-label": echoInput ? t("cmdEchoHide") : t("cmdEchoShow"),
+                      title: hideTyped ? t("cmdEchoShowHint") : t("cmdEchoHideHint"),
+                      "aria-label": hideTyped ? t("cmdEchoShow") : t("cmdEchoHide"),
                       "data-dsh-ui-extras": "cmd-echo",
+                      "data-dsh-ui-extras-hidden": hideTyped ? "1" : "0",
                       onClick: function () {
-                        var next = !echoInput;
-                        setEchoInput(next);
-                        writeEchoPref(next);
+                        // One click flips the CURRENT prompt; the next one starts
+                        // from the terminal's own rule again (see sendStdin).
+                        setEchoMode(hideTyped ? "show" : "hide");
                       },
-                      style: { border: 0, background: "transparent", color: echoInput ? "#fbbf24" : "inherit", cursor: "pointer", font: "inherit", lineHeight: 1, padding: "0 3px" },
-                      children: echoInput ? "👁" : "🙈"
+                      style: { border: 0, background: "transparent", color: hideTyped ? "#fbbf24" : "inherit", cursor: "pointer", font: "inherit", lineHeight: 1, padding: "0 3px" },
+                      children: hideTyped ? "🙈" : "👁"
                     }),
                     jsx.jsx("button", {
                       type: "button",

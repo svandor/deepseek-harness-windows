@@ -157,13 +157,21 @@ const PANEL = `(() => {
     terminalCards: all('[data-dsh-ui-extras="terminal"]').length,
     terminalHeader: all('[data-dsh-ui-extras="terminal"] code').map((node) => String(node.textContent || "")),
     terminalDir: all('[data-dsh-ui-extras="terminal-dir"]').map((node) => String(node.textContent || "")),
-    // The input line must be a PASSWORD field unless the reader revealed it: a
-    // sudo/ssh prompt goes through this very field.
+    // The input line must ECHO what is typed, the way a terminal does; it turns
+    // into a password field only while the output asks for a secret (asserted
+    // further down, both halves).
     inputTypes: all('[data-dsh-ui-extras="terminal"] input[type]').map((input) => input.getAttribute("type")),
     echoButton: (function () {
       const button = document.querySelector('[data-dsh-ui-extras="cmd-echo"]');
-      return button ? { text: String(button.textContent || "").trim(), title: button.getAttribute("title") } : null;
+      return button ? {
+        text: String(button.textContent || "").trim(),
+        title: button.getAttribute("title"),
+        hidden: button.getAttribute("data-dsh-ui-extras-hidden")
+      } : null;
     })(),
+    // The terminal's own paper: the reader asked for it to be darker than the
+    // panel around it, so the computed colour is read back here.
+    outputBackground: all('[data-dsh-ui-extras="cmd-output"]').map((node) => getComputedStyle(node).backgroundColor),
     // The header carries the title and the line count; the directory line must
     // stay clean (no "Fut…", no "N sor" next to the path).
     terminalHeaderText: all('[data-dsh-ui-extras="terminal"] header').map((node) => String(node.textContent || "")),
@@ -226,7 +234,11 @@ try {
     } catch (error) {
       sessions = { error: String(error?.message ?? error) };
     }
-    if (sessions && !sessions.error) break;
+    // An EMPTY list is not ready either: the shell loads the session list
+    // asynchronously, and breaking on the first empty answer made the probe die
+    // with "no session with a cwd" whenever the page answered before the list
+    // arrived (a fresh headless profile always starts empty).
+    if (sessions && !sessions.error && (sessions.rows || []).length > 0) break;
     if (attempt === 12) {
       // One more reload: the localStorage gate is definitely set by now.
       await send("Page.reload", { ignoreCache: true });
@@ -548,13 +560,90 @@ try {
   }
 
   /**
-   * The input line must not echo secrets, and the terminal window must not start
-   * out so tall that two of them cannot be seen together.
+   * The input line behaves like a terminal's: ordinary typing is VISIBLE, and the
+   * mask appears only when the output asks for a secret. The earlier build had
+   * this exactly backwards — it hid every keystroke, and once echoing was
+   * switched on a password typed there was shown in clear.
    */
-  check((panel.inputTypes || []).length === 0 || panel.inputTypes.every((type) => type === "password"),
-    `a bemeneti mező alapból rejt (type=${JSON.stringify(panel.inputTypes)})`);
+  check((panel.inputTypes || []).length === 0 || panel.inputTypes.every((type) => type === "text"),
+    `a bemeneti mező láttatja, amit beírsz, akár egy terminál (type=${JSON.stringify(panel.inputTypes)})`);
   check(panel.echoButton !== null && /🙈|👁/u.test(panel.echoButton.text) && String(panel.echoButton.title).length > 10,
-    `van szem gomb a bemutatáshoz, tooltippel (${JSON.stringify(panel.echoButton)})`);
+    `van szem gomb a kézi elrejtéshez/megmutatáshoz, tooltippel (${JSON.stringify(panel.echoButton)})`);
+  check(panel.echoButton === null || panel.echoButton.hidden === "0",
+    `közönséges parancs beírásakor a mező NEM rejt (hidden=${JSON.stringify(panel.echoButton && panel.echoButton.hidden)})`);
+
+  /**
+   * The terminal's own paper must be darker than the panel: it is the reason the
+   * output is a `pre` with its own background instead of a transparent block over
+   * the sidebar's surface.
+   */
+  const outputBg = (panel.outputBackground || [])[0] || "";
+  const channels = (/rgba?\((\d+),\s*(\d+),\s*(\d+)/u.exec(outputBg) || []).slice(1).map(Number);
+  check(channels.length === 3 && Math.max(...channels) <= 24,
+    `a terminál ablaka sötét lapot kap (${JSON.stringify(outputBg)})`);
+
+  /**
+   * A SECRET prompt, end to end.
+   *
+   * The panel has no console host to switch the echo off, so it reads the last
+   * line of the output and masks the input when that line asks for a password. The
+   * probe starts its OWN terminal and prints exactly such a prompt from it, then
+   * reads the card: the field must be a password field with the 🙈 on, and one
+   * click must reveal that one prompt.
+   */
+  const secret = await evaluate(`(async () => {
+    const marker = "PROBE-SECRET-" + Date.now();
+    const started = await (await fetch("/ui-extras/cmd?action=run&workspace=" + encodeURIComponent(${JSON.stringify(expected)}))).json();
+    if (!started || started.ok !== true) return { skipped: "nem indult terminal: " + JSON.stringify(started) };
+    const id = started.id;
+    const send = (data) => fetch("/ui-extras/cmd?action=stdin&id=" + encodeURIComponent(id) + "&data=" + encodeURIComponent(data));
+    const cardOf = () => Array.from(document.querySelectorAll('[data-dsh-ui-extras="terminal"]'))
+      .find((node) => String(node.textContent || "").includes(marker)) || null;
+    await new Promise((r) => setTimeout(r, 2500));
+    // Write-Host -NoNewline leaves the prompt as the LAST line, which is the line
+    // the panel reads its secret-prompt decision from.
+    await send("Write-Host -NoNewline 'Password (" + marker + "): '");
+    let card = null;
+    for (let attempt = 0; attempt < 15 && !card; attempt++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      card = cardOf();
+    }
+    const read = () => {
+      const node = cardOf();
+      const input = node ? node.querySelector("input[type]") : null;
+      const button = node ? node.querySelector('[data-dsh-ui-extras="cmd-echo"]') : null;
+      return {
+        type: input ? input.getAttribute("type") : null,
+        glyph: button ? String(button.textContent || "").trim() : null,
+        hidden: button ? button.getAttribute("data-dsh-ui-extras-hidden") : null
+      };
+    };
+    if (!card) {
+      await fetch("/ui-extras/cmd?action=forget&id=" + encodeURIComponent(id));
+      return { skipped: "nem talaltam a sajat terminal kartyat", id };
+    }
+    const masked = read();
+    const button = card.querySelector('[data-dsh-ui-extras="cmd-echo"]');
+    if (button) button.click();
+    await new Promise((r) => setTimeout(r, 400));
+    const revealed = read();
+    // Nothing is left behind: the probe closes the shell it started.
+    await fetch("/ui-extras/cmd?action=kill&id=" + encodeURIComponent(id));
+    await fetch("/ui-extras/cmd?action=forget&id=" + encodeURIComponent(id));
+    return { masked, revealed, id };
+  })()`);
+  console.log("titkos kérés:", JSON.stringify(secret));
+  if (!secret || secret.skipped) {
+    failures.push("a jelszó-kérés végponttól végig tesztje kimaradt: " + String(secret && secret.skipped));
+    console.log("  FAIL a jelszó-kérés tesztje kimaradt: " + String(secret && secret.skipped));
+  } else {
+    check(secret.masked && secret.masked.type === "password",
+      `jelszó-kérésnél a mező magától elrejt (${JSON.stringify(secret.masked)})`);
+    check(secret.masked && secret.masked.glyph === "🙈" && secret.masked.hidden === "1",
+      `elrejtett állapotban a 🙈 és a rejtett jelzés látszik (${JSON.stringify(secret.masked)})`);
+    check(secret.revealed && secret.revealed.type === "text",
+      `egy kattintás megmutatja ezt az egy kérést (${JSON.stringify(secret.revealed)})`);
+  }
 
   /**
    * The panel shows ONE workspace: the host's run list may contain another
@@ -606,8 +695,8 @@ try {
     };
     let card = cardOf();
     if (!card) return { skipped: "nem talaltam a sajat terminal kartyat a DOM-ban", id: id };
-    // The field is a password input (masked by default), so it is selected by
-    // its type attribute rather than by type=text.
+    // The field is selected by its type attribute rather than by type=text: it is
+    // a text input during ordinary typing and a password input at a secret prompt.
     const input = card.querySelector('input[type]');
     if (!input) return { skipped: "nincs bemeneti mező", id: id };
 

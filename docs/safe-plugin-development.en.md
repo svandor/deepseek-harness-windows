@@ -107,11 +107,18 @@ This **never touches the npx cache**, and it does not affect the built-in featur
     started by itself, (d) the output is at the **end** and stays there, (e) the card shows the
     working directory above the output, in the directory's line **without status text and serial
     number** (the serial number is in the header, and the send button is an icon + tooltip),
-    (f) the font is monospace, and finally (g) Ctrl+C interrupts the running command — for this it
-    starts **its own** terminal and identifies it with a marker, so it never stops a process it did
-    not start. Before the fix exactly these three failed: the panel ran `npm run dev` in the
-    harness's directory, because it took the working directory from the host's `process.cwd()`
-    instead of the selected session's `cwd`.
+    (f) the font is monospace, (g) the input field shows what is typed by default and masks
+    itself only at a password prompt in the output's last line (`type=password`, 🙈), revealing
+    it on one click, (h) the terminal window gets a dark paper, and finally (i) Ctrl+C interrupts
+    the running command — for this it starts **its own** terminal and identifies it with a marker,
+    so it never stops a process it did not start. Before the fix exactly these three failed: the
+    panel ran `npm run dev` in the harness's directory, because it took the working directory from
+    the host's `process.cwd()` instead of the selected session's `cwd`.
+  - `node tools\check-terminal-echo.mjs` — the **static** guard for point (g) above: it reads
+    `SECRET_PROMPT_SHAPE` out of the client bundle and checks it against real password prompts
+    (`Password:`, `Jelszó:`, `Enter passphrase for key …:`) and against log lines
+    (`npm WARN … token expired`, `token: abc123`, `Password?`), so it can neither hide ordinary
+    typing nor let a password through.
 - The isolated test is **green**: the boot loads, the plugin appears in the boot graph
   (`dsh-ui-extras/client.js` in the `/plugins/??...&rev=...` list)
 - Browser probes (the host cannot see the browser; without these the client bugs are invisible).
@@ -223,11 +230,24 @@ This **never touches the npx cache**, and it does not affect the built-in featur
     directory.
   - **Default height**: the output is `170px` … `22vh` (docked) by default, not `46vh` — two
     terminals fit below each other; dragging and `⤢` enlarge it.
-  - **The input field is HIDDEN by default** (`type=password`), because the `sudo`/`ssh`/`git`
-    password prompt arrives on the same field, and there is no general way to recognise that a
-    prompt is secret. The 🙈/👁 button shows/hides it (the choice stays in `localStorage`), and if
-    the output's last lines indicate a password (`password`, `passphrase`, `jelszo`, `token`, …),
-    the field's border turns yellow and the placeholder warns about it.
+  - **The input field behaves like a terminal's: what you type is VISIBLE**
+    (`type=text`), and it masks only while the output asks for a password. The
+    earlier build had this exactly backwards — it hid every keystroke and then
+    showed a password as soon as echoing was switched on — and that is the bug that
+    was reported. The decision rides on the output's **last** line
+    (`SECRET_PROMPT_SHAPE`): the secret word sits near the end of the line and the
+    line ends where the answer goes (`:` or `>`). So `Password:`, `Jelszó:`,
+    `Enter passphrase for key …:` and `Password for 'https://…':` mask, while
+    `npm WARN … token expired` does not — an old "token" mention must not hide every
+    later command. The 🙈/👁 button overrides exactly the prompt on screen (reveal
+    it, or hide it by hand), and sending the answer restores the terminal's own
+    rule: the choice is deliberately NOT remembered (not even in `localStorage`),
+    because a stored "reveal" is precisely how a password ends up on screen days
+    later.
+  - **The terminal window gets its own, darker paper** (`TERM_SURFACE` / `TERM_CARD` /
+    `TERM_CHROME`): the output is the deepest black, the card and its header one step
+    above it. This is the panel's only deliberately theme-independent palette — it
+    used to ride on the `--dsw-alias-*` variables and read lighter than asked for.
 - **Approval scopes: session, directory, file** (2026-10-18). The yellow card previously had only
   two "remember" options: `Always: <tool>` and `Always: every tool` — that is, for `write`/`edit`
   only the "every edit is automatic" level existed, not "only for this conversation" and "only in
