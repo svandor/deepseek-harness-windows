@@ -1570,9 +1570,17 @@ function Show-Tray {
         $script:lastRunning = $running
       }
       $windowCount = (Get-WindowProcesses).Count
-      $tip = if ($running) { "DSH · fut · http://127.0.0.1:$($script:Config['port'])" } else { "DSH · áll" }
+      # Magyar dátum/idő formátum (yyyy.MM.dd. HH:mm), + DSH verzió a hover tooltipben.
+      $nowHun = Get-Date -Format 'yyyy.MM.dd. HH:mm'
+      $dshVer = 'ismeretlen'
+      try {
+        if ($script:Config['resolvedDsh']) {
+          $pkgPath = Join-Path (Split-Path -Parent (Split-Path -Parent $script:Config['resolvedDsh'])) 'package.json'
+          if (Test-Path $pkgPath) { $dshVer = ((Get-Content $pkgPath -Raw | ConvertFrom-Json).version) }
+        }
+      } catch { }
+      $tip = "DSH $dshVer · $(if ($running) {'fut'} else {'áll'}) · $nowHun"
       if ($windowCount -gt 0) { $tip += ' · ablak nyitva' }
-      if ($tip.Length -gt 63) { $tip = $tip.Substring(0, 63) }
       if ($notify.Text -ne $tip) { $notify.Text = $tip }
 
       # Életjel: ebből tudja minden más komponens, hogy a tálca fut, és rábízhatja

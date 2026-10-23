@@ -66,6 +66,18 @@ window.__ModuleLoader__.load({
     var jsx = require("react/jsx-runtime");
 
     /**
+     * A rétegzett (portal) tooltiphez. A natív `title` tooltipet a Chromium
+     * kemény magasságkorlátja (~520px) levágja, ezért a statisztikai lábléc
+     * hosszú tartalma saját, HTML-ben rajzolt tooltipbe kerül.
+     */
+    var reactDom = null;
+    try {
+      reactDom = require("react-dom");
+    } catch (error) {
+      reactDom = null;
+    }
+
+    /**
      * The shell's shared UI primitives, when this module graph exposes them.
      *
      * The approval card uses the primitive's Button so it looks exactly like the
@@ -93,7 +105,7 @@ window.__ModuleLoader__.load({
      * disk or an older one the browser kept: the plugin URL carries a revision
      * query, and a stale page looks exactly like a failing one.
      */
-    var BUILD = "2026-10-22.3";
+    var BUILD = "2026-10-22.9";
 
     /**
      * One-time cleanup of this plugin's leftovers in the browser.
@@ -2349,10 +2361,76 @@ window.__ModuleLoader__.load({
      * (mért hiba, 2026-10-02). A `--dsw-alias-label-primary` sötétben
      * majdnem fehér, világosban majdnem fekete.
      */
+    /** A statisztikai lábléc tooltipjének megengedett maximális szélessége. */
+    var FOOTER_TIP_MAX_W = 640;
+
+    /**
+     * A statisztikai lábléc saját, HTML-ben rajzolt tooltipje.
+     *
+     * MIÉRT NEM `title`: a Chromium a natív tooltipet az operációs rétegben
+     * rajzolja, és KEMÉNY magasságkorlátja van (~520 px, kb. 26 sor). A hosszú
+     * statisztika végét ezért levágja — sem CSS-sel, sem JS-ből nem növelhető
+     * (mért hiba, képernyőképen: a „Megjegyzés: az…” sor félbevágva).
+     *
+     * Ez a komponens ezért a `document.body`-ba portol egy abszolút pozíciójú
+     * dobozt: nincs magasságkorlát, a tartalom pedig görgethető, ha a sor fölé
+     * nem fér el. Egyszerre egyetlen ilyen elem létezik (a hívó egyetlen
+     * állapotából).
+     */
+    function FooterTip(props) {
+      if (!reactDom || typeof document === "undefined") return null;
+      var tip = props.tip;
+      if (!tip || !tip.text) return null;
+
+      var rect = tip.rect;
+      var vw = typeof window !== "undefined" ? window.innerWidth : 1280;
+      var vh = typeof window !== "undefined" ? window.innerHeight : 800;
+      var maxWidth = Math.min(FOOTER_TIP_MAX_W, vw - 32);
+      var left = Math.max(12, Math.min(rect ? rect.left : 12, vw - maxWidth - 12));
+      // A sor fölött jelenik meg; ott annyi hely van, amennyi a sor tetejéig tart.
+      var spaceAbove = rect ? Math.max(160, rect.top - 16) : vh - 48;
+
+      return reactDom.createPortal(
+        jsx.jsx("div", {
+          "data-dsh-ui-extras": "footer-tip",
+          onMouseEnter: props.onEnter,
+          onMouseLeave: props.onLeave,
+          style: {
+            position: "fixed",
+            left: left + "px",
+            bottom: rect ? (vh - rect.top + 8) + "px" : "24px",
+            zIndex: 2147483000,
+            boxSizing: "border-box",
+            width: "max-content",
+            maxWidth: maxWidth + "px",
+            maxHeight: spaceAbove + "px",
+            overflowY: "auto",
+            overflowX: "hidden",
+            padding: "10px 14px",
+            borderRadius: "10px",
+            border: "1px solid var(--dsw-alias-border-l2, rgba(255,255,255,.16))",
+            background: "var(--dsw-alias-bg-layer-3, #242427)",
+            color: "var(--dsw-alias-label-primary, #f5f5f5)",
+            boxShadow: "0 10px 32px rgba(0,0,0,.45)",
+            fontSize: "13px",
+            lineHeight: "20px",
+            whiteSpace: "pre-line",
+            wordBreak: "break-word",
+            overflowWrap: "anywhere",
+            fontVariantNumeric: "tabular-nums",
+            cursor: "default"
+          },
+          children: tip.text
+        }),
+        document.body
+      );
+    }
+
     function Pill(props) {
       return jsx.jsxs("span", {
-        title: props.title,
-        style: { display: "inline-flex", alignItems: "center", gap: "5px", whiteSpace: "nowrap" },
+        onMouseEnter: props.onMouseEnter,
+        onMouseLeave: props.onMouseLeave,
+        style: { display: "inline-flex", alignItems: "center", gap: "5px", whiteSpace: "nowrap", cursor: "default" },
         children: [
           jsx.jsx("span", { style: { opacity: 0.6 }, children: props.label }),
           jsx.jsx("span", {
@@ -2379,6 +2457,40 @@ window.__ModuleLoader__.load({
       // screen at a time.
       var phase = useConversationPhase();
       var heroVariant = props.heroVariant === true;
+
+      // Egyetlen tooltip-állapot: egyszerre CSAK egy tooltip lehet látható.
+      var tipState = react.useState(null);
+      var tip = tipState[0];
+      var setTip = tipState[1];
+      // Késleltetett elrejtés: így az egér átmozdítható a tooltipre (görgetés).
+      var tipHideTimer = react.useRef(null);
+
+      function cancelTipHide() {
+        if (tipHideTimer.current !== null) {
+          clearTimeout(tipHideTimer.current);
+          tipHideTimer.current = null;
+        }
+      }
+
+      function showTip(text, event) {
+        cancelTipHide();
+        if (!text) { setTip(null); return; }
+        var el = event && event.currentTarget;
+        var rect = el && typeof el.getBoundingClientRect === "function" ? el.getBoundingClientRect() : null;
+        setTip({ text: text, rect: rect });
+      }
+
+      function scheduleTipHide() {
+        cancelTipHide();
+        tipHideTimer.current = setTimeout(function () {
+          tipHideTimer.current = null;
+          setTip(null);
+        }, 180);
+      }
+
+      react.useEffect(function () {
+        return function () { cancelTipHide(); };
+      }, []);
 
       var tickState = react.useState(function () { return new Date(); });
       var now = tickState[0];
@@ -2680,15 +2792,16 @@ window.__ModuleLoader__.load({
         tooltipLines.push(t("usageLoading"));
       }
       tooltipLines.push(t("usagePeakNote", { window: peakWindowLocal }));
-      // A native title shows every line of a multi-line string, which is exactly
-      // the "quick tip" this extra information belongs in.
+      // A tooltip saját HTML-dobozban jelenik meg (FooterTip), ezért a hosszú
+      // sorokat nem kell kézzel törni: a doboz 640 px széles, és a CSS tördeli
+      // a szöveget. Így semmi nem vágódik le.
       var rowTitle = tooltipLines.join("\n");
 
       var pills = [];
-      if (stats && stats.turns > 0) pills.push({ label: "", value: stats.turns + " " + t("turns") });
-      if (stats && stats.steps > 0) pills.push({ label: "", value: stats.steps + " " + t("steps") });
-      if (usage) pills.push({ label: t("token"), value: formatCount(totalTokensOf(usage)) });
-      if (cacheHit !== null) pills.push({ label: t("cache"), value: cacheHit + "%" });
+      if (stats && stats.turns > 0) pills.push({ label: "", value: stats.turns + " " + t("turns"), title: null });
+      if (stats && stats.steps > 0) pills.push({ label: "", value: stats.steps + " " + t("steps"), title: null });
+      if (usage) pills.push({ label: t("token"), value: formatCount(totalTokensOf(usage)), title: null });
+      if (cacheHit !== null) pills.push({ label: t("cache"), value: cacheHit + "%", title: null });
       // 2026-10-14: a lablécben a DeepSeek-EGYENLEG helyett a tenyleges
       // koltseg parja all — "$DeepSeek / $Alibaba" —, mert az egyenleg nem
       // mondja meg, mennyi ment el melyik szolgaltatora. Az egyenleg nem
@@ -2850,18 +2963,37 @@ window.__ModuleLoader__.load({
       // which is the better failure.
       if (heroVariant) rowStyle.flex = "none";
 
-      return jsx.jsx("div", {
+      return jsx.jsxs("div", {
         "data-dsh-ui-extras": "stats",
-        title: rowTitle,
+        // Nincs natív `title`: a Chromium a hosszú tartalmat levágná. A lábléc
+        // saját, portálba rajzolt tooltipet használ (FooterTip).
+        onMouseEnter: function (event) { showTip(rowTitle, event); },
+        onMouseLeave: scheduleTipHide,
         style: rowStyle,
-        children: pills.map(function (item, index) {
-          return jsx.jsx(Pill, {
-            label: item.label,
-            value: item.value,
-            strong: item.strong,
-            title: item.title
-          }, index);
-        })
+        children: [
+          pills.map(function (item, index) {
+            // Minden pill a saját (részletes) tooltipjét mutatja; ha nincs sajátja,
+            // akkor a sor összegző tartalmát — így nem marad tooltip nélküli elem.
+            var text = typeof item.title === "string" && item.title !== "" ? item.title : rowTitle;
+            return jsx.jsx(Pill, {
+              label: item.label,
+              value: item.value,
+              strong: item.strong,
+              onMouseEnter: function (event) {
+                event.stopPropagation();
+                showTip(text, event);
+              },
+              // A pill elhagyásakor a sor összegzője marad látható (a soron
+              // belül maradva ne tűnjön el a tooltip).
+              onMouseLeave: function (event) { showTip(rowTitle, event); }
+            }, index);
+          }),
+          jsx.jsx(FooterTip, {
+            tip: tip,
+            onEnter: cancelTipHide,
+            onLeave: scheduleTipHide
+          }, "footer-tip")
+        ]
       });
     }
 
@@ -8223,6 +8355,19 @@ window.__ModuleLoader__.load({
         var style = document.createElement("style");
         style.setAttribute("data-dsh-ui-extras", "hide-builtin-stats");
         style.textContent = "[data-composer-stats]{display:none !important}";
+        document.head.appendChild(style);
+      });
+
+      // A statisztikai lábléc [role="tooltip"] szélességének növelése — a DSH
+      // saját tooltip komponensei ezt az attribútumot használják, így CSS-sel
+      // szélesíthetők anélkül, hogy a natív title-t befolyásolnák.
+      safeRun("footer tip width", function () {
+        var style = document.createElement("style");
+        style.setAttribute("data-dsh-ui-extras", "footer-tip-width");
+        style.textContent =
+          '[data-dsh-ui-extras] [role="tooltip"]{max-width:' + FOOTER_TIP_MAX_W +
+          ' !important;white-space:pre-line !important;word-wrap:break-word !important;' +
+          'overflow-wrap:anywhere !important;text-align:left !important}';
         document.head.appendChild(style);
       });
 
