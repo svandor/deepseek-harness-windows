@@ -105,7 +105,7 @@ window.__ModuleLoader__.load({
      * disk or an older one the browser kept: the plugin URL carries a revision
      * query, and a stale page looks exactly like a failing one.
      */
-    var BUILD = "2026-10-22.9";
+    var BUILD = "2026-10-22.10";
 
     /**
      * One-time cleanup of this plugin's leftovers in the browser.
@@ -2382,13 +2382,27 @@ window.__ModuleLoader__.load({
       var tip = props.tip;
       if (!tip || !tip.text) return null;
 
-      var rect = tip.rect;
       var vw = typeof window !== "undefined" ? window.innerWidth : 1280;
       var vh = typeof window !== "undefined" ? window.innerHeight : 800;
-      var maxWidth = Math.min(FOOTER_TIP_MAX_W, vw - 32);
-      var left = Math.max(12, Math.min(rect ? rect.left : 12, vw - maxWidth - 12));
-      // A sor fölött jelenik meg; ott annyi hely van, amennyi a sor tetejéig tart.
-      var spaceAbove = rect ? Math.max(160, rect.top - 16) : vh - 48;
+      var maxWidth = Math.min(FOOTER_TIP_MAX_W, vw - 24);
+
+      // A tooltip a KURZOR fölött jelenik meg (nem a sor teteje fölött): így
+      // nem nyúlik fel a beviteli mezőre, hanem ott marad, ahol az egér van.
+      var anchorX, anchorY;
+      if (typeof tip.x === "number" && typeof tip.y === "number") {
+        anchorX = tip.x;
+        anchorY = tip.y;
+      } else if (tip.rect) {
+        anchorX = tip.rect.left;
+        anchorY = tip.rect.top;
+      } else {
+        anchorX = 16;
+        anchorY = vh - 40;
+      }
+
+      var left = Math.max(12, Math.min(anchorX - 12, vw - maxWidth - 12));
+      var bottom = vh - anchorY + 14;              // 14 px-rel a kurzor fölé
+      var maxHeight = Math.max(140, anchorY - 24); // a kurzor fölötti hely
 
       return reactDom.createPortal(
         jsx.jsx("div", {
@@ -2398,12 +2412,12 @@ window.__ModuleLoader__.load({
           style: {
             position: "fixed",
             left: left + "px",
-            bottom: rect ? (vh - rect.top + 8) + "px" : "24px",
+            bottom: bottom + "px",
             zIndex: 2147483000,
             boxSizing: "border-box",
             width: "max-content",
             maxWidth: maxWidth + "px",
-            maxHeight: spaceAbove + "px",
+            maxHeight: maxHeight + "px",
             overflowY: "auto",
             overflowX: "hidden",
             padding: "10px 14px",
@@ -2475,9 +2489,14 @@ window.__ModuleLoader__.load({
       function showTip(text, event) {
         cancelTipHide();
         if (!text) { setTip(null); return; }
-        var el = event && event.currentTarget;
-        var rect = el && typeof el.getBoundingClientRect === "function" ? el.getBoundingClientRect() : null;
-        setTip({ text: text, rect: rect });
+        var x = typeof event.clientX === "number" ? event.clientX : null;
+        var y = typeof event.clientY === "number" ? event.clientY : null;
+        var rect = null;
+        if (x === null || y === null) {
+          var el = event && event.currentTarget;
+          rect = el && typeof el.getBoundingClientRect === "function" ? el.getBoundingClientRect() : null;
+        }
+        setTip({ text: text, x: x, y: y, rect: rect });
       }
 
       function scheduleTipHide() {
@@ -8355,19 +8374,6 @@ window.__ModuleLoader__.load({
         var style = document.createElement("style");
         style.setAttribute("data-dsh-ui-extras", "hide-builtin-stats");
         style.textContent = "[data-composer-stats]{display:none !important}";
-        document.head.appendChild(style);
-      });
-
-      // A statisztikai lábléc [role="tooltip"] szélességének növelése — a DSH
-      // saját tooltip komponensei ezt az attribútumot használják, így CSS-sel
-      // szélesíthetők anélkül, hogy a natív title-t befolyásolnák.
-      safeRun("footer tip width", function () {
-        var style = document.createElement("style");
-        style.setAttribute("data-dsh-ui-extras", "footer-tip-width");
-        style.textContent =
-          '[data-dsh-ui-extras] [role="tooltip"]{max-width:' + FOOTER_TIP_MAX_W +
-          ' !important;white-space:pre-line !important;word-wrap:break-word !important;' +
-          'overflow-wrap:anywhere !important;text-align:left !important}';
         document.head.appendChild(style);
       });
 
