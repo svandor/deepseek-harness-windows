@@ -2376,6 +2376,12 @@ window.__ModuleLoader__.load({
      * dobozt: nincs magasságkorlát, a tartalom pedig görgethető, ha a sor fölé
      * nem fér el. Egyszerre egyetlen ilyen elem létezik (a hívó egyetlen
      * állapotából).
+     *
+     * A doboz `pointer-events: none`, azaz NEM vesz fel egér-eseményt. Ez a
+     * hiba javítása: korábban a kurzor fölé rajzolt doboz „megfogta” az egeret,
+     * ezért a lábléc elhagyásakor nem tűnt el, hanem követte felfelé a
+     * kurzort, és eltakarta a beviteli mezőt (mért hiba, 2026-10-23). A
+     * tartalmat a lábléc fölötti görgő mozgatja, nem a doboz fölötti.
      */
     function FooterTip(props) {
       if (!reactDom || typeof document === "undefined") return null;
@@ -2407,8 +2413,7 @@ window.__ModuleLoader__.load({
       return reactDom.createPortal(
         jsx.jsx("div", {
           "data-dsh-ui-extras": "footer-tip",
-          onMouseEnter: props.onEnter,
-          onMouseLeave: props.onLeave,
+          ref: props.boxRef,
           style: {
             position: "fixed",
             left: left + "px",
@@ -2418,8 +2423,12 @@ window.__ModuleLoader__.load({
             width: "max-content",
             maxWidth: maxWidth + "px",
             maxHeight: maxHeight + "px",
-            overflowY: "auto",
-            overflowX: "hidden",
+            // A doboz nem vesz fel egeret (a kurzorral együtt ne kövesse a
+            // beviteli mezőre), ezért a görgetősáv itt csak elhalványult
+            // lehetőség lenne: a hosszú tartalmat a lábléc fölötti görgő
+            // mozgatja (lásd a StatsBar wheel listenerét).
+            overflow: "hidden",
+            pointerEvents: "none",
             padding: "10px 14px",
             borderRadius: "10px",
             border: "1px solid var(--dsw-alias-border-l2, rgba(255,255,255,.16))",
@@ -2431,8 +2440,7 @@ window.__ModuleLoader__.load({
             whiteSpace: "pre-line",
             wordBreak: "break-word",
             overflowWrap: "anywhere",
-            fontVariantNumeric: "tabular-nums",
-            cursor: "default"
+            fontVariantNumeric: "tabular-nums"
           },
           children: tip.text
         }),
@@ -2476,19 +2484,48 @@ window.__ModuleLoader__.load({
       var tipState = react.useState(null);
       var tip = tipState[0];
       var setTip = tipState[1];
-      // Késleltetett elrejtés: így az egér átmozdítható a tooltipre (görgetés).
-      var tipHideTimer = react.useRef(null);
 
-      function cancelTipHide() {
-        if (tipHideTimer.current !== null) {
-          clearTimeout(tipHideTimer.current);
-          tipHideTimer.current = null;
-        }
+      // A lábléc-sor és a tooltip-doboz referenciája: a sor rectje dönti el,
+      // hogy az egér még a láblécen van-e, a doboz pedig a görgetést kapja
+      // (a tooltip maga nem vesz fel mutató-eseményt).
+      var rowRef = react.useRef(null);
+      var tipBoxRef = react.useRef(null);
+
+      /**
+       * Azonnali elrejtés: amint az egér elhagyja a láblécet, a tooltip
+       * eltűnik.
+       *
+       * KORÁBBAN 180 ms késleltetés volt, hogy az egér átmozdítható legyen a
+       * tooltipre (görgetéshez). Épp ez volt a hiba oka: a kurzor fölé
+       * rajzolt doboz „megfogta” az egeret, így a lábléc elhagyásakor nem
+       * tűnt el, hanem követte felfelé a kurzort, és eltakarta a beviteli
+       * mezőt (mért hiba, 2026-10-23). A hosszú tartalmat ezért a lábléc
+       * fölötti görgő mozgatja — lásd a wheel listenert lejjebb.
+       */
+      function hideTip() {
+        setTip(null);
+      }
+
+      /**
+       * Igaz, ha a leave-esemény helye még a lábléc-soron belül van.
+       *
+       * A React a leave-eket a DOM-sorrendben (belülről kifelé) küldi, ezért
+       * a pill elhagyásakor nem tudhatjuk, hogy a soron belül maradt-e az
+       * egér: ezt a rect dönti el. Kifelé lépésnél a tooltipnek azonnal
+       * el kell tűnnie (különben a beviteli mező fölé kerül).
+       */
+      function pointerInsideRow(event) {
+        var row = rowRef.current;
+        if (row === null || typeof row.getBoundingClientRect !== "function") return false;
+        if (event === null || event === undefined) return false;
+        if (typeof event.clientX !== "number" || typeof event.clientY !== "number") return false;
+        var rect = row.getBoundingClientRect();
+        return event.clientX >= rect.left && event.clientX <= rect.right
+          && event.clientY >= rect.top && event.clientY <= rect.bottom;
       }
 
       function showTip(text, event) {
-        cancelTipHide();
-        if (!text) { setTip(null); return; }
+        if (!text) { hideTip(); return; }
         var x = typeof event.clientX === "number" ? event.clientX : null;
         var y = typeof event.clientY === "number" ? event.clientY : null;
         var rect = null;
@@ -2499,17 +2536,27 @@ window.__ModuleLoader__.load({
         setTip({ text: text, x: x, y: y, rect: rect });
       }
 
-      function scheduleTipHide() {
-        cancelTipHide();
-        tipHideTimer.current = setTimeout(function () {
-          tipHideTimer.current = null;
-          setTip(null);
-        }, 180);
-      }
-
+      // A tooltip `pointer-events: none`, tehát nem görgethető a doboz fölött:
+      // a rendelkezésre álló helynél magasabb tartalmat a LÁBLÉC fölötti
+      // görgő mozgatja. Csak akkor nyeljük el a görgőt, ha a doboz tényleg
+      // túllóg — különben a normál görgetés marad. Natív, NEM passzív
+      // listener kell: a React `onWheel`-je passzív, ott a preventDefault
+      // hatástalan lenne. Minden új tooltip a tetejéről indul.
       react.useEffect(function () {
-        return function () { cancelTipHide(); };
-      }, []);
+        var box = tipBoxRef.current;
+        if (box !== null) box.scrollTop = 0;
+        var row = rowRef.current;
+        if (tip === null || row === null) return undefined;
+        function onWheel(event) {
+          var current = tipBoxRef.current;
+          if (current === null) return;
+          if (current.scrollHeight <= current.clientHeight + 1) return;
+          current.scrollTop += event.deltaY;
+          event.preventDefault();
+        }
+        row.addEventListener("wheel", onWheel, { passive: false });
+        return function () { row.removeEventListener("wheel", onWheel); };
+      }, [tip]);
 
       var tickState = react.useState(function () { return new Date(); });
       var now = tickState[0];
@@ -2984,10 +3031,14 @@ window.__ModuleLoader__.load({
 
       return jsx.jsxs("div", {
         "data-dsh-ui-extras": "stats",
+        // A sor rectje alapján dől el, hogy az egér még a láblécen van-e.
+        ref: rowRef,
         // Nincs natív `title`: a Chromium a hosszú tartalmat levágná. A lábléc
         // saját, portálba rajzolt tooltipet használ (FooterTip).
         onMouseEnter: function (event) { showTip(rowTitle, event); },
-        onMouseLeave: scheduleTipHide,
+        // A lábléc elhagyásakor a tooltip AZONNAL eltűnik: nem követi tovább
+        // felfelé az egeret a beviteli mező fölé.
+        onMouseLeave: hideTip,
         style: rowStyle,
         children: [
           pills.map(function (item, index) {
@@ -3002,15 +3053,19 @@ window.__ModuleLoader__.load({
                 event.stopPropagation();
                 showTip(text, event);
               },
-              // A pill elhagyásakor a sor összegzője marad látható (a soron
-              // belül maradva ne tűnjön el a tooltip).
-              onMouseLeave: function (event) { showTip(rowTitle, event); }
+              // A pill elhagyásakor a sor összegzője marad látható — de CSAK
+              // akkor, ha az egér még a soron van. Ha kifelé lépett, a
+              // tooltipnek nyoma vész (különben a kurzorral együtt felfelé
+              // kúszna a beviteli mező fölé).
+              onMouseLeave: function (event) {
+                if (pointerInsideRow(event)) showTip(rowTitle, event);
+                else hideTip();
+              }
             }, index);
           }),
           jsx.jsx(FooterTip, {
             tip: tip,
-            onEnter: cancelTipHide,
-            onLeave: scheduleTipHide
+            boxRef: tipBoxRef
           }, "footer-tip")
         ]
       });

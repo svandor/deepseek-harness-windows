@@ -860,15 +860,132 @@ async function handleGithubAction(req, res) {
         sendJson(res, { ok: false, error: "nincs commitolni valo valtozas" });
         return;
       }
-      // Default message: date plus the first changed path, so a one-click commit
-      // is still self-describing. The language follows the panel's HU/EN switch,
-      // so a public repository can be committed in English while the interface
-      // stays Hungarian.
-      const firstPath = pending.stdout.split(/\r?\n/u)[0].slice(3).trim();
+      // Automatikus üzenet: SZÖVEGES funkció-leírás, nem fájlnév.
+      // 1) Ha a CHANGELOG.md változott, a legfrissebb „## …” fejléc a commit üzenete
+      //    (ebben a projektben ez mindig emberi, funkciót leíró cím).
+      // 2) Egyébként a változott fájlok területeiből képzett leírás (nincs fájlnév).
+      // A nyelv a panel HU/EN kapcsolóját követi.
+      const changedPaths = pending.stdout
+        .split(/\r?\n/u)
+        .map((line) => line.slice(3).trim())
+        .filter((path) => path.length > 0)
+        .map((path) => (path.includes(" -> ") ? path.split(" -> ").pop().trim() : path));
+
+      /** Legfrissebb CHANGELOG „##” fejléc, dátum nélkül. */
+      const changelogHeading = () => {
+        if (!changedPaths.includes("CHANGELOG.md")) return "";
+        const changelogPath = join(root, "CHANGELOG.md");
+        if (!existsSync(changelogPath)) return "";
+        try {
+          const head = readFileSync(changelogPath, "utf8").slice(0, 8000);
+          const match = /^##\s+(.+)$/mu.exec(head);
+          if (!match) return "";
+          const title = match[1]
+            .replace(/^\d{4}[-.]\d{1,2}[-.]\d{1,2}\.?\s*[—–-]\s*/u, "")
+            .trim();
+
+          return title.length > 200 ? title.slice(0, 197).trimEnd() + "…" : title;
+        } catch (error) {
+          return "";
+        }
+      };
+
+      /** Terület-címkék a fájlútvonalakból (fájlnév nélkül). Meta-fájl nem ad címkét. */
+      const areaLabelHu = (path) => {
+        const first = path.split("/")[0];
+        const rootFile = !path.includes("/");
+        if (path.startsWith("docs/")) return "dokumentáció";
+        if (path.startsWith(".cursor/") || path.startsWith(".github/") || path.startsWith(".kilo/") || path.startsWith(".vscode/")) return "szabályok";
+        if (path.startsWith("public/build/") || path.startsWith("vendor/") || path.startsWith("node_modules/")) return "";
+        if (rootFile) {
+          if (/^(README|LICENSE|AGENTS|CHANGELOG)/iu.test(path)) return "dokumentáció";
+          if (/(lock\.json|\.lock)$/iu.test(path)) return "";
+          return "projekt";
+        }
+        const map = {
+          app: "alkalmazáslogika",
+          resources: "felület",
+          routes: "útvonalak",
+          config: "beállítások",
+          tests: "tesztek",
+          database: "adatbázis",
+          tools: "eszközök",
+          packages: "csomagok",
+          public: "nyilvános fájlok",
+          lang: "nyelvi fájlok",
+          src: "forráskód",
+          lib: "könyvtár",
+          scripts: "szkriptek",
+          ops: "üzemeltetés",
+          server_files: "szerverfájlok",
+          portal: "portál",
+          "portal-munka": "portál",
+        };
+
+        return map[first] ?? first;
+      };
+      const areaLabelEn = (path) => {
+        const map = {
+          "alkalmazáslogika": "application logic",
+          "felület": "ui",
+          "útvonalak": "routes",
+          "beállítások": "settings",
+          "tesztek": "tests",
+          "adatbázis": "database",
+          "eszközök": "tools",
+          "csomagok": "packages",
+          "nyilvános fájlok": "public assets",
+          "nyelvi fájlok": "translations",
+          "dokumentáció": "documentation",
+          "szabályok": "guidelines",
+          "forráskód": "source",
+          "könyvtár": "library",
+          "szkriptek": "scripts",
+          "üzemeltetés": "operations",
+          "szerverfájlok": "server files",
+          "projekt": "project",
+          "portál": "portal",
+          "egyéb": "other",
+        };
+
+        return map[areaLabelHu(path)] ?? areaLabelHu(path);
+      };
+
+      const areas = (labelFor) => {
+        const seen = [];
+        for (const path of changedPaths) {
+          const label = labelFor(path);
+          if (label !== "" && !seen.includes(label)) seen.push(label);
+          if (seen.length >= 3) break;
+        }
+
+        return seen;
+      };
+
       const date = new Date().toISOString().slice(0, 10);
-      const auto = lang === "hu"
-        ? "Frissítés " + firstPath + " (" + date + ")"
-        : "Update " + firstPath + " (" + date + ")";
+      const heading = changelogHeading();
+      // Ha csak meta-fájl változott, akkor is legyen értelmes (nem üres) leírás.
+      const metaAreaHu = (path) => {
+        if (path.startsWith("docs/")) return "dokumentáció";
+        if (path.startsWith(".cursor/") || /AGENTS\.md$/u.test(path)) return "szabályok";
+
+        return "";
+      };
+      const metaAreaEn = (path) => {
+        if (path.startsWith("docs/")) return "documentation";
+        if (path.startsWith(".cursor/") || /AGENTS\.md$/u.test(path)) return "guidelines";
+
+        return "";
+      };
+      const huAreas = areas(areaLabelHu);
+      const enAreas = areas(areaLabelEn);
+      if (huAreas.length === 0) huAreas.push(...areas(metaAreaHu));
+      if (enAreas.length === 0) enAreas.push(...areas(metaAreaEn));
+      const auto = heading !== ""
+        ? heading
+        : (lang === "hu"
+          ? "Frissítés: " + (huAreas.length > 0 ? huAreas.join(", ") : "kisebb módosítások") + " (" + date + ")"
+          : "Update: " + (enAreas.length > 0 ? enAreas.join(", ") : "minor changes") + " (" + date + ")");
       const text = message.trim().length > 0 ? message.trim() : auto;
       const committed = await run("git", ["-C", root, "commit", "-m", text]);
       sendJson(res, committed.ok
