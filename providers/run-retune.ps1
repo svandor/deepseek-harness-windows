@@ -85,6 +85,31 @@ if (Test-Path $doctor) {
     }
 }
 
+# ── Ingyenes lanc ellenorzese (free-guard) ─────────────────────────────────
+# A 2026-10-26-i vizsgalat tanulsaga: a chain-doctor apro (par szaz tokenes)
+# probaja minden celra "OK"-t adott, mikozben a valodi 30-250K tokenes
+# keresekre a Groq 413-at, az OpenRouter 402-t adott, es a delegalas CSENDBEN
+# a fizetos Alibabara esett (okt. 24-26: 6,44 USD brutto). Ezert kulon orzo
+# fut: (1) fizetos cel nem lehet a deklaralt ingyenes lancon, (2) minden
+# lanc-tagot valodi meretu (12K token + tool-hivas) keressel mer.
+$guard = Join-Path $root 'free-guard.mjs'
+if (Test-Path $guard) {
+    Write-Log ''
+    Write-Log '--- Ingyenes lanc ellenorzese (free-guard) ---'
+    try {
+        # Ugyanaz a mod, mint a chain-doctornal: apply eseten a megbukott tagokat
+        # a route VEGERE sorolja (mentes + .bak). A guard 1x ujraprobal, hogy
+        # egy atmeneti 429/timeout ne demotaljon jo celt.
+        $guardArgs = @($guard)
+        if ($Mode -eq 'apply') { $guardArgs += '--apply' }
+        $gOut = & $node @guardArgs 2>&1 | ForEach-Object { $_.ToString() }
+        foreach ($line in $gOut) { Write-Log $line }
+        if ($LASTEXITCODE -ne 0) { Write-Log 'FIGYELEM: a free-guard problemat talalt (fizetos cel / halott tag / Alibaba-koltes).' }
+    } catch {
+        Write-Log "KIVETEL a free-guardnal: $($_.Exception.Message)"
+    }
+}
+
 # ── WebView2-profilgenerációk tisztítása ───────────────────────────────────
 # A DshWindow.exe minden ablakindításkor új profilt hoz létre és a régit nem
 # törli. A pane-* mappákat a tisztító nem érinti, és csak a 14 napnál régebbi,

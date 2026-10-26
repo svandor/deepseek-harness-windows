@@ -18,7 +18,10 @@
     "idleResetMinutes": 10
   },
   "_autoLabel_20261022": "KIKAPCSOLVA (enabled: false). MERT HIBA: a settings.yaml `name:` mezoje GLOBALIS, ezert a proxy minden 'auto' dontes utan atirta a katalógus-bejegyzest, es a harom parhuzamos panel MINDIG ugyanazt a cimket mutatta (a legutobbi dontes ceijat) — panelenkenti cel nem volt. Mostantol a katalógus sima 'Auto' marad, a tenyleges celt pedig panelenkent a dsh-ui-extras host vegpontja adja: GET /ui-extras/auto-target?session=<dsh session id> -> { target: { label, reason, idleSec } }. A host a `llm/stream` waterfallon jegyzi fel session-onkent az elso felhasznaloi uzenet hash-et (ugyanaz az FNV-1a, amit a proxy /healthz `intelligent.sessions[].firstUser` mezoje hasznal), es a /healthz?session=<hash> szurovel kerdezi le a sajat session celjat. A proxy a kikapcsolas ellenere is visszaallitja a cimket sima 'Auto'-ra (indulaskor es config hot-reloadnal), hogy ne ragadjon be korabbi celpont.",
-  "corsOrigins": [ "http://127.0.0.1:3080", "http://localhost:3080" ],
+  "corsOrigins": [
+    "http://127.0.0.1:3080",
+    "http://localhost:3080"
+  ],
   "connectTimeoutMs": 120000,
   "stallTimeoutMs": 90000,
   "maxRequestBytes": 33554432,
@@ -150,11 +153,20 @@
       "out": 0.6,
       "contextWindow": 262144,
       "freeQuotaTokens": 1000000
-    }
+    },
+    "_ingyenes_celok_20261026": "A 2026-10-26-i élő mérés alapján a delegálás INGYENES céljai. Ár = 0, a contextWindow a valós (a SKIP-döntéshez). A groq TPM-je 8000, ezért csak ~4K token alatt megy át; az ollama 32K-nál csonkolna.",
+    "openrouter/nvidia/nemotron-3.5-lightning:free": { "miss": 0, "hit": 0, "out": 0, "contextWindow": 1000000, "vision": false },
+    "google/gemini-3-flash-preview": { "miss": 0, "hit": 0, "out": 0, "contextWindow": 1000000, "vision": true },
+    "google/gemini-3.1-flash-lite": { "miss": 0, "hit": 0, "out": 0, "contextWindow": 1000000, "vision": true },
+    "openrouter/nvidia/nemotron-3.5-super-vl:free": { "miss": 0, "hit": 0, "out": 0, "contextWindow": 1000000, "vision": true },
+    "groq/openai/gpt-oss-120b": { "miss": 0, "hit": 0, "out": 0, "contextWindow": 131072, "vision": false },
+    "ollama/qwen2.5:7b-instruct": { "miss": 0, "hit": 0, "out": 0, "contextWindow": 32768, "vision": false },
+    "ollama/qwen25-32k:latest": { "miss": 0, "hit": 0, "out": 0, "contextWindow": 32768, "vision": false },
+    "ollama/qwen3-vl:8b": { "miss": 0, "hit": 0, "out": 0, "contextWindow": 32768, "vision": true }
   },
   "_valaszto_hangolas": "A szelektor becslesei: assumedCachedShare = a session 4. uzenete utan ennyi a feltetelezett cache-arany (merve 99,8%, de ovatosan 0,9); assumedOutputTokens = tipikus kimenet lepesenkent (merve ~870); assumedRemainingSteps = hany lepesre szamoljuk a valtas nyeresegét (a cache-ujraeles koltsege ellenében); switchMarginPct = ennyi% nyereseg alatt nem valtunk (cache-vedelem).",
   "assumedCachedShare": 0.95,
-  "assumedOutputTokens": 900,
+  "assumedOutputTokens": 383,
   "assumedRemainingSteps": 4,
   "switchMarginPct": 25,
   "dailyOverrides": {},
@@ -204,6 +216,13 @@
         "X-Title": "DeepSeek Harness (local fallback)"
       }
     },
+    "google": {
+      "label": "Google AI Studio (ingyenes szint)",
+      "_comment": "2026-10-26: MERVE — a gemini-3-flash-preview 9 873 tokenes, tool-hivasos kerest 1,7 s alatt kiszolgalt (HTTP 200, 1 tool_call); a gemini-3.1-flash-lite kicsin 1,4 s, nagyont 503 (atmeneti). Ingyenes szint (nincs szamlazas a Google-projektben); a keretet a Google adja RPM/RPD modellenkent.",
+      "baseURL": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "apiKeyEnv": "GOOGLE_API_KEY",
+      "connectTimeoutMs": 45000
+    },
     "alibaba": {
       "label": "Alibaba Model Studio EU (Qwen, Frankfurt)",
       "baseURLEnv": "ALIBABA_EU_BASE_URL",
@@ -241,38 +260,41 @@
   },
   "routes": {
     "worker": {
-      "_comment": "A SUBAGENT célroute-ja — INGYENES ELSŐBBSÉGGEL. 2026-10-21-i ÉLŐ PRÓBA (mind a 8 cél, tool-hívásos kérés): a KORÁBBI él NEM ÉL. A `nvidia/nvidia/nemotron-3-super-120b-a12b` HTTP 404, az `nvidia/openai/gpt-oss-20b` HTTP 404, a `moonshotai/kimi-k2.6` 404, a `deepseek-ai/deepseek-v4.1-flash` timeout — ezek pörgették a COOLDOWN-elore sorokat a naplóban, és a delegálás csendben a lassú helyire esett. Ami ÉL és valódi tool_calls-t ad: groq/openai/gpt-oss-120b (443 ms), openrouter/qwen-qwen3.8-27b (2,2 s), openrouter/inclusionai/ling-3.0-flash (0,85 s). Az `openrouter/nvidia/nemotron-3.5-lightning:free` él, de NEM ad tool_calls-t (csak tartalék). Az `openrouter/nvidia/nemotron-3-super-120b-a12b:free` 404, a `thinkingmachines/inkling:free` 403 (harness-only). A sorrend: ingyenes felhős célok -> helyi Ollama -> ingyenes keretes szingapúri qwen3.7-flash -> fizetős EU-s tartalék.",
+      "_comment": "A SUBAGENT célroute-ja — CSAK INGYENES CÉLOK (2026-10-26). A fizetős Alibaba kivéve: a korábbi lánc 4 fizetős/kredit-igényes tagot tartalmazott (openrouter/inclusionai/ling-3.0-flash és openrouter/qwen/qwen3.8-27b = fizetős slug, alibaba EU/SG = fizetős), ezért minden delegálás fizetős Alibabára esett (okt. 24-26: 2 483 kérés, 6,44 USD bruttó). 2026-10-26-i ÉLŐ MERES (30K tokenes tool-hívásos kérés): nvidia/nemotron-3.5-lightning:free 200, 8,2 s, 2 valódi tool_calls; nvidia/nemotron-3.5-super-vl:free 200, 12,7 s, 1 tool_call; groq/gpt-oss-120b 200 csak kis kérésre, 32K-n 413 (TPM 8000); google/gemma-4-31b-it:free 429 (upstream rate-limit); inclusionai/ling-3.0-flash:free 404 (nincs ingyenes változat). Az ollama qwen2.5:7b-instruct 32K-s ablakkal zár (afölött SKIP).",
       "contextWindow": 131072,
-      "maxTokens": 32768,
-      "_alibaba_megjegyzes": "2026-10-14: az alibaba/qwen3.7-flash a fizetős TARTALÉK. Mért: valódi tool_calls ÉS kép egy kérésben (777 -> report_number). Az EU-s példány ~12 s volt; a SZINGAPÚRI ugyanerre 3,0 s, ezért a Szingapúr cél ELŐBB áll (ráadásul a gratis kvóta miatt induláskor ingyenes). Az ollama (35 s, hamis tool_calls) csak záró elem.",
+      "maxTokens": 8192,
+      "_fizetos_tartalek_megjegyzes": "2026-10-26: a fizetős Alibaba SZANDEKOSAN kikerült a subagent-láncokból (worker, free-quota, vision-worker). Ha mégis kell, külön, nevén nevezett route-ba tedd, és a panelben árazd be — ne a 'free' lánc végére.",
       "targets": [
-        "groq/openai/gpt-oss-120b",
-        "openrouter/qwen/qwen3.8-27b",
-        "openrouter/inclusionai/ling-3.0-flash",
-        "alibaba-intl/qwen3.7-flash",
-        "alibaba/qwen3.7-flash",
-        "ollama/qwen2.5:7b-instruct"
+        "google/gemini-3-flash-preview",
+        "google/gemini-3.1-flash-lite",
+        "openrouter/nvidia/nemotron-3.5-super-vl:free",
+        "openrouter/nvidia/nemotron-3.5-lightning:free",
+        "ollama/qwen25-32k:latest",
+        "ollama/qwen2.5:7b-instruct",
+        "groq/openai/gpt-oss-120b"
       ]
     },
     "free-quota": {
-      "_comment": "INGYENES KERETES CÉLOK (2026-10-21). A szingapúri munkaterületen a modellek 1 millió token ingyenes keretet kapnak (90 napig); a proxy a `pricing` tablabol becsli a fogyast, es amig a keret alatt vagyunk, a cel 0 USD-be kerul — a valaszto ezert INGYENESKENT hasznalja, a keret kimerulese utan viszont a valos araval szamol, es kiesik. Ezt a route-ot kezzel / gyerek-modellkent erdemes valasztani (nem a main lancha valo: a cache-tarifa 10%, a DeepSeekee 2%).",
+      "_comment": "INGYENES KERETES CÉLOK (2026-10-26). A korábbi szingapúri lista EL VAN VETVE: a BSS-számla szerint a SG munkaterület qwen3.7-flash/qwen3.8-flash forgalma FIZETŐS volt (19,11 USD okt.), a freeQuotaTokens=0 jelölés ellenére is. Ezért ez a route ugyanazt az ingyenes készletet adja, mint a worker.",
       "contextWindow": 1000000,
-      "maxTokens": 65536,
+      "maxTokens": 8192,
       "targets": [
-        "alibaba-intl/qwen3.8-max",
-        "alibaba-intl/glm-5.3",
-        "alibaba-intl/kimi-k3",
-        "alibaba-intl/qwen3.7-plus",
-        "alibaba-intl/qwen3.8-flash"
+        "google/gemini-3-flash-preview",
+        "google/gemini-3.1-flash-lite",
+        "openrouter/nvidia/nemotron-3.5-super-vl:free",
+        "openrouter/nvidia/nemotron-3.5-lightning:free",
+        "ollama/qwen25-32k:latest",
+        "ollama/qwen2.5:7b-instruct",
+        "groq/openai/gpt-oss-120b"
       ]
     },
     "deepseek-chat": {
       "contextWindow": 131072,
       "maxTokens": 16384,
-      "_comment": "2026-10-21: a NVIDIA nemotron-3-super 404 (kivéve), a qwen3.8-27b az élő ingyenes cél.",
+      "_comment": "2026-10-26: a fizetős openrouter/qwen/qwen3.8-27b helyett az ingyenes nemotron-3.5-lightning:free (mért: tool_calls OK 32K-n).",
       "targets": [
         "groq/openai/gpt-oss-120b",
-        "openrouter/qwen/qwen3.8-27b",
+        "openrouter/nvidia/nemotron-3.5-lightning:free",
         "ollama/qwen2.5:7b-instruct"
       ]
     },
@@ -288,24 +310,20 @@
     "vision-worker": {
       "_comment": "KÉP-FELADAT DELEGÁLÁS. A proxy 2026-10-14 óta chat-completions módban továbbítja a kép-tartalmú üzeneteket is (a body-t változatlanul adja át). Mért tény: az alibaba/qwen3.7-flash EGY kérésben olvassa a képet ÉS ad valódi tool_calls-t (777 -> report_number), ezért ez az első cél; a qwen3.8-flash a biztosabb tartalék, az ollama zár. A requiredAnyEnv miatt kulcs nélkül NEM esik csendben a helyire, hanem 503-at ad.",
       "contextWindow": 1000000,
-      "maxTokens": 32768,
+      "maxTokens": 8192,
       "targets": [
-        "alibaba-intl/qwen3.8-flash",
-        "alibaba/qwen3.7-flash",
-        "alibaba/qwen3.8-flash",
-        "ollama/qwen2.5:7b-instruct"
+        "google/gemini-3-flash-preview",
+        "openrouter/nvidia/nemotron-3.5-super-vl:free",
+        "openrouter/nvidia/nemotron-3.5-lightning:free",
+        "ollama/qwen3-vl:8b"
       ]
     },
     "auto": {
       "_comment": "CACHE-KOZPONTU VALASZTO (2026-10-21). 30 napos MERES a sajat forgalmunkon (auto tune + ALIBABA-MERES): a main forgalom 99,6%-a CACHE-TALALAT, es a szamla 58%-a a CACHE-SOR (9,79 MRD token). Cache-aron a DeepSeek verhetetlen: 0,003/M (csucs 0,006) vs qwen3.8-flash 0,0113 (EU) / 0,015 (SG) es az Alibaba-s deepseek-v4.1-flash 0,0141. Ezert a hajto cel a DeepSeek-kozvetlen MAR CSÚCSBEN IS — a korabbi `csucs-kikerules` szabaly VESZTESEGES volt (csucsidos DS-cache 0,006 < qwen 0,0113), es 3-6x lassabb utra tette a reggeli forgalmat. 30 napra, a mi tokenmixunkon: DS-mix $58,34 (mert) / DS csucs $100,89 / DS off-peak $50,44 / qwen EU $124,73 / Ali deepseek-v4.1-flash idle $157,87, busy $316,79. Az Alibaba-s DeepSeek NEM alternativa: ugyanaz a modell 3,3x dragabb cache-aron, es a busy/idle savja ugyanaz a DeepSeek-ora, tehat a csucsot sem keruli el. Az Alibaba a LATAS es a TARTALEK szerepet kapja (thinking-korlattal), a pro pedig csak eszkalaciora jon.",
       "contextWindow": 1000000,
       "maxTokens": 65536,
-      "_candidates_megjegyzes": "AZ INTELLIGENS VALASZTO JELOLTJEI (2026-10-14): a proxy ezek kozul valaszt a `pricing` tabla alapjan — a legolcsobb ALKALMAS cel nyer, nem a felsorolas sorrendje. A nyertes utan a tobbi jelolt tartalek. A deepseek-v4-pro szandekosan NINCS itt: azt az eszkalacios szabaly hozza be, amikor a flash porogni kezd.",
+      "_candidates_megjegyzes": "AZ INTELLIGENS VALASZTO JELOLTJEI (2026-10-26). A fizetős Alibaba KIVÉVE a jelöltek közül: a 2026-10-26-i számlaelemzés szerint a fő szál forgalma 96%-ban cache-találat, ahol a qwen cache-ára 3-7x a DeepSeekének (0,0083-0,02 vs 0,003-0,006 USD/M), így a választó minden hosszú beszélgetést veszteségesen tett Qwenre (okt. 15-23: 22,8 USD nettó). A DeepSeek marad az egyetlen jelölt; az Alibaba csak a route `targets` listájában marad vésztartaléknak (kiesés esetére), a választó nem hívja. A deepseek-v4-pro szandekosan NINCS itt: azt az eszkalacios szabaly hozza be, amikor a flash porogni kezd.",
       "candidates": [
-        "alibaba-intl/qwen3.7-flash",
-        "alibaba-intl/qwen3.8-flash",
-        "alibaba/qwen3.7-flash",
-        "alibaba/qwen3.8-flash",
         "deepseek/deepseek-flash"
       ],
       "targets": [

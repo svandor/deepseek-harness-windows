@@ -1289,8 +1289,10 @@ window.__ModuleLoader__.load({
       "balanceUnavailable": "nem elérhető",
       "balanceTitle": "Élő egyenleg a DeepSeek számláról, szerveroldali lekérdezéssel.",
       "balanceErrorTitle": "A szerveroldali egyenleg-lekérdezés nem sikerült: ",
-      "spendPair": "DSH / Alibaba",
-      "spendPairTitle": "Bal oldal: a DeepSeek számlán ELÉRHETŐ egyenleg (feltöltött + jóváírt grátisz). Jobb oldal: az Alibaba kifizetendő tartozása (OutstandingAmount) — fizetés után nullázódik, pay-as-you-go.",
+      "spendPair": "DSH / Ali / OpenR",
+      "spendPairTitle": "Három szám, balról jobbra: a DeepSeek számlán ELÉRHETŐ egyenleg (+), az Alibaba kifizetendő tartozása (−), az OpenRouter pay-as-you-go egyenlege (+). Mind kettő tizedesre kerekítve, hogy elférjen a láblécen; a részletek lentebb.",
+      "spendPairOpenRouter": "OpenRouter egyenleg: +{balance} USD (feltöltött {total} − elhasznált {used}). A 10 USD-s egyszeri vásárlás felett a :free modellek napi kerete 1000, alatta 50.",
+      "spendPairOpenRouterMissing": "OpenRouter egyenleg: nem elérhető ({error}).",
       "spendPairBalance": "DeepSeek egyenleg (a grátisszal együtt): {balance} {currency} — a konzollal egyező, elérhető összeg.",
       "spendPairBalanceBreakdown": "Bontás: feltöltött {toppedUp} + jóváírt (grátisz) {granted} = {total}.",
       "spendPairBill": "Alibaba számla ({cycle}): {amount} {currency} fizetendő.",
@@ -1542,8 +1544,10 @@ window.__ModuleLoader__.load({
       "balanceUnavailable": "unavailable",
       "balanceTitle": "Live balance from the DeepSeek account, queried on the host.",
       "balanceErrorTitle": "The host-side balance query failed: ",
-      "spendPair": "DSH / Alibaba",
-      "spendPairTitle": "Left: the AVAILABLE balance on the DeepSeek account (topped-up + granted). Right: Alibaba outstanding payable debt — resets to 0 after payment, pay-as-you-go.",
+      "spendPair": "DSH / Ali / OpenR",
+      "spendPairTitle": "Three figures, left to right: the AVAILABLE DeepSeek balance (+), the Alibaba payable debt (−), the OpenRouter pay-as-you-go balance (+). Both rounded to two decimals so the footer fits; details below.",
+      "spendPairOpenRouter": "OpenRouter balance: +{balance} USD (purchased {total} − used {used}). Above a one-time $10 purchase the :free models allow 1,000 requests/day, below it 50.",
+      "spendPairOpenRouterMissing": "OpenRouter balance: unavailable ({error}).",
       "spendPairBalance": "DeepSeek balance (granted included): {balance} {currency} — the available amount, matching the console.",
       "spendPairBalanceBreakdown": "Breakdown: topped-up {toppedUp} + granted {granted} = {total}.",
       "spendPairBill": "Alibaba invoice ({cycle}): {amount} {currency} payable.",
@@ -1796,6 +1800,7 @@ window.__ModuleLoader__.load({
     var BALANCE_ROUTE = "/ui-extras/balance";
     /** Where the host half publishes the Alibaba BSS bill (RAM AccessKey). */
     var ALIBABA_ROUTE = "/ui-extras/alibaba";
+var OPENROUTER_ROUTE = "/ui-extras/openrouter";
 
     /** Where the host half publishes the 30-day token and cost usage. */
     var USAGE_ROUTE = "/ui-extras/usage";
@@ -2109,6 +2114,13 @@ window.__ModuleLoader__.load({
       var amount = Number(value);
       if (!isFinite(amount)) return "n/a";
       return "$" + amount.toFixed(4);
+    }
+
+    /** Ket tizedes: a lablec-pill szuk helyere (2026-10-26, felhasznaloi keres). */
+    function formatUsd2(value) {
+      var amount = Number(value);
+      if (!isFinite(amount)) return "n/a";
+      return "$" + amount.toFixed(2);
     }
 
     function totalTokensOf(usage) {
@@ -2575,6 +2587,13 @@ window.__ModuleLoader__.load({
       var alibabaBillState = alibabaState[0];
       var setAlibabaBill = alibabaState[1];
 
+      // OpenRouter egyenleg (pay-as-you-go: feltoltott kredit - hasznalat).
+      // 2026-10-26: a lablec harmadik szama; a 10 USD feltoltes utan a :free
+      // napi keret 1000 (a tooltip is innen veszi a bontast).
+      var openrState = react.useState({ status: "loading", data: null });
+      var openrBalanceState = openrState[0];
+      var setOpenrBalance = openrState[1];
+
       // The 30-day usage aggregate, computed and priced on the host from the
       // durable session logs. `status` distinguishes "still loading" from "the
       // host cannot answer" (an older host half has no /ui-extras/usage route),
@@ -2623,6 +2642,26 @@ window.__ModuleLoader__.load({
             })
             .catch(function (error) {
               if (alive) setAlibabaBill({ status: "error", data: { error: String(error && error.message ? error.message : error) } });
+            });
+        }
+        load();
+        var timer = setInterval(load, BALANCE_REFRESH_MILLISECONDS);
+        return function () { alive = false; clearInterval(timer); };
+      }, []);
+
+      // Az OpenRouter-egyenleg ugyanazon az utemen, ugyanazzal a gyakorisaggal.
+      react.useEffect(function () {
+        var alive = true;
+        function load() {
+          fetch(OPENROUTER_ROUTE, { headers: { Accept: "application/json" } })
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+              if (!alive) return;
+              if (data && data.ok === true) setOpenrBalance({ status: "ready", data: data });
+              else setOpenrBalance({ status: "error", data: data || null });
+            })
+            .catch(function (error) {
+              if (alive) setOpenrBalance({ status: "error", data: { error: String(error && error.message ? error.message : error) } });
             });
         }
         load();
@@ -2910,7 +2949,7 @@ window.__ModuleLoader__.load({
           ? (alibabaBillData.pretaxGrossAmount ?? (aliPretax !== null ? aliPretax * ALIBABA_VAT_RATE : null))
           : null;
         var aliAmount = (aliOutstanding > 0) ? aliOutstanding : (aliPretaxGross ?? (aliPretax ?? (spend.alibabaUsd || 0)));
-        var aliSpendText = "-" + formatUsd(aliAmount);
+        var aliSpendText = "-" + formatUsd2(aliAmount);
         // FORDULONAP: a szamla a ciklus (naptari honap) zarasa utan esedekes.
         // A ciklus-vegat a cycle mezobol szamoljuk (a honap 0. napja = utolso nap).
         var cycleClose = null;
@@ -2985,9 +3024,32 @@ window.__ModuleLoader__.load({
           spendTitleLines.push(providerLines[spendLineIndex]);
         }
         if (balance.status === "error") spendTitleLines.push(t("balanceErrorTitle") + balance.error);
+        // --- OpenRouter: a harmadik szam a lablecben (2026-10-26) -------------
+        // Ugyanaz a logika, mint a DSH-nal: a pay-as-you-go egyenleg pozitiv,
+        // az Alibaba-tartozas negativ elojellel. Ket tizedes, hogy elferjen.
+        var openrData = openrBalanceState.status === "ready" ? openrBalanceState.data : null;
+        var openrAmount = openrData !== null && typeof openrData.balance === "number" ? openrData.balance : null;
+        var openrText = openrAmount === null
+          ? t("balanceUnavailable")
+          : ((openrAmount >= 0 ? "+" : "-") + formatUsd2(Math.abs(openrAmount)));
+        if (openrData !== null) {
+          spendTitleLines.push(t("spendPairOpenRouter", {
+            balance: formatUsd2(Math.abs(openrAmount || 0)),
+            total: formatUsd2(openrData.totalCredits || 0),
+            used: formatUsd2(openrData.totalUsage || 0)
+          }));
+        } else {
+          spendTitleLines.push(t("spendPairOpenRouterMissing", {
+            error: String((openrBalanceState.data && openrBalanceState.data.error) || "nincs adat")
+          }));
+        }
+        // A DSH-egyenleg is elojellel megy a pillre; a penznemet a formatMoney adja.
+        var dshPillText = balance.status !== "ready"
+          ? dshBalanceText
+          : ((Number(dshShown) < 0 ? "-" : "+") + (formatMoney(Math.abs(Number(dshShown)), balanceCurrency) || t("balanceUnavailable")));
         pills.push({
           label: t("spendPair"),
-          value: dshBalanceText + " / " + aliSpendText,
+          value: dshPillText + " / " + aliSpendText + " / " + openrText,
           strong: balance.status === "ready",
           title: spendTitleLines.join("\n")
         });

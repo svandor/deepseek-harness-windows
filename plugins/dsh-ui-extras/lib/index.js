@@ -246,6 +246,8 @@ async function handleBalance(ctx, res) {
 const ALIBABA_BSS_HOST = "business.ap-southeast-1.aliyuncs.com";
 let cachedAlibabaBill = null;
 let cachedAlibabaBillAt = 0;
+let cachedOpenRouter = null;
+let cachedOpenRouterAt = 0;
 
 /** Egy kulcs a DSH credential-store `refs:` szakaszabol. */
 function readCredentialRef(name) {
@@ -358,6 +360,55 @@ async function handleAlibabaBilling(res) {
       cachedAlibabaBillAt = now;
     }
     sendJson(res, cachedAlibabaBill);
+  } catch (error) {
+    sendJson(res, { ok: false, error: String(error?.message ?? error) });
+  }
+}
+
+// ------------------------------------------------------- OpenRouter egyenleg
+
+/**
+ * Az OpenRouter pay-as-you-go egyenlege: `credits - usage`.
+ * 2026-10-26: a felhasznalo feltoltott 10 USD-t, amitol a `:free` modellek napi
+ * kerete 50-rol 1000-re valt (`is_free_tier: false`). Az egyenleg a
+ * https://openrouter.ai/api/v1/credits vegpontrol jon, a kulcs a credential-store-bol.
+ * Az endpoint a FELHASZNALOI kulccsal hivhato, ezert a valasz csak a ket osszeget
+ * adja vissza — nem tartalmaz titkot, de a cache megis 5 perc.
+ */
+async function queryOpenRouterCredits() {
+  const key = readCredentialRef("OPENROUTER_API_KEY") ?? process.env.OPENROUTER_API_KEY ?? null;
+  if (key === null || key === "") return { ok: false, error: "nincs OPENROUTER_API_KEY a credential-store-ban" };
+  const response = await fetch("https://openrouter.ai/api/v1/credits", {
+    headers: { authorization: `Bearer ${key}`, accept: "application/json" },
+    signal: AbortSignal.timeout(15000),
+  });
+  const json = await response.json().catch(() => null);
+  const data = json?.data ?? json ?? {};
+  const total = Number(data.total_credits);
+  const used = Number(data.total_usage ?? 0);
+  if (!Number.isFinite(total)) {
+    return { ok: false, error: `OpenRouter /credits HTTP ${response.status}` };
+  }
+  return {
+    ok: true,
+    currency: "USD",
+    totalCredits: total,
+    totalUsage: Number.isFinite(used) ? used : 0,
+    balance: total - (Number.isFinite(used) ? used : 0),
+    freeTier: null,
+    at: Date.now(),
+  };
+}
+
+/** Serve the OpenRouter balance (5-minute cache, same beat as the others). */
+async function handleOpenRouter(res) {
+  try {
+    const now = Date.now();
+    if (cachedOpenRouter === null || now - cachedOpenRouterAt > CACHE_MILLISECONDS) {
+      cachedOpenRouter = await queryOpenRouterCredits();
+      cachedOpenRouterAt = now;
+    }
+    sendJson(res, cachedOpenRouter);
   } catch (error) {
     sendJson(res, { ok: false, error: String(error?.message ?? error) });
   }
@@ -3866,6 +3917,12 @@ function apply(ctx) {
     path: "/ui-extras/usage",
     handler: (req, res) => handleUsage(req, res, new URL(req.url ?? "/", "http://dsh.invalid"))
   }), "ui-extras: usage route");
+
+  ctx.effect(() => ctx.webServer.register({
+    kind: "exact",
+    path: "/ui-extras/openrouter",
+    handler: (_req, res) => handleOpenRouter(res)
+  }), "ui-extras: openrouter balance route");
 
   ctx.effect(() => ctx.webServer.register({
     kind: "exact",
