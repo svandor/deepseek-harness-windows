@@ -1,5 +1,11 @@
 @echo off
 REM ============================================================================
+REM  FIGYELEM - NE tedd be ezt a .cmd-t utemezett feladat muveletekent!
+REM  A Task Scheduler a .cmd-hez LATHATO konzolablakot hoz letre, es elveszi a
+REM  fokuszt. HELYES muvelet: wscript.exe //nologo "<providers>\run-autotune-hidden.vbs"
+REM  Regisztralas: providers\register-weekly-autotune.ps1
+REM  Szabaly: ..\AGENTS.md 1. fejezet. Ez a fajl csak kezi hasznalatra marad.
+REM ============================================================================
 REM  AUTOTUNE - automatikus ujrameres es optimalizalas (heti).
 REM
 REM  Mit tesz (providers\autotune.mjs --apply):

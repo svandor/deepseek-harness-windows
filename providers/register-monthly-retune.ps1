@@ -61,7 +61,7 @@ $TaskName = 'DSH model retune'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $retune = Join-Path $root 'retune.mjs'
 $runner = Join-Path $root 'run-retune.ps1'
-$shim = Join-Path $root 'run-retune.cmd'
+$vbs = Join-Path $root 'run-retune-hidden.vbs'
 $reportDir = Join-Path $root 'reports'
 $logFile = Join-Path $reportDir 'retune-scheduled.log'
 
@@ -74,7 +74,7 @@ if ($Remove) {
 
 if (-not (Test-Path $retune)) { throw "Nem találom: $retune" }
 if (-not (Test-Path $runner)) { throw "Nem találom: $runner" }
-if (-not (Test-Path $shim)) { throw "Nem találom: $shim" }
+if (-not (Test-Path $vbs)) { throw "Nem találom: $vbs" }
 
 $node = (Get-Command node -ErrorAction SilentlyContinue).Source
 if (-not $node) { throw "A 'node' nincs a PATH-on. Telepítsd a Node.js-t." }
@@ -83,9 +83,14 @@ if (-not (Test-Path $reportDir)) { New-Item -ItemType Directory -Path $reportDir
 
 $mode = if ($DryRun) { 'report' } else { 'apply' }
 
-# A schtasks /TR értéke legfeljebb 261 karakter, és a path szóközt tartalmaz —
-# ezért a .cmd shimre hivatkozunk, ami maga hívja a PowerShell wrappert.
-$tr = "`"$shim`" $mode"
+# 2026-10-28 JAVÍTÁS — A FÓKUSZLOPÁS MEGSZÜNTETVE.
+# KORÁBBAN: a /TR a run-retune.cmd shimre mutatott. A Task Scheduler a .cmd-hez
+# LÁTHATÓ konzolt hoz létre (fekete cmd.exe), a shim pedig egy második, kék
+# powershell.exe-t indított — mért eset: 2026-10-28 09:00:01, két ablak vette el
+# a fókuszt. MOST: a művelet a wscript + run-retune-hidden.vbs rejtett indítóra
+# mutat, ami egyáltalán nem hoz létre konzolablakot.
+# Szabály: ..\AGENTS.md 1. fejezet.
+$tr = "wscript.exe //nologo `"$vbs`" $mode"
 
 if ($tr.Length -gt 261) {
     throw "A /TR túl hosszú ($($tr.Length) > 261). Rövidítsd a telepítési útvonalat."
@@ -111,7 +116,7 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "Ütemezett feladat létrehozva: '$TaskName'" -ForegroundColor Green
 Write-Host "  Mikor:  minden hónap $Day. napján, $Time$(if ($FirstRun) { "  (első futás: $FirstRun)" })" -ForegroundColor Gray
-Write-Host "  Indító: $shim $mode" -ForegroundColor Gray
+Write-Host "  Indító: $vbs $mode" -ForegroundColor Gray
 Write-Host "  Mód:    $(if ($DryRun) { 'CSAK RIPORT (DryRun)' } else { 'javítás is (--apply)' })" -ForegroundColor Gray
 Write-Host "  Napló:  $logFile" -ForegroundColor Gray
 Write-Host "  Riport: $reportDir" -ForegroundColor Gray

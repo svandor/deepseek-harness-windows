@@ -155,14 +155,62 @@
       "freeQuotaTokens": 1000000
     },
     "_ingyenes_celok_20261026": "A 2026-10-26-i élő mérés alapján a delegálás INGYENES céljai. Ár = 0, a contextWindow a valós (a SKIP-döntéshez). A groq TPM-je 8000, ezért csak ~4K token alatt megy át; az ollama 32K-nál csonkolna.",
-    "openrouter/nvidia/nemotron-3.5-lightning:free": { "miss": 0, "hit": 0, "out": 0, "contextWindow": 1000000, "vision": false },
-    "google/gemini-3-flash-preview": { "miss": 0, "hit": 0, "out": 0, "contextWindow": 1000000, "vision": true },
-    "google/gemini-3.1-flash-lite": { "miss": 0, "hit": 0, "out": 0, "contextWindow": 1000000, "vision": true },
-    "openrouter/nvidia/nemotron-3.5-super-vl:free": { "miss": 0, "hit": 0, "out": 0, "contextWindow": 1000000, "vision": true },
-    "groq/openai/gpt-oss-120b": { "miss": 0, "hit": 0, "out": 0, "contextWindow": 131072, "vision": false },
-    "ollama/qwen2.5:7b-instruct": { "miss": 0, "hit": 0, "out": 0, "contextWindow": 32768, "vision": false },
-    "ollama/qwen25-32k:latest": { "miss": 0, "hit": 0, "out": 0, "contextWindow": 32768, "vision": false },
-    "ollama/qwen3-vl:8b": { "miss": 0, "hit": 0, "out": 0, "contextWindow": 32768, "vision": true }
+    "openrouter/nvidia/nemotron-3.5-lightning:free": {
+      "miss": 0,
+      "hit": 0,
+      "out": 0,
+      "contextWindow": 1000000,
+      "vision": false
+    },
+    "google/gemini-3-flash-preview": {
+      "miss": 0,
+      "hit": 0,
+      "out": 0,
+      "contextWindow": 1000000,
+      "vision": true
+    },
+    "google/gemini-3.1-flash-lite": {
+      "miss": 0,
+      "hit": 0,
+      "out": 0,
+      "contextWindow": 1000000,
+      "vision": true
+    },
+    "openrouter/nvidia/nemotron-3.5-super-vl:free": {
+      "miss": 0,
+      "hit": 0,
+      "out": 0,
+      "contextWindow": 1000000,
+      "vision": true
+    },
+    "groq/openai/gpt-oss-120b": {
+      "miss": 0,
+      "hit": 0,
+      "out": 0,
+      "contextWindow": 131072,
+      "vision": false
+    },
+    "ollama/qwen2.5:7b-instruct": {
+      "miss": 0,
+      "hit": 0,
+      "out": 0,
+      "contextWindow": 32768,
+      "vision": false
+    },
+    "ollama/qwen25-32k:latest": {
+      "miss": 0,
+      "hit": 0,
+      "out": 0,
+      "contextWindow": 32768,
+      "vision": false
+    },
+    "ollama/qwen3-vl:8b": {
+      "miss": 0,
+      "hit": 0,
+      "out": 0,
+      "contextWindow": 32768,
+      "vision": true
+    }
   },
   "_valaszto_hangolas": "A szelektor becslesei: assumedCachedShare = a session 4. uzenete utan ennyi a feltetelezett cache-arany (merve 99,8%, de ovatosan 0,9); assumedOutputTokens = tipikus kimenet lepesenkent (merve ~870); assumedRemainingSteps = hany lepesre szamoljuk a valtas nyeresegét (a cache-ujraeles koltsege ellenében); switchMarginPct = ennyi% nyereseg alatt nem valtunk (cache-vedelem).",
   "assumedCachedShare": 0.95,
@@ -265,13 +313,13 @@
       "maxTokens": 8192,
       "_fizetos_tartalek_megjegyzes": "2026-10-26: a fizetős Alibaba SZANDEKOSAN kikerült a subagent-láncokból (worker, free-quota, vision-worker). Ha mégis kell, külön, nevén nevezett route-ba tedd, és a panelben árazd be — ne a 'free' lánc végére.",
       "targets": [
-        "google/gemini-3-flash-preview",
-        "google/gemini-3.1-flash-lite",
-        "openrouter/nvidia/nemotron-3.5-super-vl:free",
         "openrouter/nvidia/nemotron-3.5-lightning:free",
-        "ollama/qwen25-32k:latest",
         "ollama/qwen2.5:7b-instruct",
-        "groq/openai/gpt-oss-120b"
+        "groq/openai/gpt-oss-120b",
+        "openrouter/nvidia/nemotron-3.5-super-vl:free",
+        "google/gemini-3.1-flash-lite",
+        "google/gemini-3-flash-preview",
+        "ollama/qwen25-32k:latest"
       ]
     },
     "free-quota": {
@@ -279,13 +327,13 @@
       "contextWindow": 1000000,
       "maxTokens": 8192,
       "targets": [
-        "google/gemini-3-flash-preview",
-        "google/gemini-3.1-flash-lite",
-        "openrouter/nvidia/nemotron-3.5-super-vl:free",
         "openrouter/nvidia/nemotron-3.5-lightning:free",
-        "ollama/qwen25-32k:latest",
         "ollama/qwen2.5:7b-instruct",
-        "groq/openai/gpt-oss-120b"
+        "groq/openai/gpt-oss-120b",
+        "openrouter/nvidia/nemotron-3.5-super-vl:free",
+        "google/gemini-3.1-flash-lite",
+        "google/gemini-3-flash-preview",
+        "ollama/qwen25-32k:latest"
       ]
     },
     "deepseek-chat": {
@@ -293,9 +341,9 @@
       "maxTokens": 16384,
       "_comment": "2026-10-26: a fizetős openrouter/qwen/qwen3.8-27b helyett az ingyenes nemotron-3.5-lightning:free (mért: tool_calls OK 32K-n).",
       "targets": [
-        "groq/openai/gpt-oss-120b",
         "openrouter/nvidia/nemotron-3.5-lightning:free",
-        "ollama/qwen2.5:7b-instruct"
+        "ollama/qwen2.5:7b-instruct",
+        "groq/openai/gpt-oss-120b"
       ]
     },
     "fast-chat": {
@@ -312,9 +360,9 @@
       "contextWindow": 1000000,
       "maxTokens": 8192,
       "targets": [
-        "google/gemini-3-flash-preview",
-        "openrouter/nvidia/nemotron-3.5-super-vl:free",
         "openrouter/nvidia/nemotron-3.5-lightning:free",
+        "openrouter/nvidia/nemotron-3.5-super-vl:free",
+        "google/gemini-3-flash-preview",
         "ollama/qwen3-vl:8b"
       ]
     },
@@ -328,8 +376,8 @@
       ],
       "targets": [
         "deepseek/deepseek-flash",
-        "alibaba-intl/qwen3.8-flash",
-        "alibaba/qwen3.8-flash"
+        "alibaba/qwen3.8-flash",
+        "alibaba-intl/qwen3.8-flash"
       ],
       "rules": [
         {

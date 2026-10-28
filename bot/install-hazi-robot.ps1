@@ -110,13 +110,16 @@ if ($DryRun) {
 } else {
   $ErrorActionPreference = 'Continue'
   try {
-    $action = New-ScheduledTaskAction -Execute $wscript -Argument $taskArg -WorkingDirectory $bot
-    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date.AddMinutes(1) `
-      -RepetitionInterval (New-TimeSpan -Minutes 15)
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-      -StartWhenAvailable -MultipleInstances IgnoreNew
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
-    Write-Host '  Kész.'
+    # 2026-10-28 JAVÍTÁS — az ütemező HALOTT volt, nem csak látható.
+    # A korábbi kód:
+    #   New-ScheduledTaskTrigger -Once -At ... -RepetitionInterval (New-TimeSpan -Minutes 15)
+    # a task XML-be <Duration>PT10M</Duration> + <StopAtDurationEnd>true</StopAtDurationEnd>
+    # készletet írt. Mivel a duration (10 perc) rövidebb az intervallumnál
+    # (15 perc), az ismétlés az ELSŐ futás után leállt: a 'HáziRobot due'
+    # 2026-10-22 óta egyszer sem futott le, és vele a bot minden cron-jobja sem.
+    # A schtasks /SC MINUTE nem ír Duration-t -> az ismétlés végtelen.
+    # Egyetlen kódút: a register-hidden-task.ps1 (az is ezt használja).
+    & (Join-Path $bot 'register-hidden-task.ps1') -TaskName $taskName -EveryMinutes 15
   } catch {
     Write-Host "  FIGYELEM: az utemezett feladatot nem sikerult letrehozni: $($_.Exception.Message)" -ForegroundColor Yellow
     Write-Host '  Futtasd ugyanezt a szkriptet rendszergazdakent.' -ForegroundColor Yellow

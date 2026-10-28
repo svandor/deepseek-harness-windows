@@ -1290,8 +1290,8 @@ window.__ModuleLoader__.load({
       "balanceTitle": "Élő egyenleg a DeepSeek számláról, szerveroldali lekérdezéssel.",
       "balanceErrorTitle": "A szerveroldali egyenleg-lekérdezés nem sikerült: ",
       "spendPair": "DSH / Ali / OpenR",
-      "spendPairTitle": "Három szám, balról jobbra: a DeepSeek számlán ELÉRHETŐ egyenleg (+), az Alibaba kifizetendő tartozása (−), az OpenRouter pay-as-you-go egyenlege (+). Mind kettő tizedesre kerekítve, hogy elférjen a láblécen; a részletek lentebb.",
-      "spendPairOpenRouter": "OpenRouter egyenleg: +{balance} USD (feltöltött {total} − elhasznált {used}). A 10 USD-s egyszeri vásárlás felett a :free modellek napi kerete 1000, alatta 50.",
+      "spendPairTitle": "Három szám, balról jobbra: a DeepSeek számlán ELÉRHETŐ egyenleg, az Alibaba kifizetendő tartozása (−), az OpenRouter pay-as-you-go egyenlege. Két tizedesre kerekítve, hogy elférjen a láblécen; a részletek lentebb.",
+      "spendPairOpenRouter": "OpenRouter egyenleg: {balance} USD (feltöltött {total} − elhasznált {used}). A 10 USD-s egyszeri vásárlás felett a :free modellek napi kerete 1000, alatta 50.",
       "spendPairOpenRouterMissing": "OpenRouter egyenleg: nem elérhető ({error}).",
       "spendPairBalance": "DeepSeek egyenleg (a grátisszal együtt): {balance} {currency} — a konzollal egyező, elérhető összeg.",
       "spendPairBalanceBreakdown": "Bontás: feltöltött {toppedUp} + jóváírt (grátisz) {granted} = {total}.",
@@ -1545,8 +1545,8 @@ window.__ModuleLoader__.load({
       "balanceTitle": "Live balance from the DeepSeek account, queried on the host.",
       "balanceErrorTitle": "The host-side balance query failed: ",
       "spendPair": "DSH / Ali / OpenR",
-      "spendPairTitle": "Three figures, left to right: the AVAILABLE DeepSeek balance (+), the Alibaba payable debt (−), the OpenRouter pay-as-you-go balance (+). Both rounded to two decimals so the footer fits; details below.",
-      "spendPairOpenRouter": "OpenRouter balance: +{balance} USD (purchased {total} − used {used}). Above a one-time $10 purchase the :free models allow 1,000 requests/day, below it 50.",
+      "spendPairTitle": "Three figures, left to right: the AVAILABLE DeepSeek balance, the Alibaba payable debt (−), the OpenRouter pay-as-you-go balance. Rounded to two decimals so the footer fits; details below.",
+      "spendPairOpenRouter": "OpenRouter balance: {balance} USD (purchased {total} − used {used}). Above a one-time $10 purchase the :free models allow 1,000 requests/day, below it 50.",
       "spendPairOpenRouterMissing": "OpenRouter balance: unavailable ({error}).",
       "spendPairBalance": "DeepSeek balance (granted included): {balance} {currency} — the available amount, matching the console.",
       "spendPairBalanceBreakdown": "Breakdown: topped-up {toppedUp} + granted {granted} = {total}.",
@@ -3025,13 +3025,13 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
         }
         if (balance.status === "error") spendTitleLines.push(t("balanceErrorTitle") + balance.error);
         // --- OpenRouter: a harmadik szam a lablecben (2026-10-26) -------------
-        // Ugyanaz a logika, mint a DSH-nal: a pay-as-you-go egyenleg pozitiv,
-        // az Alibaba-tartozas negativ elojellel. Ket tizedes, hogy elferjen.
+        // Az Alibaba-tartozas negativ elojellel megy; a pozitiv egyenlegek ele
+        // NEM teszunk "+"-t (zavaro volt) — csak a negativ kap "-"-t.
         var openrData = openrBalanceState.status === "ready" ? openrBalanceState.data : null;
         var openrAmount = openrData !== null && typeof openrData.balance === "number" ? openrData.balance : null;
         var openrText = openrAmount === null
           ? t("balanceUnavailable")
-          : ((openrAmount >= 0 ? "+" : "-") + formatUsd2(Math.abs(openrAmount)));
+          : ((openrAmount < 0 ? "-" : "") + formatUsd2(Math.abs(openrAmount)));
         if (openrData !== null) {
           spendTitleLines.push(t("spendPairOpenRouter", {
             balance: formatUsd2(Math.abs(openrAmount || 0)),
@@ -3044,9 +3044,10 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
           }));
         }
         // A DSH-egyenleg is elojellel megy a pillre; a penznemet a formatMoney adja.
+        // Pozitiv ertek elott NINCS "+" (zavaró, 2026-10-26-i visszajelzes) — csak a negativ kap "-"-t.
         var dshPillText = balance.status !== "ready"
           ? dshBalanceText
-          : ((Number(dshShown) < 0 ? "-" : "+") + (formatMoney(Math.abs(Number(dshShown)), balanceCurrency) || t("balanceUnavailable")));
+          : ((Number(dshShown) < 0 ? "-" : "") + (formatMoney(Math.abs(Number(dshShown)), balanceCurrency) || t("balanceUnavailable")));
         pills.push({
           label: t("spendPair"),
           value: dshPillText + " / " + aliSpendText + " / " + openrText,

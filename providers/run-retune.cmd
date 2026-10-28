@@ -1,12 +1,19 @@
 @echo off
-REM Entry point for the monthly scheduled task (schtasks /TR calls this).
+REM ============================================================================
+REM  FIGYELEM - NE tedd be ezt a .cmd-t utemezett feladat muveletekent!
 REM
-REM Why a .cmd shim: the schtasks /TR value is limited to 261 characters and
-REM the install path contains a space, which breaks quote escaping. A shim
-REM solves both and stays readable in Task Scheduler.
+REM  2026-10-28 MERT HIBA: a Task Scheduler a .cmd-hez LATHATO konzolablakot hoz
+REM  letre (fekete cmd.exe), ez a shim pedig egy MASODIK, kek powershell.exe-t
+REM  inditott -> ket ablak vette el a fokuszt 09:00:01-kor.
 REM
-REM %~dp0 is this file's own directory (with trailing backslash), so the
-REM correct path is used even if the folder is moved.
+REM  HELYES (utemezett feladat muvelete):
+REM     wscript.exe //nologo "<providers>\run-retune-hidden.vbs" apply
+REM  Regisztralas: providers\register-hidden-retune.ps1
+REM  Szabaly: ..\AGENTS.md 1. fejezet.
+REM
+REM  Ez a fajl KIZAROLAG kezi, eloterbeli hasznalatra marad.
+REM  %~dp0 a sajat mappa (trailing backslash), ezert a mappa mozgathato.
+REM ============================================================================
 
 set MODE=%~1
 if "%MODE%"=="" set MODE=report

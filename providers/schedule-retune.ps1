@@ -53,45 +53,47 @@ param(
 $ErrorActionPreference = 'Stop'
 $TaskName = 'DSH model retune'
 
-$root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$shim = Join-Path $root 'run-retune.cmd'
+$root   = Split-Path -Parent $MyInvocation.MyCommand.Path
+$hidden = Join-Path $root 'register-hidden-retune.ps1'
+$vbs    = Join-Path $root 'run-retune-hidden.vbs'
 
 if ($Remove) {
-    $out = & cmd.exe /c "schtasks.exe /Delete /TN `"$TaskName`" /F" 2>&1
-    if ($LASTEXITCODE -eq 0) { Write-Host "Törölve: '$TaskName'" -ForegroundColor Green }
-    else { Write-Host "Nem sikerült törölni: $out" -ForegroundColor Yellow }
+    try {
+        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop
+        Write-Host "Törölve: '$TaskName'" -ForegroundColor Green
+    } catch {
+        $out = & cmd.exe /c "schtasks.exe /Delete /TN `"$TaskName`" /F" 2>&1
+        if ($LASTEXITCODE -eq 0) { Write-Host "Törölve: '$TaskName'" -ForegroundColor Green }
+        else { Write-Host "Nem sikerült törölni: $out" -ForegroundColor Yellow }
+    }
     return
 }
 
-if (-not (Test-Path $shim)) { throw "Nem találom: $shim" }
+if (-not (Test-Path $hidden)) { throw "Nem találom: $hidden" }
+if (-not (Test-Path $vbs))    { throw "Nem találom: $vbs" }
 
+# ===========================================================================
+# 2026-10-28 JAVÍTÁS — A FÓKUSZLOPÁS MEGSZÜNTETVE
+#
+# KORÁBBAN: a feladat művelete `"<root>\run-retune.cmd" <mode>` volt. A Task
+# Scheduler a .cmd-hez konzolt hoz létre (fekete cmd.exe), a shim pedig egy
+# második, látható powershell.exe-t indított (kék ablak) — 2026-10-28 09:00:01-kor
+# két ablak vette el a fókuszt, és 09:09-ig látszott.
+#
+# MOST: a regisztráció a `wscript.exe //nologo run-retune-hidden.vbs <mode>`
+# indítóra áll, ami egyáltalán nem hoz létre konzolablakot. A .cmd shimre tehát
+# NEM mutat többé feladat, és a jövőbeli újraregisztrálás is ezt használja.
+# Kötelező minta és indoklás: ..\AGENTS.md 1. fejezet.
+# ===========================================================================
 $mode = if ($DryRun) { 'report' } else { 'apply' }
-$tr = "`"$shim`" $mode"
 
-# A schtasks /TR értéke legfeljebb 261 karakter; a shim ezt bőven alatta tartja.
-if ($tr.Length -gt 261) { throw "A /TR túl hosszú ($($tr.Length) > 261)." }
-
-$schedule = if ($Cadence -eq 'Daily') { '/SC DAILY' } else { '/SC WEEKLY /MO 7' }
-$startDate = ''
-if ($FirstRun) { $startDate = " /SD $($FirstRun -replace '-', '/')" }
-
-$quotedTr = $tr -replace '"', '\"'
-$cmdLine = "schtasks.exe /Create /TN `"$TaskName`" /TR `"$quotedTr`" $schedule /ST $Time$startDate /F"
-
-$out = & cmd.exe /c $cmdLine 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "A regisztrálás nem sikerült:" -ForegroundColor Red
-    $out | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
-    exit 1
+$registerArgs = @{
+    TaskName = $TaskName
+    Cadence  = $Cadence
+    Time     = $Time
+    Mode     = $mode
 }
+if ($FirstRun) { $registerArgs.FirstRun = $FirstRun }
 
-Write-Host "Ütemezett feladat beállítva: '$TaskName'" -ForegroundColor Green
-Write-Host "  Ütem:   $(if ($Cadence -eq 'Daily') { 'NAPONTA' } else { 'HETENTE (7 naponta)' }) $Time-kor" -ForegroundColor Gray
-Write-Host "  Mód:    $(if ($DryRun) { 'CSAK RIPORT' } else { 'javítás is (mentés után)' })" -ForegroundColor Gray
-Write-Host "  Indító: $shim $mode" -ForegroundColor Gray
-Write-Host ""
-$next = (& cmd.exe /c "schtasks.exe /Query /TN `"$TaskName`" /FO LIST" 2>&1 | Select-String 'Next Run Time' | Select-Object -First 1)
-if ($next) { Write-Host "Következő futás: $($next.ToString().Trim())" -ForegroundColor Cyan }
-Write-Host ""
-Write-Host "Átállás a másik ütemre:  .\schedule-retune.ps1 -Cadence Weekly" -ForegroundColor DarkGray
-Write-Host "Törlés:                  .\schedule-retune.ps1 -Remove" -ForegroundColor DarkGray
+& $hidden @registerArgs
+exit $LASTEXITCODE

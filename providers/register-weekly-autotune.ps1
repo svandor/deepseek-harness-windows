@@ -40,6 +40,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $TaskName = 'DSH-AutoTune'
 $shim = Join-Path $root 'run-autotune.cmd'
+$vbs  = Join-Path $root 'run-autotune-hidden.vbs'
 
 if ($Remove) {
     $out = & schtasks.exe /Delete /TN $TaskName /F 2>&1
@@ -49,11 +50,15 @@ if ($Remove) {
 }
 
 if (-not (Test-Path $shim)) { throw "Hiányzik a shim: $shim" }
+if (-not (Test-Path $vbs))  { throw "Hiányzik a rejtett indító: $vbs" }
 
-# A schtasks /TR értéke legfeljebb 261 karakter, és a path szóközt tartalmaz —
-# ezért a .cmd shimre hivatkozunk, és a schtasks-et cmd.exe-n keresztül hívjuk,
-# ami pontosan átadja a /TR értékét (a PowerShell 5.1 szétdarabolja).
-$tr = "`"$shim`""
+# 2026-10-28 JAVÍTÁS — A FÓKUSZLOPÁS MEGSZÜNTETVE.
+# KORÁBBAN: a /TR közvetlenül a run-autotune.cmd shimre mutatott -> a Task
+# Scheduler LÁTHATÓ fekete cmd konzolt hozott létre minden futáskor.
+# MOST: a művelet a wscript + run-autotune-hidden.vbs rejtett indítóra mutat,
+# ami egyáltalán nem hoz létre konzolablakot (a .cmd logikája változatlan).
+# Szabály: ..\AGENTS.md 1. fejezet.
+$tr = "wscript.exe //nologo `"$vbs`""
 if ($tr.Length -gt 261) { throw "A /TR túl hosszú ($($tr.Length) > 261)." }
 $quotedTr = $tr -replace '"', '\"'
 $cmdLine = "schtasks.exe /Create /TN `"$TaskName`" /TR `"$quotedTr`" /SC WEEKLY /D $Day /ST $Time /F"
@@ -62,13 +67,13 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "A regisztrálás nem sikerült:" -ForegroundColor Red
     $out | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
     Write-Host "`nTipp: futtasd a szkriptet rendszergazdaként, vagy kézzel:" -ForegroundColor Yellow
-    Write-Host "  schtasks /Create /TN $TaskName /TR `"$shim`" /SC WEEKLY /D $Day /ST $Time /F" -ForegroundColor DarkGray
+    Write-Host "  schtasks /Create /TN $TaskName /TR `"wscript.exe //nologo \`"$vbs\`"`" /SC WEEKLY /D $Day /ST $Time /F" -ForegroundColor DarkGray
     exit 1
 }
 
 Write-Host "Ütemezett feladat létrehozva: '$TaskName'" -ForegroundColor Green
 Write-Host "  Mikor:  minden hét $Day napján, $Time" -ForegroundColor Gray
-Write-Host "  Mit:    $shim (autotune.mjs --days 30 --apply)" -ForegroundColor Gray
+Write-Host "  Mit:    $vbs -> $shim (autotune.mjs --days 30 --apply)" -ForegroundColor Gray
 $next = (& schtasks.exe /Query /TN $TaskName /FO LIST 2>&1 | Select-String 'Next Run Time' | Select-Object -First 1)
 if ($next) { Write-Host "  $($next.ToString().Trim())" -ForegroundColor Gray }
 Write-Host "`nAzonnali próba: schtasks /Run /TN `"$TaskName`"" -ForegroundColor DarkGray
