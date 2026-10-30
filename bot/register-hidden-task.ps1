@@ -68,6 +68,21 @@ function Get-RepetitionInfo([string]$Xml) {
   }
 }
 
+function Get-SettingsInfo([string]$Xml) {
+  $s = [regex]::Match($Xml, '(?s)<Settings>(.*?)</Settings>').Groups[1].Value
+  $read = {
+    param($name)
+    $m = [regex]::Match($s, "(?s)<$name>(.*?)</$name>")
+    if ($m.Success) { $m.Groups[1].Value.Trim() } else { '' }
+  }
+  [pscustomobject]@{
+    DisallowBattery    = & $read 'DisallowStartIfOnBatteries'
+    StopOnBattery      = & $read 'StopIfGoingOnBatteries'
+    StartWhenAvailable = & $read 'StartWhenAvailable'
+    Enabled            = & $read 'Enabled'
+  }
+}
+
 function Test-TaskAction([string]$Cmd, [string]$Arg) {
   $problems = @()
   if ($Cmd -notmatch '(?i)wscript\.exe$') {
@@ -97,7 +112,22 @@ if ($Verify) {
   Write-Host "  Duration:   $(if ($rep.Duration) { $rep.Duration } else { '(nincs = vegtelen ismetles)' })"
   Write-Host "  StopAtEnd:  $(if ($rep.StopAtEnd) { $rep.StopAtEnd } else { '(nincs)' })"
 
+  $st = Get-SettingsInfo $xml
+  Write-Host "  Akksi-tiltás: $(if ($st.DisallowBattery) { $st.DisallowBattery } else { '(nincs)' })  StopOnBattery: $(if ($st.StopOnBattery) { $st.StopOnBattery } else { '(nincs)' })  StartWhenAvailable: $(if ($st.StartWhenAvailable) { $st.StartWhenAvailable } else { '(nincs)' })  Enabled: $($st.Enabled)"
+
   $problems = @(Test-TaskAction $cmd $arg)
+  if ($st.DisallowBattery -match '(?i)true') {
+    $problems += 'DisallowStartIfOnBatteries=true — LAPTOPON akkumulátorról a feladat soha nem indul (ez a schtasks alapértelmezése)'
+  }
+  if ($st.StopOnBattery -match '(?i)true') {
+    $problems += 'StopIfGoingOnBatteries=true — ha lecsatlakozik a töltő, a futás leáll'
+  }
+  if ($st.StartWhenAvailable -match '(?i)false' -or -not $st.StartWhenAvailable) {
+    $problems += 'StartWhenAvailable nincs bekapcsolva — a kihagyott futás nem pótlódik'
+  }
+  if ($st.Enabled -match '(?i)false') {
+    $problems += 'a feladat le van tiltva (Settings/Enabled=false)'
+  }
   if (-not $rep.HasRepetition -or -not $rep.Interval) {
     $problems += 'nincs repetício/interval -> a feladat csak egyszer fut'
   }
@@ -142,6 +172,29 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "'$TaskName' újraregisztrálva (schtasks /SC MINUTE /MO $EveryMinutes, rejtett indító)." -ForegroundColor Green
 Write-Host "  Művelet:   $tr"
+
+# ---------------------------------------------------------------------------
+# 3) ÜTEMEZÉSI FELTÉTELEK — a schtasks ezt RONTJA EL
+# A `schtasks /Create` a task XML-be `<DisallowStartIfOnBatteries>true</...>`-t
+# és `<StartWhenAvailable>false</...>`-t tesz. LAPTOPON ez azt jelenti, hogy
+# akkumulátorról a feladat SOHA nem indul — pontosan ez a különbség a működő
+# `DSH model retune` (false/false/true) és a halott `HáziRobot due` között.
+# ---------------------------------------------------------------------------
+try {
+  $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+  $s = $task.Settings
+  $s.DisallowStartIfOnBatteries = $false
+  $s.StopIfGoingOnBatteries = $false
+  $s.StartWhenAvailable = $true
+  Set-ScheduledTask -TaskName $TaskName -Settings $s | Out-Null
+  Write-Host '  Feltételek: akksi-tiltás kikapcsolva, StartWhenAvailable bekapcsolva.' -ForegroundColor Green
+} catch {
+  Write-Host "  FIGYELEM: a feltételeket nem tudtam javítani: $($_.Exception.Message)" -ForegroundColor Yellow
+  Write-Host '  Futtasd ezt normál PowerShell-ablakból (rendszergazdaként):' -ForegroundColor Yellow
+  Write-Host "    `$s = (Get-ScheduledTask -TaskName '$TaskName').Settings" -ForegroundColor DarkGray
+  Write-Host '    $s.DisallowStartIfOnBatteries = $false; $s.StopIfGoingOnBatteries = $false; $s.StartWhenAvailable = $true' -ForegroundColor DarkGray
+  Write-Host "    Set-ScheduledTask -TaskName '$TaskName' -Settings `$s" -ForegroundColor DarkGray
+}
 
 # Azonnali ellenőrzés a task XML-ből — csak a <Repetition> blokkra.
 if (Test-Path $taskFile) {

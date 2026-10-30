@@ -314,11 +314,11 @@
       "_fizetos_tartalek_megjegyzes": "2026-10-26: a fizetős Alibaba SZANDEKOSAN kikerült a subagent-láncokból (worker, free-quota, vision-worker). Ha mégis kell, külön, nevén nevezett route-ba tedd, és a panelben árazd be — ne a 'free' lánc végére.",
       "targets": [
         "openrouter/nvidia/nemotron-3.5-lightning:free",
-        "ollama/qwen2.5:7b-instruct",
-        "groq/openai/gpt-oss-120b",
         "openrouter/nvidia/nemotron-3.5-super-vl:free",
-        "google/gemini-3.1-flash-lite",
         "google/gemini-3-flash-preview",
+        "groq/openai/gpt-oss-120b",
+        "google/gemini-3.1-flash-lite",
+        "ollama/qwen2.5:7b-instruct",
         "ollama/qwen25-32k:latest"
       ]
     },
@@ -328,11 +328,11 @@
       "maxTokens": 8192,
       "targets": [
         "openrouter/nvidia/nemotron-3.5-lightning:free",
-        "ollama/qwen2.5:7b-instruct",
-        "groq/openai/gpt-oss-120b",
         "openrouter/nvidia/nemotron-3.5-super-vl:free",
-        "google/gemini-3.1-flash-lite",
         "google/gemini-3-flash-preview",
+        "groq/openai/gpt-oss-120b",
+        "google/gemini-3.1-flash-lite",
+        "ollama/qwen2.5:7b-instruct",
         "ollama/qwen25-32k:latest"
       ]
     },
@@ -342,8 +342,8 @@
       "_comment": "2026-10-26: a fizetős openrouter/qwen/qwen3.8-27b helyett az ingyenes nemotron-3.5-lightning:free (mért: tool_calls OK 32K-n).",
       "targets": [
         "openrouter/nvidia/nemotron-3.5-lightning:free",
-        "ollama/qwen2.5:7b-instruct",
-        "groq/openai/gpt-oss-120b"
+        "groq/openai/gpt-oss-120b",
+        "ollama/qwen2.5:7b-instruct"
       ]
     },
     "fast-chat": {
@@ -376,8 +376,8 @@
       ],
       "targets": [
         "deepseek/deepseek-flash",
-        "alibaba/qwen3.8-flash",
-        "alibaba-intl/qwen3.8-flash"
+        "alibaba-intl/qwen3.8-flash",
+        "alibaba/qwen3.8-flash"
       ],
       "rules": [
         {
