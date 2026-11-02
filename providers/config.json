@@ -312,7 +312,12 @@
       "baseURL": "http://127.0.0.1:11434/v1",
       "apiKeyEnv": "OLLAMA_LOCAL_API_KEY",
       "optionalKey": true,
-      "connectTimeoutMs": 300000
+      "connectTimeoutMs": 300000,
+      "_reasoning_megjegyzes": "MÉRVE 2026-11-02 az /v1 végponton: a `think:false` HATÁSTALAN (a reasoning 157 karakter maradt), az `options.num_ctx` szintén eldobódik (32K-t kérve is 256K-val töltött: 15 050 MiB). Az EGYETLEN működő kapcsoló a `reasoning_effort`: 'none' -> 0 karakter reasoning, 0,2 s; alapból 145 karakter, 6,6 s. A proxy ezért KIS kimeneti keretnél (disableBelowMaxTokens alatt) automatikusan 'none'-t injektál, hogy a gondolkodás ne nyelje le a keretet és ne adjon üres választ. A num_ctx-et NEM lehet kérésenként állítani: azt a tag Modelfile-je hordozza, és a proxy induláskor ellenőrzi (kontextus-lint).",
+      "ollamaReasoning": {
+        "reasoning_effort": "none",
+        "disableBelowMaxTokens": 2048
+      }
     }
   },
   "routes": {
@@ -373,7 +378,7 @@
         "openrouter/nvidia/nemotron-3.5-lightning:free",
         "openrouter/nvidia/nemotron-3.5-super-vl:free",
         "google/gemini-3-flash-preview",
-        "ollama/qwen3-vl:8b"
+        "ollama/gemma4-12b-128k"
       ]
     },
     "auto": {

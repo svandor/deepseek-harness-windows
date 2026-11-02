@@ -1003,6 +1003,69 @@ function targetContextOf(label) {
   return Number.isFinite(meta?.contextWindow) ? meta.contextWindow : null;
 }
 
+/**
+ * OLLAMA KONTEXTUS-ELLENŐRZÉS induláskor (2026-11-02).
+ *
+ * MIÉRT: az /v1 végpont az `options.num_ctx`-et ELDOBJA (mért: 32K-t kérve is
+ * 256K-val töltött), ezért a proxy KÉPTELEN kérésenként beállítani az ablakot —
+ * azt a modell-tag Modelfile-je (`PARAMETER num_ctx 131072`) hordozza. Ezért itt
+ * ELLENŐRZÜNK: ha egy helyi cél tagje kisebb ablakkal tölt, mint a
+ * `targetContext`, a kérés NÉMÁN csonkolódhat (a 2026-10-22-i hiba); ha
+ * nagyobbal, VRAM-ot pazarol. Egyik sem derül ki a válaszból, ezért kell
+ * induláskor kimondani.
+ */
+async function lintOllamaContexts() {
+  const base = (CONFIG.providers?.ollama?.baseURL ?? 'http://127.0.0.1:11434/v1').replace(/\/v1\/?$/, '');
+  const seen = new Set();
+  const targets = [];
+  for (const name of routeNames()) {
+    for (const t of routeChain(name)) {
+      if (t.provider.id !== 'ollama' || seen.has(t.label)) continue;
+      seen.add(t.label);
+      targets.push(t);
+    }
+  }
+  for (const t of targets) {
+    const want = targetContextOf(t.label);
+    try {
+      const res = await fetch(`${base}/api/show`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: t.model }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!res.ok) {
+        log(`  kontextus-lint: ${t.label} -> /api/show HTTP ${res.status}`);
+        continue;
+      }
+      const data = await res.json();
+      const params = typeof data.parameters === 'string' ? data.parameters : '';
+      const m = params.match(/num_ctx\s+(\d+)/);
+      const have = m ? Number(m[1]) : null;
+      // A modell sajat maximuma (a /api/show model_info-jabol) — enelkul a
+      // "nincs tag-szintu num_ctx" eset NEM minosul VRAM-kockazatnak (a szerver
+      // OLLAMA_CONTEXT_LENGTH-e es a modell maximuma kozul a kisebb ervenyes).
+      const info = data.model_info ?? {};
+      const maxEntry = Object.entries(info).find(([k]) => k.endsWith('.context_length'));
+      const modelMax = maxEntry ? Number(maxEntry[1]) : null;
+      if (!Number.isFinite(want)) {
+        log(`  kontextus-lint: ${t.label} -> nincs targetContext (a tag ablaka: ${have ?? 'ismeretlen'})`);
+      } else if (!Number.isFinite(have)) {
+        const eff = Number.isFinite(modelMax) ? Math.min(modelMax, want) : want;
+        log(`  kontextus-lint: ${t.label} tag-szintű num_ctx nincs (modell max: ${Number.isFinite(modelMax) ? modelMax : '?'}); a szerver alapértéke érvényes, de a modell maximuma korlátoz — a kért ablak: ${want}, effektív felső korlát: ${eff}`);
+      } else if (have < want) {
+        log(`  kontextus-lint: FIGYELEM ${t.label} tag-ablak (${have}) < targetContext (${want}) — CSONKOLÁSVESZÉLY`);
+      } else if (have > want) {
+        log(`  kontextus-lint: ${t.label} tag-ablak (${have}) > targetContext (${want}) — VRAM-pazarlás`);
+      } else {
+        log(`  kontextus-lint: ${t.label} OK (${have})`);
+      }
+    } catch (e) {
+      log(`  kontextus-lint: ${t.label} -> ${e?.message ?? e}`);
+    }
+  }
+}
+
 function routeNames() {
   return Object.keys(CONFIG.routes ?? {});
 }
@@ -1106,6 +1169,28 @@ async function attempt(target, bodyObj, { stream }) {
         }
       } else {
         Object.assign(payload, provider.reasoning);
+      }
+    }
+  }
+  // ── OLLAMA GONDOLKODÁS-KORLÁT (2026-11-02, az /v1 végponton MÉRVE) ────────
+  // MÉRT: ezen a végponton a `think:false` HATÁSTALAN (a reasoning mégis 157
+  // karakter lett), az `options.num_ctx` szintén eldobódik (32K-t kérve is
+  // 256K-val töltött: 15 050 MiB VRAM). Az EGYETLEN működő kapcsoló a
+  // `reasoning_effort`: 'none' -> reasoning 0 karakter, 0,2 s; alapból 145
+  // karakter, 6,6 s ugyanazon a kérésen.
+  // MIÉRT KELL: a gondolkodás a KIMENETI KERETBŐL eszik, ezért kis keretnél a
+  // `content` ÜRES lesz, a válasz pedig ép JSON — a proxy HIT-nek látná, és a
+  // delegálás csendben elromlana (ugyanaz a hibaosztály, mint a targetContext
+  // bevezetésekor). Csak KIS keretnél kapcsoljuk ki: nagy feladatnál a
+  // gondolkodás minőséget ad. A kliens saját kapcsolója mindig elsőbbséget élvez.
+  if (provider.id === 'ollama') {
+    const or = provider.ollamaReasoning ?? CONFIG.providers?.ollama?.ollamaReasoning;
+    if (or && typeof or === 'object' && payload.reasoning_effort === undefined) {
+      const maxOut = Number(payload.max_tokens ?? payload.max_completion_tokens);
+      const limit = Number(or.disableBelowMaxTokens ?? 2048);
+      if (Number.isFinite(maxOut) && maxOut > 0 && maxOut < limit) {
+        payload.reasoning_effort = or.reasoning_effort ?? 'none';
+        log(`ollama: reasoning_effort=${payload.reasoning_effort} (max_tokens=${maxOut} < ${limit})`);
       }
     }
   }
@@ -1608,6 +1693,8 @@ server.listen(PORT, HOST, () => {
         : ` [HIANYZO KULCS: ${avail.missing.join(', ')}]`;
     log(`  route ${name}: ${chain.length ? chain.join(' -> ') : '(nincs használható cél)'}${note}`);
   }
+  // Helyi tag-ablakok ellenőrzése (a /v1 végpont nem tudja kérésenként állítani).
+  lintOllamaContexts().catch((e) => log(`kontextus-lint hiba: ${e?.message ?? e}`));
   // A napi felulbiralat kiirasa: ha aktiv, ez FELULIRJA a fenti lancokat.
   const ov = overrideState();
   if (ov.active) {

@@ -86,12 +86,47 @@ foglalt, a mérés **93,96 másodpercig** tartott, a gép gyakorlatilag megállt
 
 Szabályok:
 
-- Helyi modell `contextWindow` értéke **max. 32768** (kivétel: indokolt, mért
-  eset, kommentben dokumentálva).
+- Helyi modell `contextWindow` értéke **alapból max. 32768** (kivétel: indokolt,
+  mért eset, kommentben dokumentálva).
+- **MÉRT KIVÉTEL (2026-11-02): `gemma4-12b-128k` = 131072.** A KV-cache a
+  betöltéskor, a `num_ctx` arányában foglalódik (a súlyok fixek), ezért a
+  plafon modellenként MÉRENDŐ, nem önkényes. Mért VRAM (tiszta asztal
+  1 996 MiB, 16 303 MiB-os RTX 5080 Laptop): 16K=11 275, 32K=11 590,
+  64K=12 287, 96K=12 491, **128K=13 057**, 192K=14 200, 256K=15 282 MiB.
+  A 256K önmagában befér, de a valós asztali foglalással (2,5–2,7 GB) már
+  túlcsordul (mért: a védőkorlát 15 285 MiB-nál fogta el) — ezért 128K.
+  Nagyobb modellnél (méret) a felhasználói szabály: **nem lehet nagyobb, mint
+  a `gemma4:12b` (8,0 GB)**.
+- **A `num_ctx`-et a MODELL-TAG hordozza, nem a kérés.** Az `/v1` végpont az
+  `options.num_ctx`-et és a `think`-et is ELDOBJA (mért: 32K-t kérve is 256K-val
+  töltött, 15 050 MiB; `think:false`-ra a reasoning 157 karakter maradt).
+  Ezért kell származtatott tag (`providers/Modelfile.gemma4-12b-128k`,
+  `PARAMETER num_ctx 131072`) — a blobokat megosztja, nem foglal plusz lemezt.
+  A proxy induláskor **kontextus-lintet** futtat, és hangosan jelzi, ha egy
+  helyi cél tag-ablaka eltér a `targetContext` értékétől.
+- **A gondolkodás a KIMENETI KERETBŐL eszik.** MÉRVE: 200 tokos kérésnél a
+  `thinking` 145–786 karaktert vitt el, a `content` ÜRES lett, a válasz pedig
+  ép JSON — a proxy HIT-nek látta volna (ugyanaz a hibaosztály, mint a
+  `targetContext` esetén). Az egyetlen működő kapcsoló a `reasoning_effort`
+  (`'none'` → 0 karakter, 0,2 s; alapból 6,6 s): a proxy ezt KIS keretnél
+  (`max_tokens < 2048`) automatikusan injektálja, nagy keretnél meghagyja a
+  gondolkodást. Új helyi cél bevezetésekor ezt a viselkedést ne töröld el.
+- **`OLLAMA_MAX_LOADED_MODELS=1` miatt két modell egyszerre KIZÁRT**, tehát a
+  megnövekedett VRAM SOSEM dupla betöltés. Ha két kliens MÁS `num_ctx`-szel
+  hívja ugyanazt a modellt (mért: a mérő `-c 4096`, a delegálás `-c 32768/131072`),
+  azok felváltva kilökik egymást, és minden váltás 11–12 s újratöltés. A
+  megoldás az azonos ablak, nem a kontextus csökkentése.
+  **A 4096-os kliens AZONOSÍTVA (2026-11-02): a weboldal bridge szolgáltatása**
+  (node, a nyers `gemma4:12b` tagot tölti `-c 4096`-tal). Ez ALKALMI használat,
+  és a felhasználó döntése szerint a 11 s-os váltási költség nem téma — **ezt ne
+  vizsgáld újra, és ne állítsd át**. A `OLLAMA_MAX_LOADED_MODELS` emelése tilos
+  (a 128K-s gemma4 13 GB, mellé nem fér be második modell a 16,3 GB-os kártyán).
 - Teljesítménymérés (retune / chain-doctor) **ne** töltsön be helyi modellt
   teljes kontextussal; a helyi sávot vagy hagyd ki a mérésből, vagy korlátozott
   kontextussal mérd.
-- Betöltés után ellenőrizd: `ollama ps` és a `llama-server.exe` memóriája.
+- Betöltés után ellenőrizd: **`nvidia-smi` memóriája** — az `ollama ps` és a
+  `/api/ps` ezen a gépen MÉRTEN üres listát ad, miközben a modell be van töltve,
+  ezért ellenőrzésre alkalmatlan.
 - Ha a tartalék modell betöltése 10 GB fölé megy, az hibás konfiguráció, nem
   „lassú gép”.
 
@@ -183,3 +218,30 @@ Kötelező:
   friss profilkönyvtár, 1,5 s → 3 s várakozás), és ha mind elbukik, a panel
   `static` gyerekablaka szöveges hibaüzenetet rajzol ki a néma fehér helyett
   (eddig a hibaoldal is WebView2-re épült, ezért nem jelent meg semmi).
+- `2026-11-02` — **Gemma 4 12B a helyi záró szakaszban** (`ollama/gemma4-12b-128k`,
+  a `worker`, `local-only` és `vision-worker` route végén). Mérések: 11,95B dense,
+  48 réteg, Q4_K_M 8,0 GB, GPU-n fut, generálás 53–77 tok/s, prefill
+  1142–1308 tok/s, valódi `tool_calls`, látás MŰKÖDIK (a `vision-test.png`-ből
+  kiolvasta a „777"-et, 117 képtoken), magyar szöveg folyékony. Hang: a Google
+  szerint a 12B natívan fogad hangot (≤30 s), de az Ollama 0.30.9 HTTP API-ja
+  NEM viszi át (mért: `/api/generate` `audio` mező 480 KB WAV-ot némán eldobott
+  — 25 tokos prompt; `/api/chat` `messages[].audio` → 400; OpenAI `input_audio`
+  → eldobva; `type:audio` → 400), ezért delegálásra nem használható.
+  **Három saját hiba, amit a napló leplezett le:** (1) a nyers `gemma4:12b`
+  betöltése 15 285 MiB VRAM fölé ment — az ok nem a modell mérete, hanem hogy a
+  szerver `OLLAMA_CONTEXT_LENGTH=262144` alapértéke érvényesül, ha a tag nem ad
+  `num_ctx`-et; (2) a „dupla betöltés" gyanúja HAMIS, mert
+  `OLLAMA_MAX_LOADED_MODELS=1` — a 11–12 s-os újratöltések oka az, hogy egy
+  MÁSIK kliens (`-c 4096`, a mérő) és a delegálás felváltva kilökte egymást;
+  (3) az `/v1` végpont a `think`-et és az `options.num_ctx`-et is eldobja, ezért
+  a gondolkodást csak `reasoning_effort`-tal lehet fogni. Javítás: származtatott
+  tag (`PARAMETER num_ctx 131072`, blob-megosztással), a proxy kis keretnél
+  (`max_tokens < 2048`) automatikusan `reasoning_effort: none`-t injektál
+  (mért: 6,6 s + üres válasz → 0,2 s + helyes válasz), és induláskor
+  kontextus-lintet futtat. Üzemeltetési csapda: a proxy `proxy.pid`-je üres
+  lehet, miközben egy ÁRVA példány tartja a 4123-at; a `run-proxy-service.ps1`
+  „már fut" ága ilyenkor nem indít újat, ezért a valódi PORTBIRTOKLÓT kell
+  leállítani (a `netstat` állapotoszlopa ezen a gépen magyar: `HALLGATÁS`).
+  Újraindítás csak `wscript`/`cscript` + `*-hidden.vbs` úton (1.2): közvetlen
+  `wscript.exe` hívásnál a PowerShell NEM várja meg (GUI-alkalmazás), ezért a
+  `restart-proxy-hidden.vbs`-t `cscript`-tel kell futtatni.
