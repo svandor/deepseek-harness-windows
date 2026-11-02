@@ -454,6 +454,10 @@ Visszahozás: `node providers\session-channel.mjs --unhide --ids <id,...>`.
 | A sárga hozzájárulás-kártyán nincs „Mindig” gomb | A plugin host fele még a régi (a route csak újraindítás után él). Indítsd újra a szervert a **⇪** vagy **⭯** gombbal. Ha utána sem jelenik meg, a `state\ui-extras-client.log` megmondja, miért. |
 | A felület „lefagy” (nem lehet gépelni, kattintani) | Először nézd meg a `state\ui-extras-client.log` végét: a `main thread stalled` sor megmutatja, mikor és mennyi ideig blokkolt a lap. Ha ott nincs ilyen sor, a fagyás nem a lap JavaScriptjében van (tipikusan egy natív ablak, pl. a mappaválasztó dialógus tartja magánál a bevitelt) — ilyenkor a folyamat kilövése/az ablak újraindítása a kiút. |
 
+| Az ablakot az X gombbal bezárom, de pár másodperc múlva újra megnyílik | Javítva (2026-10-31). A tálca 20 másodperces felügyelete addig újraindította az ablakot, mert „nincs `DshWindow` folyamat". Most a `DshWindow` szabályos bezáráskor `state\window.closed` jelölőt hagy, és a tálca ezt tiszteletben tartja; a jelölőt a tálcaikon / **Megnyitás (ablak)** törli. Összeomlás vagy kill után nincs jelölő, ezért a helyreállítás továbbra is működik. Ha mégis visszanyílik: `state\native-tray.log` — az „ablak indítás" sorok mögött ott van az ok. |
+
+| Az ablak **fehéren / üresen** nyílik meg | Javítva (2026-10-31). Ha az előző ablak néhány másodperccel korábban zárt be, a WebView2 böngészőfolyamata még leállóban volt, és a vezérlő létrehozása `E_UNEXPECTED`-tel (0x8000FFFF) elszállt mindhárom panelen (`state\window.log`: `webview2 init failed`) — az ablak üresen maradt. Most a környezet **és** a vezérlő létrehozása közös újrapróbálkozásban fut (friss profil, 1,5 s → 3 s várakozás), és ha mindhárom próba elbukik, a panel szöveges hibaüzenetet ír ki a fehér helyett. Legjobb ellennyom: zárd be és nyisd újra az ablakot. |
+
 ### Szerver újraindítása — bárhonnan, a tálcán át
 
 A harness újraindítása **megszakítja** azt a folyamatot, amely őt kiszolgálja.

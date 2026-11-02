@@ -30,8 +30,10 @@
   "targetCooldownMs": 600000,
   "_targetContext_megjegyzes": "MERT VALOS kontextus-ablak celonkent (2026-10-22). A route `contextWindow` erteke a DSH fele csak HIRDETES; a cel tenyleges ablaka ettol elterhet. MERVE HIBA: a `worker` route 131072-t hirdetett, de a helyi ollama qwen2.5:7b-instruct 32768-cal futott (`ollama ps` -> CONTEXT 32768); egy 35k tokenes kereset az Ollama NEMAN csonkolt (az elejet eldobta, ahol az utasitas volt), a valasz megis ep JSON volt -> a proxy HIT-nek latta, a delegalas csendben elromlott. A proxy a routeChain-ben kiszuri azt a celt, amelynek itt mert ablaka kisebb a keresnel. Csak azt a celt erdemes ide felvenni, amit tenylegesen megmertunk.",
   "targetContext": {
-    "ollama/qwen2.5:7b-instruct": 32768
+    "ollama/qwen2.5:7b-instruct": 32768,
+    "ollama/gemma4-12b-128k": 131072
   },
+  "_gemma4_megjegyzes": "GEMMA 4 12B (2026-11-02) — AGENTS.md 2. pont szerinti MÉRT KIVÉTEL. A láncban a SZÁRMAZTATOTT `gemma4-12b-128k` tag szerepel (PARAMETER num_ctx 131072), NEM a nyers `gemma4:12b`: a szerver `OLLAMA_CONTEXT_LENGTH=262144`, ezért a nyers tag num_ctx nélkül 256K-val töltődik. MÉRT VRAM (tiszta asztal 1996 MiB, 16303 MiB kártya): 16K=11275, 32K=11590, 64K=12287, 96K=12491, 128K=13057, 192K=14200, 256K=15282 MiB. A 256K önmagában befér, de a valós asztali foglalással (2,5-2,7 GB) már túlcsordul (a 2026-11-02-i védőkorlátos mérés 15285 MiB-nál fogta el) -> a 128K a választás: 3,2 GB tartalék, ÉS pont a `worker` route hirdetett 131072 ablaka, tehát a helyi cél egyetlen kérést sem SKIP-el. Teljesítmény: prefill 1142-1308 tok/s, generálás 53-77 tok/s, valódi tool_calls (mért). Képesség (Google model card): 11,95B dense, 48 réteg, 1024-es sliding window, natív tools + thinking (`<|think|>`) + system role, text+IMAGE+AUDIO bemenet (≤30 s), Apache 2.0; 12B saját benchmark: MMLU Pro 77,2%, GPQA 78,8%, Tau2 69,0%, MRCR-128k 43,4%. Helyben MÉRVE: látás működik (777-et olvasott ki a vision-test.png-ből, 117 képtoken); hang helyben NEM tesztelhető (nincs telepített TTS-hang). FONTOS: az `OLLAMA_MAX_LOADED_MODELS=1` miatt két példány egyszerre KIZÁRT, tehát a korábbi 11-12 s-os újratöltések oka NEM dupla betöltés, hanem hogy egy MÁSIK kliens (`-c 4096`, a mérő) és ez a tag felváltva kilökte egymást (napló 23:09-23:13: 262144/4096/32768 indulások váltakozva). Ha mindkettő ugyanazt a num_ctx-et használja, nincs újratöltés. Méretplafon (felhasználói szabály): ennél nagyobb modell (qwen3:14b 9,3 GB, deepseek-coder-v2:16b 8,9 GB, gpt-oss:20b 13 GB, qwen3:30b-a3b 18 GB) NEM kerülhet a láncba.",
   "_cooldown_megjegyzes": "MERVE 2026-10-14: az Alibaba EU-workspace szorvanyosan FEJLECET SEM KULD (3-bol 1 eset streamen is), es a nem-stream nagy keresek a hosszu reasoning miatt 30 s folott jarhatnak. Ezert a hibazott cel a lanc VEGERE kerul targetCooldownMs ideig (nem esik ki), es a provider-szintu connectTimeoutMs (alababa 30 s) hamarabb adja at a helyet a kovetkezo celnek. A cooldown a /healthz cooldowns mezojeben latszik.",
   "_timeWindows_megjegyzes": "UTC-óra szerinti lánccsere (2026-10-14). Forma: \"timeWindows\": [{ \"utc\": [14, 24], \"days\": [1,2,3,4,5], \"targets\": [\"alibaba/qwen3.7-plus\"] }] a route OBJEKTUMÁBAN. Az első illeszkedő ablak felülírja a targets-et; az utc átfordulhat éjfélen ([22,4]); days 0=vasárnap. Jelenleg egy route sem használja: a proxy láncai ingyenes célokra épülnek (a fizetős Alibaba csak tartalék), a main route pedig nem megy át a proxy-n. Előkészített példa, ha egy drága DeepSeek-célt is felvesztek: \"timeWindows\": [{ \"utc\": [1,4], \"targets\": [\"alibaba/qwen3.8-flash\"] }, { \"utc\": [6,10], \"targets\": [\"alibaba/qwen3.8-flash\"] }] — a DeepSeek csúcsablakaiban (01-04, 06-10 UTC) így automatikusan Alibabára vált.",
   "_freeQuota_megjegyzes": "INGYENES KERET MODELLENKENT, CSAK SZINGAPURBAN (gyari dokumentacio: 'The following models offer a free quota only in Singapore'). 1 000 000 token/modell, 90 nap. Ezert van minden szingapuri ar-soron freeQuotaTokens; a proxy a SAJAT forgalmabol becsli a fogyast (providers/reports/quota-used.json, 2026-10-15 ota perzisztalva), de a MERCE a szolgaltatoe. 2026-10 ciklus: a qwen3.8-flash kerete a gyari email szerint ELFOGYOTT -> freeQuotaTokens 0 (fizetos). Ha tovabbi kimerulesi ertesites jon, itt kell 0-ra allitani; az autotune 'SZAMLA-EGYEZTETES' szakasza mutatja a valos hatast.",
@@ -190,6 +192,13 @@
       "contextWindow": 131072,
       "vision": false
     },
+    "ollama/gemma4-12b-128k": {
+      "miss": 0,
+      "hit": 0,
+      "out": 0,
+      "contextWindow": 131072,
+      "vision": true
+    },
     "ollama/qwen2.5:7b-instruct": {
       "miss": 0,
       "hit": 0,
@@ -214,7 +223,7 @@
   },
   "_valaszto_hangolas": "A szelektor becslesei: assumedCachedShare = a session 4. uzenete utan ennyi a feltetelezett cache-arany (merve 99,8%, de ovatosan 0,9); assumedOutputTokens = tipikus kimenet lepesenkent (merve ~870); assumedRemainingSteps = hany lepesre szamoljuk a valtas nyeresegét (a cache-ujraeles koltsege ellenében); switchMarginPct = ennyi% nyereseg alatt nem valtunk (cache-vedelem).",
   "assumedCachedShare": 0.95,
-  "assumedOutputTokens": 383,
+  "assumedOutputTokens": 397,
   "assumedRemainingSteps": 4,
   "switchMarginPct": 25,
   "dailyOverrides": {},
@@ -308,16 +317,17 @@
   },
   "routes": {
     "worker": {
-      "_comment": "A SUBAGENT célroute-ja — CSAK INGYENES CÉLOK (2026-10-26). A fizetős Alibaba kivéve: a korábbi lánc 4 fizetős/kredit-igényes tagot tartalmazott (openrouter/inclusionai/ling-3.0-flash és openrouter/qwen/qwen3.8-27b = fizetős slug, alibaba EU/SG = fizetős), ezért minden delegálás fizetős Alibabára esett (okt. 24-26: 2 483 kérés, 6,44 USD bruttó). 2026-10-26-i ÉLŐ MERES (30K tokenes tool-hívásos kérés): nvidia/nemotron-3.5-lightning:free 200, 8,2 s, 2 valódi tool_calls; nvidia/nemotron-3.5-super-vl:free 200, 12,7 s, 1 tool_call; groq/gpt-oss-120b 200 csak kis kérésre, 32K-n 413 (TPM 8000); google/gemma-4-31b-it:free 429 (upstream rate-limit); inclusionai/ling-3.0-flash:free 404 (nincs ingyenes változat). Az ollama qwen2.5:7b-instruct 32K-s ablakkal zár (afölött SKIP).",
+      "_comment": "A SUBAGENT célroute-ja — CSAK INGYENES CÉLOK (2026-10-26). A fizetős Alibaba kivéve: a korábbi lánc 4 fizetős/kredit-igényes tagot tartalmazott (openrouter/inclusionai/ling-3.0-flash és openrouter/qwen/qwen3.8-27b = fizetős slug, alibaba EU/SG = fizetős), ezért minden delegálás fizetős Alibabára esett (okt. 24-26: 2 483 kérés, 6,44 USD bruttó). 2026-10-26-i ÉLŐ MERES (30K tokenes tool-hívásos kérés): nvidia/nemotron-3.5-lightning:free 200, 8,2 s, 2 valódi tool_calls; nvidia/nemotron-3.5-super-vl:free 200, 12,7 s, 1 tool_call; groq/gpt-oss-120b 200 csak kis kérésre, 32K-n 413 (TPM 8000); google/gemma-4-31b-it:free 429 (upstream rate-limit); inclusionai/ling-3.0-flash:free 404 (nincs ingyenes változat). Az ollama gemma4-12b-128k (11,9B dense, natív tool-calling, MÉRVE 128K ablakon 53-77 tok/s generálás, 1140-1310 tok/s prefill, valódi tool_calls, Tau2 69,0% a gyártói kártyán) vezeti be a helyi záró szakaszt, mögötte a qwen2.5:7b-instruct 32K-s ablakkal zár (afölött SKIP).",
       "contextWindow": 131072,
       "maxTokens": 8192,
       "_fizetos_tartalek_megjegyzes": "2026-10-26: a fizetős Alibaba SZANDEKOSAN kikerült a subagent-láncokból (worker, free-quota, vision-worker). Ha mégis kell, külön, nevén nevezett route-ba tedd, és a panelben árazd be — ne a 'free' lánc végére.",
       "targets": [
         "openrouter/nvidia/nemotron-3.5-lightning:free",
-        "openrouter/nvidia/nemotron-3.5-super-vl:free",
-        "google/gemini-3-flash-preview",
         "groq/openai/gpt-oss-120b",
+        "openrouter/nvidia/nemotron-3.5-super-vl:free",
         "google/gemini-3.1-flash-lite",
+        "google/gemini-3-flash-preview",
+        "ollama/gemma4-12b-128k",
         "ollama/qwen2.5:7b-instruct",
         "ollama/qwen25-32k:latest"
       ]
@@ -328,10 +338,10 @@
       "maxTokens": 8192,
       "targets": [
         "openrouter/nvidia/nemotron-3.5-lightning:free",
-        "openrouter/nvidia/nemotron-3.5-super-vl:free",
-        "google/gemini-3-flash-preview",
         "groq/openai/gpt-oss-120b",
+        "openrouter/nvidia/nemotron-3.5-super-vl:free",
         "google/gemini-3.1-flash-lite",
+        "google/gemini-3-flash-preview",
         "ollama/qwen2.5:7b-instruct",
         "ollama/qwen25-32k:latest"
       ]
@@ -410,6 +420,7 @@
       "contextWindow": 131072,
       "maxTokens": 16384,
       "targets": [
+        "ollama/gemma4-12b-128k",
         "ollama/qwen2.5:7b-instruct"
       ]
     }

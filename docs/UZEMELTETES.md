@@ -85,6 +85,7 @@ csonka `harness.url`-t hagyott, és utána **minden** olvasó a régi tokent lá
 | `restart-request` | `restart-harness.ps1`, `restart-node.js` | külső újraindítási kérés; a tálca a tickben dolgozza fel és törli |
 | `tray-config.json` | tálca | `port`, `panes`, `robotPane`, `robotOnly`, `robotUrl`, geometria |
 | `window.log` | `DshWindow.exe` | az ablak naplója (token-figyelő, panelek) |
+| `window.closed` | `DshWindow.exe` (szabályos bezáráskor), törli: tálca | „a felhasználó zárta be az ablakot" — amíg létezik, a tálca felügyelete **nem** indít új ablakot. Összeomlás vagy kill után nem keletkezik, ezért az automatikus helyreállítás változatlan. |
 | `tray.log` | tálca | a tálca naplója (minden művelet és hiba) |
 | `restart.log` | `restart-node.js` | a Web UI-ból indított újraindítások naplója |
 | `restart-harness.log` / `.err.log` | `restart-node.js` | a Web UI-ból indított **szerver** naplója (a friss token innen kerül a `harness.url`-ba) |

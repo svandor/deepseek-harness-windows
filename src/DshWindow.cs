@@ -1,4 +1,4 @@
-﻿// DshWindow - native WebView2 window for the DeepSeek Harness Web GUI.
+// DshWindow - native WebView2 window for the DeepSeek Harness Web GUI.
 //
 // The window is a real desktop application window (WPF chrome + WebView2),
 // so no terminal has to stay open and no browser tab is used.
@@ -367,6 +367,12 @@ namespace DshWindow
             {
                 if (geometrySaved) return;
                 geometrySaved = true;
+                // A tálca felügyelete 20 másodpercenként visszaindítaná az
+                // ablakot (nincs DshWindow folyamat), ezért itt hagyjuk hátra a
+                // "a felhasználó zárta be" jelölőt. Csak a szabályos bezárás fut
+                // ide: a Kill() és az összeomlás nem, azok után marad az
+                // automatikus újraindítás.
+                CloseIntent.Mark();
                 try
                 {
                     Rect bounds = window.RestoreBounds;
@@ -679,6 +685,7 @@ namespace DshWindow
                 }
 
                 CoreWebView2Environment environment = null;
+                CoreWebView2Controller controller = null;
                 Exception lastError = null;
 
                 // A locked profile (0x800700AA) happens when a previous window
@@ -687,7 +694,15 @@ namespace DshWindow
                 // retry on a fresh sibling directory instead of failing; the
                 // last attempt moves under %TEMP%, which stays writable even in
                 // locked-down environments.
-                for (int attempt = 0; attempt < 3 && environment == null; attempt++)
+                //
+                // MIÉRT A VEZÉRLŐ IS: a környezet létrejöhet, de a vezérlő
+                // (`CreateCoreWebView2ControllerAsync`) ilyenkor E_UNEXPECTED
+                // (0x8000FFFF) hibával elszáll, és az ablak FEHÉREN marad —
+                // mért eset: 2026-10-31 09:18:46, mindhárom panel, mert az előző
+                // ablak 4 másodperccel korábban záródott be. Ezért a próba a
+                // környezetre ÉS a vezérlőre együtt vonatkozik, friss profillal
+                // és növekvő várakozással (1,5 s → 3 s).
+                for (int attempt = 0; attempt < 3 && controller == null; attempt++)
                 {
                     string userDataFolder = ResolveUserDataFolder(attempt);
                     try
@@ -696,23 +711,26 @@ namespace DshWindow
                         Logger.Info("webview2 user data (pane " + (_paneIndex + 1) + "): "
                             + userDataFolder + " (attempt " + (attempt + 1) + ")");
                         environment = await CoreWebView2Environment.CreateAsync(null, userDataFolder, options);
+                        Logger.Info("webview2 environment ready: " + environment.BrowserVersionString);
+                        controller = await environment.CreateCoreWebView2ControllerAsync(_child);
                     }
                     catch (Exception ex)
                     {
                         lastError = ex;
-                        Logger.Error("webview2 environment attempt " + (attempt + 1) + " failed: " + ex.Message);
-                        if (attempt < 2) await System.Threading.Tasks.Task.Delay(1500);
+                        Logger.Error("webview2 init attempt " + (attempt + 1) + " failed (pane "
+                            + (_paneIndex + 1) + "): " + ex.Message);
+                        environment = null;
+                        controller = null;
+                        if (attempt < 2) await System.Threading.Tasks.Task.Delay(1500 + 1500 * attempt);
                     }
                 }
 
-                if (environment == null)
+                if (controller == null)
                 {
-                    throw lastError ?? new InvalidOperationException("a WebView2 környezet nem jött létre");
+                    throw lastError ?? new InvalidOperationException("a WebView2 vezérlő nem jött létre");
                 }
 
-                Logger.Info("webview2 environment ready: " + environment.BrowserVersionString);
-
-                _controller = await environment.CreateCoreWebView2ControllerAsync(_child);
+                _controller = controller;
                 Logger.Info("webview2 controller ready (pane " + (_paneIndex + 1) + ")");
 
                 var core = _controller.CoreWebView2;
@@ -1208,11 +1226,37 @@ namespace DshWindow
                 {
                     _controller.CoreWebView2.NavigateToString(
                         ErrorPage.Build(_url, message, Logger.Path));
+                    return;
                 }
             }
             catch (Exception ex)
             {
                 Logger.Error("error page failed: " + ex.Message);
+            }
+
+            // Nincs vezérlő: a hibaoldalt nem lehet a lapba injektálni, és eddig
+            // ilyenkor az ablak üresen (fehéren) maradt — mért eset 2026-10-31
+            // 09:18:46, mindhárom panel E_UNEXPECTED. A panel gyerekablaka egy
+            // `static` vezérlő, az maga kirajzolja a beállított szöveget, tehát
+            // az ablak soha nem marad néma.
+            try
+            {
+                if (_child != IntPtr.Zero)
+                {
+                    Win32.SetWindowTextW(_child,
+                        "A DeepSeek Harness felülete nem indult el."
+                        + Environment.NewLine + Environment.NewLine
+                        + message
+                        + Environment.NewLine + Environment.NewLine
+                        + "Zárd be az ablakot, majd nyisd újra (tálcaikon vagy asztali ikon)."
+                        + Environment.NewLine + "Napló: " + Logger.Path);
+                    Logger.Error("fallback message shown on pane " + (_paneIndex + 1)
+                        + " — nincs WebView2 vezérlő");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("fallback message failed: " + ex.Message);
             }
         }
 
@@ -2206,6 +2250,15 @@ namespace DshWindow
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool ScreenToClient(IntPtr hWnd, ref POINT lpPoint);
 
+        /// <summary>
+        /// Szöveg a panel gyerekablakában: a `static` vezérlő maga rajzolja ki.
+        /// Akkor kell, ha a WebView2 vezérlő el sem indult (lásd ShowErrorPage),
+        /// hogy az ablak ne maradjon üresen.
+        /// </summary>
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetWindowTextW(IntPtr hWnd, string text);
+
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool GetCursorPos(out POINT lpPoint);
@@ -2758,6 +2811,44 @@ namespace DshWindow
         public static string ResolveStateDir()
         {
             return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "state");
+        }
+    }
+
+    /// <summary>
+    /// A szándékos bezárás jelölője (state\window.closed).
+    ///
+    /// MIÉRT KELL: a tálca felügyelete 20 másodpercenként visszaindítja az
+    /// ablakot, ha nincs DshWindow folyamat. Ez összeomlás vagy leállítás után
+    /// helyes, de a felhasználó által becsukott ablakot nem szabad visszanyitni
+    /// (mért hiba, 2026-10-31: a bezárás után 16 másodperccel újra megjelent).
+    /// A különbséget ez a fájl hordozza: a WPF Closing eseménye csak szabályos
+    /// bezáráskor fut le, a <c>Kill()</c> és az összeomlás nem hagyja hátra,
+    /// így azok után marad az automatikus gyógyítás.
+    /// A tálca a menü "Ablak megnyitása" pontjában törli.
+    /// </summary>
+    internal static class CloseIntent
+    {
+        public static string FilePath
+        {
+            get { return Path.Combine(DshPaths.ResolveStateDir(), "window.closed"); }
+        }
+
+        /// <summary>Jelölő írása a szabályos bezárás pillanatában. Soha nem dob.</summary>
+        public static void Mark()
+        {
+            try
+            {
+                string dir = DshPaths.ResolveStateDir();
+                Directory.CreateDirectory(dir);
+                string body = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)
+                    + " pid=" + Process.GetCurrentProcess().Id
+                    + " reason=user-close" + Environment.NewLine;
+                File.WriteAllText(FilePath, body, new UTF8Encoding(false));
+            }
+            catch
+            {
+                // A bezárást jelölő írás hibája soha nem akaszthatja meg a kilépést.
+            }
         }
     }
 

@@ -50,6 +50,25 @@ $script:HarnessUrlFile = Join-Path $script:StateDir 'harness.url'
 $script:HarnessLog = Join-Path $script:StateDir 'harness.log'
 $script:HarnessErrLog = Join-Path $script:StateDir 'harness.err.log'
 $script:WindowLog  = Join-Path $script:StateDir 'window.log'
+
+# A felhasználó által becsukott ablak jelölője: a DshWindow a szabályos
+# bezárás (X gomb / Alt+F4) Closing eseményében hozza létre. Amíg létezik, az
+# automatikus gyógyítás NEM nyitja újra az ablakot; csak a kifejezett nyitási
+# kérés (tálcamenü, -OpenWindow indítás) törli. Összeomlás vagy kill után nincs
+# jelölő, ezért az helyreállítás változatlanul működik.
+$script:WindowClosedMarker = Join-Path $script:StateDir 'window.closed'
+
+function Test-WindowClosedByUser {
+  try { return (Test-Path -LiteralPath $script:WindowClosedMarker) } catch { return $false }
+}
+
+function Clear-WindowClosedMarker {
+  try {
+    if (Test-Path -LiteralPath $script:WindowClosedMarker) {
+      Remove-Item -LiteralPath $script:WindowClosedMarker -Force -ErrorAction Stop
+    }
+  } catch { }
+}
 $script:TrayLog    = Join-Path $script:StateDir 'tray.log'
 
 # A tálca életjele és a KÜLSŐ újraindítási kérés.
@@ -960,6 +979,15 @@ function Open-Window {
     return
   }
 
+  # A felhasználó bezárta az ablakot: tiszteletben tartjuk, nem indítjuk újra.
+  # (Az automatikus helyreállítás a jelölő nélküli esetekre — összeomlás, kill —
+  # továbbra is él.)
+  if ((Test-WindowClosedByUser) -and -not $Force) {
+    Write-TrayLog 'az ablakot a felhasználó bezárta — nem nyitom újra (tálcaikon: Megnyitás)'
+    return
+  }
+  Clear-WindowClosedMarker
+
   if (-not (Test-Path $script:WindowExe)) {
     [System.Windows.Forms.MessageBox]::Show(
       "A natív ablak programja hiányzik:`n$script:WindowExe`n`nFuttasd egyszer a build.ps1-et a workspace-ben.",
@@ -1634,6 +1662,8 @@ function Show-Tray {
   $notify.Icon = if ($running) { $iconOn } else { $iconOff }
 
   if ($script:OpenWindowOnStart) {
+    # Kifejezett indítási kérés (-OpenWindow): az ablak megnyílik.
+    Clear-WindowClosedMarker
     Start-Harness -Config $script:Config -ThenOpenWindow -EnsureToken | Out-Null
   } else {
     Start-Harness -Config $script:Config -EnsureToken | Out-Null
@@ -1644,6 +1674,8 @@ function Show-Tray {
 
 # Az ablak megnyitása a tálcáról: a háttér-GUI is elindul, ha kell.
 function Open-HarnessWindow {
+  # Kifejezett nyitási kérés (tálcamenü, ablak-jelzés): a korábbi bezárás nem tilt.
+  Clear-WindowClosedMarker
   $existing = Get-WindowProcesses | Select-Object -First 1
   if ($existing) {
     Set-WindowForeground -Handle $existing.MainWindowHandle | Out-Null

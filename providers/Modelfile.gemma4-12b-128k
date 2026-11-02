@@ -1,0 +1,29 @@
+FROM gemma4:12b
+PARAMETER num_ctx 131072
+
+# Miert 128K (MERVE, 2026-11-02, tiszta asztal = 1996 MiB VRAM, 0 llama-server):
+#
+#   num_ctx     VRAM csucs   prefill
+#    16384       11275 MiB   1257 tok/s
+#    32768       11590 MiB   1208 tok/s
+#    65536       12287 MiB   1142 tok/s
+#    98304       12491 MiB   1308 tok/s
+#   131072       13057 MiB   1197 tok/s   <- EZ A TAG
+#   196608       14200 MiB   1134 tok/s
+#   262144       15282 MiB   1242 tok/s
+#
+# A 16 GB-os (16303 MiB) RTX 5080 Laptopon a 131072 valasztas indoka:
+#  - a `worker` route 131072-t hirdet, tehat a helyi cel MINDEN olyan kereset
+#    ki tud szolgalni, amit a route egyaltalan beerkeztet (nincs SKIP);
+#  - 13057 MiB csucs ~3,2 GB tartalekot hagy a valos asztali foglalason felul;
+#  - a 262144 (a szerver OLLAMA_CONTEXT_LENGTH alapértéke) 15282 MiB-ot vesz
+#    igenybe, ami 2,5-2,7 GB asztali foglalassal MAR tulcsordul a 16 GB-on —
+#    ez volt a 2026-11-02-i meres, amit a vedokorlat allitott le. A nyers
+#    `gemma4:12b` tag ezert NEM kerulhet a lancba: num_ctx nelkul a szerver a
+#    262144-es globalis alapértékkel tolti be.
+#
+# FONTOS MERESI TANULSAG: a korabbi 11-12 s-os "hideg" betolteseket nem a
+# kontextus okozta, hanem hogy az OLLAMA_MAX_LOADED_MODELS=1 mellett egy MASIK
+# kliens (mero/"bridge", -c 4096-tal) es ez a tag felvaltva kilökte egymast.
+# A naploban 23:09-23:13 kozott 262144 / 4096 / 32768 indulások valtakoztak.
+# Ha a ket kliens ugyanazt a num_ctx-et hasznalja, nincs ujratoltes.

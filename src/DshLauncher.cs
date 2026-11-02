@@ -1,14 +1,23 @@
-﻿// DshLauncher - the pinnable entry point of the DeepSeek Harness tray.
+// DshLauncher - the pinnable entry point of the DeepSeek Harness tray.
 //
 // Why this exists: Windows 11 refuses to pin (or drag to the taskbar) any
 // shortcut whose target is not a real executable - a .cmd/.bat/.ps1 target gives
-// no "Pin to taskbar" verb at all. The tray itself is PowerShell, so this tiny
-// window-less launcher is the .exe that the desktop/Start menu/taskbar shortcuts
-// point at.
+// no "Pin to taskbar" verb at all. This tiny window-less launcher is the .exe
+// that the desktop/Start menu/taskbar shortcuts point at.
 //
-// Behaviour (identical to tray\dsh-tray.cmd -OpenWindow):
-//   * tray already running  -> ask it (named event) to show the window
-//   * tray not running      -> start the tray with -OpenWindow
+// Behaviour:
+//   * native tray already running -> ask it (named event) to show the window
+//   * native tray not running     -> start bin\DshTray.exe (a WinExe: no console)
+//
+// 2026-10-31: this launcher used to start the OLD PowerShell tray
+// (`powershell.exe -WindowStyle Hidden -File tray\dsh-tray.ps1`). That had two
+// measured problems:
+//   1. it created a *second* supervisor with its own mutex
+//      (DshHarnessTrayIcon) next to bin\DshTray.exe, and the old script's 20 s
+//      health check re-opened a window the user had just closed;
+//   2. `powershell.exe` is a console program, so the hidden-console start still
+//      flashes a window and steals focus (AGENTS.md 1.1 / 1.3, P0).
+// The native tray does both jobs without a console.
 //
 // Build: see build.ps1.
 
@@ -19,7 +28,7 @@ using System.Threading;
 
 internal static class DshLauncher
 {
-    private const string TrayMutexName = "DshHarnessTrayIcon";
+    private const string TrayMutexName = "DshTraySingleInstance";   // a natív tálca (DshTray.exe)
     private const string WindowSignalName = "DshHarnessShowWindow";
     private const string WindowProcessName = "DshWindow";
     private const string WindowTitle = "DeepSeek Harness";
@@ -63,16 +72,16 @@ internal static class DshLauncher
         // és a --help már eddig is kínálta ezt a kapcsolót (eddig hatás nélkül).
         if (resetGeometry) { ResetWindowGeometry(root); }
 
-        string trayScript = Path.Combine(root, "tray", "dsh-tray.ps1");
-        if (!File.Exists(trayScript))
+        string trayExe = Path.Combine(root, "bin", "DshTray.exe");
+        if (!File.Exists(trayExe))
         {
-            Fail("Nem találom a tálca-szkriptet:\n" + trayScript);
+            Fail("Nem találom a tálca programját:\n" + trayExe);
             return 2;
         }
 
         if (trayOnly)
         {
-            StartTray(trayScript, root, false);
+            StartTray(trayExe, root);
             return 0;
         }
 
@@ -81,14 +90,15 @@ internal static class DshLauncher
             if (!SignalOpenWindow())
             {
                 // The tray is alive but its event is missing (very old build):
-                // fall back to asking it again on its next start.
-                StartTray(trayScript, root, true);
+                // start it again, the second instance exits on the mutex and the
+                // window would never open — so fall back to the window itself.
+                StartTray(trayExe, root);
             }
             return 0;
         }
 
         // No tray yet: start it so that it opens the window itself.
-        StartTray(trayScript, root, true);
+        StartTray(trayExe, root);
         return 0;
     }
 
@@ -120,7 +130,7 @@ internal static class DshLauncher
             "\r\n" +
             "Használat: DshLauncher.exe [--tray-only] [--reset-geometry]\r\n" +
             "  (kapcsolók nélkül: megnyitja az ablakot, a tálcát is elindítja, ha kell)\r\n" +
-            "  --tray-only       csak a rendszertálcai ikont indítja el, ablak nélkül\r\n" +
+            "  --tray-only       csak a rendszertálcát indítja el (a meglévő ablakot nem érinti)\r\n" +
             "  --reset-geometry  az ablak középre kerül (a mentett pozíció törlése)";
         try
         {
@@ -193,18 +203,22 @@ internal static class DshLauncher
         }
     }
 
-    private static void StartTray(string trayScript, string root, bool openWindow)
+    /// <summary>
+    /// A natív tálca elindítása (bin\DshTray.exe).
+    ///
+    /// MIÉRT NEM PowerShell: a `powershell.exe -WindowStyle Hidden` előbb
+    /// LÉTREHOZ egy konzolablakot, és csak utána rejti el — ez látható villanás
+    /// és fókuszlopás (AGENTS.md 1.1/1.3, P0). A natív tálca WinExe: egyáltalán
+    /// nem hoz létre konzolt.
+    /// </summary>
+    private static void StartTray(string trayExe, string root)
     {
-        string switches = openWindow ? "-OpenWindow" : "-NoWindow";
-        string arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \""
-            + trayScript + "\" " + switches;
-
         var psi = new ProcessStartInfo
         {
-            FileName = "powershell.exe",
-            Arguments = arguments,
+            FileName = trayExe,
             WorkingDirectory = root,
-            UseShellExecute = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden
         };
         Process.Start(psi);

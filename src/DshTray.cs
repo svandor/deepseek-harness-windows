@@ -54,6 +54,9 @@ namespace DshTray
         public string ProxyScript { get { return Path.Combine(ProvidersDir, "proxy.mjs"); } }
         public string IconFile { get { return Path.Combine(Root, "assets", "dsh.ico"); } }
         public string WindowLog { get { return Path.Combine(StateDir, "window.log"); } }
+
+        /// <summary>A DshWindow által szabályos bezáráskor hátrahagyott jelölő.</summary>
+        public string WindowClosedMarker { get { return Path.Combine(StateDir, "window.closed"); } }
         public string UrlFile { get { return Path.Combine(StateDir, "harness.url"); } }
     }
 
@@ -140,6 +143,7 @@ namespace DshTray
         private volatile bool _stopping;
         private int _windowStarts;
         private DateTime _windowWindow = DateTime.MinValue;
+        private bool _closeLogged;      // a "felhasználó bezárta" esemény már naplózva
         private DateTime _lastRetune = DateTime.MinValue;
         private string _windowUrl = string.Empty;
         private volatile bool _awaitToken;   // harness-újraindítás után az új tokenre várunk
@@ -152,6 +156,10 @@ namespace DshTray
 
             LoadConfig();
             BuildIcon();
+            // Új tálca-session (bejelentkezés, frissítés): az ablak a megszokott
+            // módon megnyílik. A bezárás-jelölő csak az adott sessionre szól,
+            // különben egy régi bezárás után a login után sem nyílna meg.
+            ClearCloseMarker();
             StartShowListener();
 
             _supervise = new System.Threading.Timer(_ => Supervise(), null, 1500, 20000);
@@ -371,16 +379,56 @@ namespace DshTray
             catch (Exception ex) { Log.Error("token mentes: " + ex.Message); }
         }
 
+        /// <summary>
+        /// Az ablak életben tartása.
+        ///
+        /// FONTOS: a felhasználó által becsukott ablakot NEM indítjuk újra.
+        /// A DshWindow szabályos kilépéskor (Bezárás gomb, Alt+F4) hátrahagyja a
+        /// state\window.closed jelölőt, és amíg az létezik, a felügyelet békén
+        /// hagyja. A jelölőt az "Ablak megnyitása" menüpont, a tálcaikonra
+        /// kattintás és a "Harness újraindítása" törli.
+        ///
+        /// Összeomlás vagy kill esetén nincs jelölő (a Closing nem fut le), tehát
+        /// az automatikus helyreállítás változatlanul működik.
+        /// </summary>
         private void EnsureWindow()
         {
-            if (_windowStarts > 0 && Process.GetProcessesByName("DshWindow").Length > 0) return;
-            if (Process.GetProcessesByName("DshWindow").Length > 0) return;
+            if (Process.GetProcessesByName("DshWindow").Length > 0)
+            {
+                // Élő ablak mellett a korábbi bezárás-jelölő elavult (pl. a régi
+                // PowerShell-tálca hagyta itt). Ha bennmaradna, egy későbbi
+                // összeomlást tévesen "felhasználói bezárásnak" minősítenénk, és
+                // nem állna helyre az ablak.
+                if (File.Exists(_cfg.WindowClosedMarker)) ClearCloseMarker();
+                return;
+            }
             if (!Listening(_cfg.Port)) return;
             if (!File.Exists(_cfg.WindowExe))
             {
                 Log.Error("ablak nem indul: hiányzik " + _cfg.WindowExe);
                 return;
             }
+            if (File.Exists(_cfg.WindowClosedMarker))
+            {
+                if (!_closeLogged)
+                {
+                    _closeLogged = true;
+                    Log.Info("az ablakot a felhasználó bezárta — nem indítom újra "
+                        + "(újranyitás: tálcaikon / Ablak megnyitása)");
+                    try
+                    {
+                        if (_icon != null)
+                        {
+                            _icon.ShowBalloonTip(4000, "DeepSeek Harness",
+                                "Az ablak bezárva, a háttér fut tovább. Újranyitás: kattints a tálcaikonra.",
+                                ToolTipIcon.Info);
+                        }
+                    }
+                    catch { }
+                }
+                return;
+            }
+            _closeLogged = false;
             // Indítási hullám elleni korlát: 10 percenként legfeljebb három.
             DateTime now = DateTime.UtcNow;
             if (_windowWindow == DateTime.MinValue || (now - _windowWindow).TotalMinutes > 10)
@@ -395,6 +443,20 @@ namespace DshTray
             }
             _windowStarts++;
             StartWindow();
+        }
+
+        /// <summary>
+        /// A "felhasználó zárta be" jelölő törlése — minden olyan útvonalon,
+        /// ahol az ablakot kifejezett kérésre nyitjuk újra.
+        /// </summary>
+        private void ClearCloseMarker()
+        {
+            _closeLogged = false;
+            try
+            {
+                if (File.Exists(_cfg.WindowClosedMarker)) File.Delete(_cfg.WindowClosedMarker);
+            }
+            catch (Exception ex) { Log.Error("bezárás-jelölő törlése: " + ex.Message); }
         }
 
         private void StartWindow()
@@ -415,6 +477,8 @@ namespace DshTray
                 + " --dsh-home \"" + _cfg.DshHome + "\""
                 + " --dsh-bin \"" + _cfg.DshBin + "\""
                 + " --url \"" + url + "\" --restart-if-stale";
+            // Az induló ablak "nyitva van": a korábbi bezárás jelölője nem élhet tovább.
+            ClearCloseMarker();
             try
             {
                 Log.Info("ablak indítás");
@@ -531,6 +595,8 @@ namespace DshTray
         {
             try
             {
+                // Kifejezett nyitási kérés: a korábbi bezárás nem tilt tovább.
+                ClearCloseMarker();
                 Process[] panes = Process.GetProcessesByName("DshWindow");
                 if (panes.Length > 0)
                 {
@@ -559,6 +625,7 @@ namespace DshTray
             Log.Info("harness újraindítás kérés");
             try
             {
+                ClearCloseMarker();      // kifejezett kérés: az ablak újra megnyílik
                 _awaitToken = true;      // a régi token halott: várjuk az újat
                 _windowUrl = string.Empty;
                 foreach (Process p in Process.GetProcessesByName("DshWindow")) { try { p.Kill(); } catch { } }

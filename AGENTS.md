@@ -163,3 +163,23 @@ Kötelező:
   (1) csak `.exe` neveket vizsgált, a `.cmd` műveletet nem; (2) a hivatkozott
   `tools\run-hidden.vbs` nem létezett, így `-Apply` el sem indult. Mindkettő
   javítva; a `.cmd`-felismerés és a feladatonkénti hibakezelés is bekerült.
+- `2026-10-31` — **az ablak X gombbal nem volt bezárható**: a `bin\DshTray.exe`
+  20 másodperces `EnsureWindow()` felügyelete visszaindította. Javítás: a
+  `DshWindow` a szabályos bezárás `Closing` eseményében `state\window.closed`
+  jelölőt hagy, a tálca ezt tiszteletben tartja (a jelölőt a menü / tálcaikon
+  törli). Összeomlás és `kill` után nincs jelölő, ezért az automatikus
+  helyreállítás megmaradt (mérve: X → 45 s után sincs ablak; `kill -Force` →
+  32 s alatt újra megnyílik). Ugyanekkor a `DshLauncher.exe` már **nem** a régi
+  `powershell.exe -WindowStyle Hidden` + `tray\dsh-tray.ps1` párost indítja
+  (második felügyelő *és* látható konzolvillanás — 1.1/1.3 tilos minta), hanem
+  a natív `bin\DshTray.exe`-t; a régi ps1 tálca `Open-Window`-ja is figyeli a
+  jelölőt, ha valaki mégis elindítja.
+- `2026-10-31` — **az újranyitott ablak fehéren indult**. Mért eset: az előző
+  ablak 09:18:42-kor zárt be, az új 4 másodperccel később indult, és mindhárom
+  panelen `webview2 init failed (pane N): COMException 0x8000FFFF
+  (E_UNEXPECTED)` lett — a WebView2 böngészőfolyamata még leállóban volt. A
+  meglévő újrapróbálkozás csak a *környezet* létrehozását fogta, a *vezérlőét*
+  nem. Javítás: a környezet és a vezérlő egy közös próbaciklusban fut (3 próba,
+  friss profilkönyvtár, 1,5 s → 3 s várakozás), és ha mind elbukik, a panel
+  `static` gyerekablaka szöveges hibaüzenetet rajzol ki a néma fehér helyett
+  (eddig a hibaoldal is WebView2-re épült, ezért nem jelent meg semmi).
