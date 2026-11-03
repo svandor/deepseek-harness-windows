@@ -378,8 +378,8 @@
       "contextWindow": 1000000,
       "maxTokens": 8192,
       "targets": [
-        "openrouter/nvidia/nemotron-3.5-super-vl:free",
         "openrouter/nvidia/nemotron-3.5-lightning:free",
+        "openrouter/nvidia/nemotron-3.5-super-vl:free",
         "google/gemini-3-flash-preview",
         "ollama/gemma4-12b-128k"
       ],
