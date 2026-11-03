@@ -39,8 +39,45 @@ const PROBE_TIMEOUT_MS = Number(process.env.CHAIN_PROBE_TIMEOUT_MS ?? 20000);
 const LOCAL_PROBE_TIMEOUT_MS = Number(process.env.CHAIN_LOCAL_TIMEOUT_MS ?? 120000);
 const SLOW_MS = Number(process.env.CHAIN_SLOW_MS ?? 5000);
 
+// ── FIZETŐS-PRÓBA KAPU (2026-11-03) ────────────────────────────────────────
+// MÉRT HIBA: a napi 09:00-s futás VALÓDI completiont küldött a fizetős
+// deepseek/deepseek-flash-re (native-retune.log: "OK deepseek/deepseek-flash
+// 333 ms, tool-hivas OK") és — env esetén — az Alibaba-célokra. Egyik mérés
+// sem szükséges: a delegáló lánc ingyenes, a fizetős tagokat a behangolásnak
+// nem kell próbáznia. Alapból TILTOTT; csak kifejezett kérésre
+// (CHAIN_ALLOW_PAID_PROBES=1) megy ki kérés.
+// A helyi Ollama betöltése 10+ GB VRAM (AGENTS.md 2. pont), ezért méréshez
+// `--skip-local` / CHAIN_SKIP_LOCAL=1 járható, ha csak a felhő-sáv kell.
+const ALLOW_PAID = process.env.CHAIN_ALLOW_PAID_PROBES === '1';
+const PAID_PROVIDERS = new Set(['deepseek', 'alibaba', 'alibaba-intl']);
+const SKIP_LOCAL = process.argv.includes('--skip-local') || process.env.CHAIN_SKIP_LOCAL === '1';
+const isPaid = (pid) => PAID_PROVIDERS.has(String(pid));
+
 function isLocal(baseURL) {
   return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])/.test(String(baseURL ?? ''));
+}
+
+/**
+ * Helyi tag ellenőrzése modell-BETÖLTÉS nélkül (Ollama /api/show).
+ * A 13 GB-os gemma4-12b-128k betöltése mérésből tilos (AGENTS.md 2.), ezért
+ * kihagyott mérésnél legalább a tag létezését és tool-képességét ellenőrizzük.
+ */
+async function localTagCheck(model) {
+  const base = String(providers.ollama?.baseURL ?? 'http://127.0.0.1:11434').replace(/\/+$/, '').replace(/\/v1$/, '');
+  try {
+    const r = await fetch(`${base}/api/show`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: String(model) }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!r.ok) return { ok: false, why: `tag nem letezik (HTTP ${r.status})` };
+    const j = await r.json();
+    const caps = Array.isArray(j.capabilities) ? j.capabilities : null;
+    return { ok: true, tools: caps ? caps.includes('tools') : null };
+  } catch (e) {
+    return { ok: false, why: `ollama /api/show hiba: ${String(e?.message ?? e).slice(0, 60)}` };
+  }
 }
 
 // ── segédek ────────────────────────────────────────────────────────────────
@@ -164,6 +201,26 @@ async function probe(target) {
 
 const results = new Map();
 for (const target of allTargets.values()) {
+  const p = providers[target.pid];
+  // Fizetős cél: NEM küldünk rá kérést (számlát jelentene). A verdikt SKIP,
+  // hogy a riport ne állítsa halottnak, a sorrendet pedig ne bolygassa.
+  if (!ALLOW_PAID && isPaid(target.pid)) {
+    results.set(target.key, { verdict: 'SKIP', ms: 0, note: 'fizetős cél — próba kihagyva (költség), CHAIN_ALLOW_PAID_PROBES=1 engedélyezné' });
+    log(`  SKIP ${target.key.padEnd(52)} fizetős cél — nincs kérés (költség)`);
+    continue;
+  }
+  // Helyi modell: 10+ GB VRAM betöltés — csak kifejezett kérésre mérjük.
+  // Kihagyáskor is ellenőrizzük a tagot BETÖLTÉS NÉLKÜL; ha a tag hiányzik,
+  // az valódi láncszakadás, ezért az HALOTT (nem SKIP).
+  if (SKIP_LOCAL && isLocal(p?.baseURL)) {
+    const tag = await localTagCheck(target.model);
+    const note = tag.ok
+      ? `helyi modell — nincs betoltes (--skip-local); tag OK${tag.tools === null ? '' : tag.tools ? ', tools igen' : ', tools NEM'}`
+      : `helyi modell — nincs betoltes (--skip-local); ${tag.why}`;
+    results.set(target.key, { verdict: tag.ok ? 'SKIP' : 'HALOTT', ms: 0, note });
+    log(`  ${tag.ok ? 'SKIP' : 'HALOTT'} ${target.key.padEnd(52)} ${note}`);
+    continue;
+  }
   const r = await probe(target);
   results.set(target.key, r);
   const mark = r.verdict === 'OK' ? 'OK   ' : r.verdict === 'LASSU' ? 'LASSU' : 'HALOTT';
@@ -171,7 +228,11 @@ for (const target of allTargets.values()) {
 }
 
 // ── javaslat: a halottakat a lanc vegere ───────────────────────────────────
-const RANK = { OK: 0, LASSU: 1, HALOTT: 2 };
+// A SKIP-elt tag (fizetős cél / kihagyott helyi modell) NEM vesz részt a
+// rendezésben: a helyén marad. Így egy kihagyott próba nem tudja átrendezni a
+// láncot (2026-11-03: korábban a kihagyott fizetős tag a lánc végére, a helyi
+// modell pedig a felhő-tagok elé csúszott volna).
+const RANK = { OK: 0, LASSU: 1, SKIP: 1.5, HALOTT: 2 };
 const proposed = {};
 let changes = 0;
 
@@ -180,10 +241,14 @@ for (const [routeName, route] of Object.entries(CONFIG.routes ?? {})) {
   const keyed = targets.map((t, idx) => {
     const [pid, model] = splitTarget(t);
     const r = results.get(`${pid}/${model}`) ?? { verdict: 'HALOTT', ms: 0, note: 'nem probalt' };
-    return { t, idx, rank: RANK[r.verdict] ?? 2, ms: r.ms };
+    return { t, idx, rank: RANK[r.verdict] ?? 2, ms: r.ms, skipped: r.verdict === 'SKIP' };
   });
-  // Stabil rendezes: eloszor a rank, azon belul a rovid valaszido, vegul az eredeti sorrend.
-  const sorted = [...keyed].sort((a, b) => a.rank - b.rank || a.ms - b.ms || a.idx - b.idx);
+  // A próbált tagok rendeződnek (rank, majd válaszidő, majd eredeti sorrend);
+  // a SKIP-elt tagok a saját helyükön maradnak.
+  const probedSorted = keyed.filter((x) => !x.skipped)
+    .sort((a, b) => a.rank - b.rank || a.ms - b.ms || a.idx - b.idx);
+  let k = 0;
+  const sorted = keyed.map((x) => (x.skipped ? x : probedSorted[k++]));
   const changedOrder = sorted.some((x, i) => x.idx !== keyed[i].idx);
   if (changedOrder) {
     changes++;
@@ -205,6 +270,7 @@ md.push(`# Lánc-behangolás — ${new Date().toISOString()}`);
 md.push('');
 md.push(`- Mód: **${APPLY ? 'apply' : 'csak riport'}**`);
 md.push(`- Próba: tool-hívást igénylő kérés, időkorlát ${PROBE_TIMEOUT_MS} ms (helyi Ollama: ${LOCAL_PROBE_TIMEOUT_MS} ms), lassú > ${SLOW_MS} ms`);
+md.push(`- Fizetős-próba kapu: ${ALLOW_PAID ? '**KI** (CHAIN_ALLOW_PAID_PROBES=1)' : 'BE — deepseek/alibaba célra nem megy kérés'}${SKIP_LOCAL ? '; helyi Ollama kihagyva (--skip-local)' : ''}`);
 md.push('');
 md.push('| Cél | Eredmény | Részlet | Hol szerepel |');
 md.push('|---|---|---|---|');
@@ -255,8 +321,9 @@ if (APPLY && changes > 0) {
 }
 
 const deadCount = [...results.values()].filter((r) => r.verdict === 'HALOTT').length;
+const skipCount = [...results.values()].filter((r) => r.verdict === 'SKIP').length;
 log('');
 log('='.repeat(70));
-log(`${results.size} cél: ${[...results.values()].filter((r) => r.verdict === 'OK').length} OK, ${[...results.values()].filter((r) => r.verdict === 'LASSU').length} lassú, ${deadCount} halott`);
+log(`${results.size} cél: ${[...results.values()].filter((r) => r.verdict === 'OK').length} OK, ${[...results.values()].filter((r) => r.verdict === 'LASSU').length} lassú, ${deadCount} halott${skipCount ? `, ${skipCount} kihagyva (fizetős/helyi)` : ''}`);
 log(`Riport: ${rfile}`);
 if (deadCount > 0) process.exitCode = 1;

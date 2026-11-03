@@ -104,6 +104,15 @@ function Test-CloudTool($provider, $model, $apiKey) {
     $base = $endpoints[$provider]
     if (-not $base) { return $null }
 
+    # 2026-11-03: az OpenRouteren CSAK ':free' modellt merunk. A suffix nelkuli
+    # id valodi (fizetos) completion-t jelent — merve: qwen/qwen3.8-27b ara
+    # $0.15/M be, $1.875/M ki (59 token = $0.0000175 USD). Guard nelkul ez a
+    # szkript a settings.yaml katalogusabol fizetos celra kuldott volna kereset.
+    if ($provider -eq 'openrouter' -and $model -notmatch ':free$') {
+        Write-Host "  SKIP  openrouter/$model — nem ':free' (meres nelkul: fizetos lenne)" -ForegroundColor Yellow
+        return $null
+    }
+
     $body = @{
         model = $model
         messages = @(@{ role = 'user'; content = 'What is the weather in Budapest? Use the get_weather tool.' })

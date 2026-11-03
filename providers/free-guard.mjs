@@ -9,7 +9,7 @@
 //   node providers/free-guard.mjs --no-probe   # csak szabály + BSS (gyors)
 //
 // Bekötve: providers/run-retune.ps1 (a napi/heti felülbírálat része).
-import { readFileSync, writeFileSync, copyFileSync } from "node:fs";
+import { readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,6 +37,28 @@ const routeTargets = (name) => {
   const r = CONFIG.routes?.[name];
   return Array.isArray(r) ? r : (r?.targets ?? []);
 };
+
+/**
+ * Kiszolgálta-e a jelölt az ELMÚLT 24 órában valódi forgalmat?
+ * 2026-11-03: MÉRT HIBA — a lightning:free-t a 12K-s próba "halottnak" látta,
+ * miközben a proxy naplója szerint 79 valódi kérést szolgált ki. Demotálás
+ * előtt ezért a valós forgalom a döntő, nem a szintetikus próba.
+ */
+function servedRecently(label, hours = 24) {
+  const logPath = join(HERE, "proxy.out.log");
+  if (!existsSync(logPath)) return false;
+  let text;
+  try { text = readFileSync(logPath, "utf8"); } catch { return false; }
+  const since = Date.now() - hours * 3600 * 1000;
+  for (const line of text.split(/\r?\n/)) {
+    const i = line.indexOf(" HIT ");
+    if (i === -1) continue;
+    if (line.slice(i + 5).trim() !== label) continue;
+    const m = line.match(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)/);
+    if (m && Date.parse(m[1]) >= since) return true;
+  }
+  return false;
+}
 
 let bad = 0;
 let ruleViolations = 0;
@@ -77,6 +99,31 @@ if (!NO_PROBE) {
     const ep = endpoints[provider];
     if (!ep) return { label, ok: false, why: "nincs vegpont" };
     const model = label.slice(provider.length + 1);
+    // 2026-11-03: HELYI MODELL — NINCS BEMÉRŐ KÉRÉS.
+    // A 12K tokenes próba a gemma4-12b-128k-t (13 GB VRAM) betöltötte minden
+    // nap, az AGENTS.md 2. pontja ellenére. A helyi tagot a /api/show-val
+    // ellenőrizzük: létezik-e, és tud-e tool-t. Ez nem tölt be modellt.
+    if (provider === 'ollama') {
+      try {
+        const sr = await fetch('http://127.0.0.1:11434/api/show', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ model }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!sr.ok) return { label, ok: false, why: `tag nem letezik (HTTP ${sr.status}) — nincs betoltes` };
+        const sj = await sr.json();
+        const caps = Array.isArray(sj.capabilities) ? sj.capabilities : null;
+        const tools = caps ? caps.includes('tools') : null;
+        return {
+          label,
+          ok: tools !== false,
+          why: `tag letezik, tools kepesseg: ${tools === null ? '?' : tools ? 'igen' : 'NEM'} (nincs betoltes, VRAM-kimelo)`,
+        };
+      } catch (e) {
+        return { label, ok: false, why: `ollama /api/show hiba: ${String(e?.message ?? e).slice(0, 60)}` };
+      }
+    }
     const t0 = Date.now();
     try {
       const r = await fetch(ep.url, {
@@ -87,8 +134,28 @@ if (!NO_PROBE) {
       });
       const txt = await r.text();
       let j = null; try { j = JSON.parse(txt); } catch {}
-      const tc = j?.choices?.[0]?.message?.tool_calls?.length ?? 0;
-      return { label, ok: r.status === 200 && tc > 0, why: r.status === 200 ? `HTTP 200, ${tc} tool_call, ${Date.now() - t0} ms` : `HTTP ${r.status}: ${txt.slice(0, 100).replace(/\s+/g, " ")}` };
+      const msg = j?.choices?.[0]?.message;
+      const tc = msg?.tool_calls?.length ?? 0;
+      const content = String(msg?.content ?? "").trim();
+      // 2026-11-03: MÉRÉSI ARTEFAKT-JAVÍTÁS. A "200, de 0 tool_call" NEM halott
+      // cél (a lightning:free 79 valódi kérést szolgált ki, miközben ezért
+      // naponta demotálták), és a 413 sem az (a Groq TPM 8000-je miatt a 12K
+      // próba mindig 413 — a végpont ÉL). A tool-képességet reprezentatívan a
+      // chain-doctor 400-tokenes próbája méri, ezért itt csak KIÍRJUK.
+      // ÉLŐ, ha a válasz valódi completion (van choices), akár hívott toolt,
+      // akár nem; vagy ha 413-mal utasította el a próba méretét.
+      const answered = r.status === 200 && Boolean(j?.choices?.[0]);
+      const tooLarge = r.status === 413;
+      const ok = answered || tooLarge;
+      let why;
+      if (r.status === 200) {
+        why = `HTTP 200, ${tc} tool_call${tc === 0 ? " (tool nelkul, de valaszol)" : ""}, ${Date.now() - t0} ms`;
+      } else if (tooLarge) {
+        why = `HTTP 413 (a cel EL, a probe nagy neki: TPM), ${Date.now() - t0} ms`;
+      } else {
+        why = `HTTP ${r.status}: ${txt.slice(0, 100).replace(/\s+/g, " ")}`;
+      }
+      return { label, ok, why };
     } catch (e) {
       return { label, ok: false, why: String(e?.message ?? e).slice(0, 90) };
     }
@@ -97,7 +164,10 @@ if (!NO_PROBE) {
   const probeRetry = async (label) => {
     const a = await probe(label);
     if (a.ok) return a;
-    // Egy átmeneti hiba (429/timeout) ne demotáljon egy egyébként jó célt: 1 újrapróba.
+    // 2026-11-03: 429-re NINCS újrapróba. A Google free tier 5 RPM — a retry
+    // maga generál újabb 429-et, és a végén hamis "halott" lesz belőle.
+    if (/HTTP 429/.test(a.why)) return a;
+    // Egy átmeneti hiba (timeout/5xx) ne demotáljon egy egyébként jó célt: 1 újrapróba.
     await new Promise((r) => setTimeout(r, 3000));
     const b = await probe(label);
     return b.ok ? b : { ...b, why: `${a.why} | ujra: ${b.why}` };
@@ -137,7 +207,15 @@ if (APPLY) {
     const prev = Number(state.fail?.[label] ?? 0);
     const count = bad ? (sameDay ? Math.max(prev, 1) : prev + 1) : 0;
     state.fail = { ...(state.fail ?? {}), [label]: count };
-    if (count >= 2) demote.push(label);
+    if (count >= 2) {
+      // 24 órán belüli valódi forgalom = a cél él, függetlenül a szintetikus próbától.
+      if (servedRecently(label)) {
+        console.log(`  NEM DEMOTALOM: ${label} — 24 oran belul kiszolgalta a forgalmat (HIT a proxy naploban)`);
+        state.fail = { ...(state.fail ?? {}), [label]: 0 };
+        continue;
+      }
+      demote.push(label);
+    }
   }
   state.at = new Date().toISOString();
   try { writeFileSync(statePath, JSON.stringify(state, null, 2) + "\n", "utf8"); } catch {}

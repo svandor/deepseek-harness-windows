@@ -327,39 +327,42 @@
       "maxTokens": 8192,
       "_fizetos_tartalek_megjegyzes": "2026-10-26: a fizetős Alibaba SZANDEKOSAN kikerült a subagent-láncokból (worker, free-quota, vision-worker). Ha mégis kell, külön, nevén nevezett route-ba tedd, és a panelben árazd be — ne a 'free' lánc végére.",
       "targets": [
+        "openrouter/nvidia/nemotron-3.5-lightning:free",
         "openrouter/nvidia/nemotron-3.5-super-vl:free",
+        "groq/openai/gpt-oss-120b",
         "google/gemini-3-flash-preview",
         "google/gemini-3.1-flash-lite",
         "ollama/gemma4-12b-128k",
         "ollama/qwen2.5:7b-instruct",
-        "ollama/qwen25-32k:latest",
-        "groq/openai/gpt-oss-120b",
-        "openrouter/nvidia/nemotron-3.5-lightning:free"
-      ]
+        "ollama/qwen25-32k:latest"
+      ],
+      "_comment_20261103": "2026-11-03: sorrend visszaallitva. A free-guard 2-napos demotalasa a Groq 413 (TPM 8000) es a lightning '200, de 0 tool_call' meresi artefakt miatt a ket legjobb ingyenes celot a 13 GB-os helyi modellek MOGE tette. A tagsag valtozatlan, csak a sorrend; a sorrendert a meresi ido (chain-doctor) a felelos."
     },
     "free-quota": {
       "_comment": "INGYENES KERETES CÉLOK (2026-10-26). A korábbi szingapúri lista EL VAN VETVE: a BSS-számla szerint a SG munkaterület qwen3.7-flash/qwen3.8-flash forgalma FIZETŐS volt (19,11 USD okt.), a freeQuotaTokens=0 jelölés ellenére is. Ezért ez a route ugyanazt az ingyenes készletet adja, mint a worker.",
       "contextWindow": 1000000,
       "maxTokens": 8192,
       "targets": [
+        "openrouter/nvidia/nemotron-3.5-lightning:free",
         "openrouter/nvidia/nemotron-3.5-super-vl:free",
+        "groq/openai/gpt-oss-120b",
         "google/gemini-3-flash-preview",
         "google/gemini-3.1-flash-lite",
         "ollama/qwen2.5:7b-instruct",
-        "ollama/qwen25-32k:latest",
-        "groq/openai/gpt-oss-120b",
-        "openrouter/nvidia/nemotron-3.5-lightning:free"
-      ]
+        "ollama/qwen25-32k:latest"
+      ],
+      "_comment_20261103": "2026-11-03: sorrend visszaallitva. A free-guard 2-napos demotalasa a Groq 413 (TPM 8000) es a lightning '200, de 0 tool_call' meresi artefakt miatt a ket legjobb ingyenes celot a 13 GB-os helyi modellek MOGE tette. A tagsag valtozatlan, csak a sorrend; a sorrendert a meresi ido (chain-doctor) a felelos."
     },
     "deepseek-chat": {
       "contextWindow": 131072,
       "maxTokens": 16384,
       "_comment": "2026-10-26: a fizetős openrouter/qwen/qwen3.8-27b helyett az ingyenes nemotron-3.5-lightning:free (mért: tool_calls OK 32K-n).",
       "targets": [
-        "ollama/qwen2.5:7b-instruct",
+        "openrouter/nvidia/nemotron-3.5-lightning:free",
         "groq/openai/gpt-oss-120b",
-        "openrouter/nvidia/nemotron-3.5-lightning:free"
-      ]
+        "ollama/qwen2.5:7b-instruct"
+      ],
+      "_comment_20261103": "2026-11-03: sorrend visszaallitva. A free-guard 2-napos demotalasa a Groq 413 (TPM 8000) es a lightning '200, de 0 tool_call' meresi artefakt miatt a ket legjobb ingyenes celot a 13 GB-os helyi modellek MOGE tette. A tagsag valtozatlan, csak a sorrend; a sorrendert a meresi ido (chain-doctor) a felelos."
     },
     "fast-chat": {
       "contextWindow": 131072,
@@ -376,10 +379,11 @@
       "maxTokens": 8192,
       "targets": [
         "openrouter/nvidia/nemotron-3.5-super-vl:free",
+        "openrouter/nvidia/nemotron-3.5-lightning:free",
         "google/gemini-3-flash-preview",
-        "ollama/gemma4-12b-128k",
-        "openrouter/nvidia/nemotron-3.5-lightning:free"
-      ]
+        "ollama/gemma4-12b-128k"
+      ],
+      "_comment_20261103": "2026-11-03: sorrend visszaallitva. A free-guard 2-napos demotalasa a Groq 413 (TPM 8000) es a lightning '200, de 0 tool_call' meresi artefakt miatt a ket legjobb ingyenes celot a 13 GB-os helyi modellek MOGE tette. A tagsag valtozatlan, csak a sorrend; a sorrendert a meresi ido (chain-doctor) a felelos."
     },
     "auto": {
       "_comment": "CACHE-KOZPONTU VALASZTO (2026-10-21). 30 napos MERES a sajat forgalmunkon (auto tune + ALIBABA-MERES): a main forgalom 99,6%-a CACHE-TALALAT, es a szamla 58%-a a CACHE-SOR (9,79 MRD token). Cache-aron a DeepSeek verhetetlen: 0,003/M (csucs 0,006) vs qwen3.8-flash 0,0113 (EU) / 0,015 (SG) es az Alibaba-s deepseek-v4.1-flash 0,0141. Ezert a hajto cel a DeepSeek-kozvetlen MAR CSÚCSBEN IS — a korabbi `csucs-kikerules` szabaly VESZTESEGES volt (csucsidos DS-cache 0,006 < qwen 0,0113), es 3-6x lassabb utra tette a reggeli forgalmat. 30 napra, a mi tokenmixunkon: DS-mix $58,34 (mert) / DS csucs $100,89 / DS off-peak $50,44 / qwen EU $124,73 / Ali deepseek-v4.1-flash idle $157,87, busy $316,79. Az Alibaba-s DeepSeek NEM alternativa: ugyanaz a modell 3,3x dragabb cache-aron, es a busy/idle savja ugyanaz a DeepSeek-ora, tehat a csucsot sem keruli el. Az Alibaba a LATAS es a TARTALEK szerepet kapja (thinking-korlattal), a pro pedig csak eszkalaciora jon.",

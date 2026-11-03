@@ -76,6 +76,11 @@ if (Test-Path $doctor) {
     Write-Log ''
     Write-Log '--- Fallback-lancok behangolasa (chain-doctor) ---'
     $doctorArgs = @($doctor)
+    # 2026-11-03: a helyi modell (gemma4-12b-128k, 13 GB VRAM) mérési célú
+    # betöltése tilos (AGENTS.md 2. pont): --skip-local. A szkript ilyenkor is
+    # ellenőrzi a tag létezését és tool-képességét, de BETÖLTÉS nélkül
+    # (Ollama /api/show), és a kihagyott tag a láncban a helyén marad.
+    $doctorArgs += '--skip-local'
     if ($Mode -eq 'apply') { $doctorArgs += '--apply' }
     try {
         $dOut = & $node @doctorArgs 2>&1 | ForEach-Object { $_.ToString() }

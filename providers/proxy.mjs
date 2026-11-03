@@ -1131,6 +1131,32 @@ async function attempt(target, bodyObj, { stream }) {
   const timer = setTimeout(() => controller.abort(new Error('connect timeout')), connectTimeoutMs);
 
   const payload = { ...bodyObj, model };
+  // ── PROVIDER-SPECIFIKUS MEZŐ-SZŰRÉS (2026-11-03, MÉRVE) ──────────────────
+  // A DSH a teljes OpenAI-alakú kérést küldi, a proxy pedig változatlanul
+  // továbbítja. Két cél ezt NEM tolerálja, ezért a lánc 2-3. tagja valódi
+  // delegálásnál 400-at kapott és kiesett (a forgalom az OpenRouter :free-re
+  // vagy a helyi Ollama-ba esett — utóbbi 13 GB VRAM):
+  //  - google: `store` mező -> 400 'Unknown name "store"' (mért: store:true
+  //    = 400, nélküle = 200 UGYANAZON a modellen);
+  //  - groq: assistant message `reasoning_details` -> 400 "property
+  //    'reasoning_details' is unsupported" (mért: nélküle = 200).
+  // Csak a hibát okozó mezőt vesszük ki, más paramétert nem írunk át.
+  if (provider.id === 'google' && Object.prototype.hasOwnProperty.call(payload, 'store')) {
+    delete payload.store;
+  }
+  if (provider.id === 'groq' && Array.isArray(payload.messages)) {
+    let stripped = 0;
+    payload.messages = payload.messages.map((m) => {
+      if (m && typeof m === 'object' && Object.prototype.hasOwnProperty.call(m, 'reasoning_details')) {
+        const rest = { ...m };
+        delete rest.reasoning_details;
+        stripped += 1;
+        return rest;
+      }
+      return m;
+    });
+    if (stripped > 0) log(`groq: ${stripped} message-bol kivett reasoning_details (HTTP 400 elkerulese)`);
+  }
   // Helyi Ollama: rövid keep_alive, hogy a modell NE maradjon hosszan a VRAM-ban.
   // MÉRT (2026-10-07): qwen2.5:7b-instruct = 6,14 GB VRAM a hívás alatt, és a
   // keep_alive lejárta után a foglalás nullára esik vissza (9577 -> 3086 MiB).
