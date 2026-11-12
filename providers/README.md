@@ -2,6 +2,23 @@
 
 > English version: [`README.en.md`](README.en.md).
 
+> ## ⛔ WINDOWS ALATT A HELYI OLLAMA TILOS (2026-11-11)
+>
+> A helyi Ollama (`llama-server`) és a DSH ezen a 32 GB-os gépen **együtt nem fér
+> el**: ~22 GB használt RAM környékén a Windows újraindítja a DSH-t, és a
+> folyamatban lévő munkamenetek megszakadnak. Ezért Windows alatt **egyetlen
+> komponens sem hívhatja a `127.0.0.1:11434`-et** — ez a szabály: AGENTS.md 2.1.
+>
+> - A route-láncokból az `ollama/...` célok ki vannak véve; a kivett láncok a
+>   `config.json` `localOllama.archivedTargets` szekciójában vannak.
+> - A `proxy.mjs` `localOllamaGate()` kapuja win32 alatt akkor is tilt, ha
+>   valaki visszateszi őket; a `/healthz` `localOllama` mezője kimondja.
+> - A `~/.dsh/settings.yaml`-ból az `ollama-local` provider és a `local-only`
+>   modell ki van véve (ellenőrzés: `node tools/local-ollama-settings.mjs`).
+> - Az ebben a fájlban leírt helyi-modell tudnivalók tehát **Linuxra átállás
+>   után** érvényesek; a visszaállítás lépései:
+>   [`settings.ollama-local-disabled.yaml`](settings.ollama-local-disabled.yaml).
+
 Ez a mappa a DSH több-provideres beállítását tartalmazza: helyi Ollama, ingyenes
 felhős providerek, és egy automatikus fallback proxy.
 
@@ -149,9 +166,13 @@ a route-nevek jelennek meg modellként a DSH-ban:
 
 | Route | Lánc |
 |---|---|
-| `deepseek-chat` | Groq → Cerebras → OpenRouter → Ollama |
-| `fast-chat` | Groq (8B instant) → Cerebras → Ollama (7B instruct) |
-| `local-only` | csak helyi Ollama (adat nem hagyja el a gépet) |
+| `deepseek-chat` | NVIDIA nemotron-3.5-lightning:free → Groq gpt-oss-120b |
+| `fast-chat` | Groq gpt-oss-20b |
+| `local-only` | **szándékosan üres lánc** (2026-11-11): helyi Ollama Windows alatt tilos, a proxy `local_ollama_disabled` 503-at ad rá. Linuxon a `localOllama.archivedTargets` visszamásolásával áll helyre |
+
+> A `worker`, `free-quota` és `vision-worker` láncok hasonlóképp a felhős
+> ingyenes célokra épülnek; a helyi záró szakaszt 2026-11-11-én kivettük
+> (AGENTS.md 2.1).
 
 A célokat `provider/model` formában kell megadni, és a feloldás **csak az első
 perjelen** hasít — így a perjelet és kettőspontot tartalmazó id-k is helyesek
@@ -241,9 +262,9 @@ Ez a rész **nem igényel proxyt**, csak a providereket:
 |---|---|
 | Orchestráció, tervezés, nehéz döntések | `deepseek-official` (marad) |
 | Subagent fan-out, keresés, összegzés | `groq` / `cerebras` (ingyenes) |
-| Compaction, cím-generálás | `groq` legkisebb modellje vagy `ollama-local` |
-| Bizalmas kód (nem hagyhatja el a gépet) | `ollama-local` |
-| Látás (kép) | `qwen3-vl:8b` vagy `minicpm-v:latest` (helyi) |
+| Compaction, cím-generálás | `groq` legkisebb modellje |
+| Bizalmas kód (nem hagyhatja el a gépet) | **Windows alatt nincs ilyen cél** — a helyi Ollama tilos (AGENTS.md 2.1); Linuxon `ollama-local` |
+| Látás (kép) | `google/gemini-3-flash-preview` / `nemotron-3.5-super-vl:free`; Linuxon `qwen3-vl:8b` (helyi) |
 
 ---
 
@@ -432,7 +453,7 @@ Két csapda, amit érdemes észben tartani:
 |---|---|
 | `settings.llm-pi-ai.yaml` | A `~/.dsh/settings.yaml`-ba másolandó provider-blokk (ellenőrzött id-kkel) |
 | `check-providers.mjs` | Minden provider: él-e a kulcs, léteznek-e a felvett modell-id-k |
-| `check-ollama.mjs` | Melyik helyi modell tud tool-callingot |
+| `check-ollama.mjs` | Melyik helyi modell tud tool-callingot (**Windows alatt tiltva — azonnal kilép**, AGENTS.md 2.1) |
 | `check-google.mjs` | Google: melyik modell hívható, és melyik tud toolt |
 | `proxy.mjs` | A fallback proxy (nulla függőség, Node ≥ 18) |
 | `config.json` | A proxy éles konfigurációja (providerek + route-ok) |

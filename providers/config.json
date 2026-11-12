@@ -27,6 +27,39 @@
   "maxRequestBytes": 33554432,
   "_vram_megjegyzes": "A helyi (ollama) celok keep_alive-ja 2 perc. MERVE 2026-10-07: qwen2.5:7b-instruct 6,14 GB VRAM a hivas alatt, a lejarat utan a foglalas visszaesik (9577 -> 3086 MiB a 16 GB-os RTX 5080 Laptopon). A gpt-oss:20b (12,85 GB) nem fer el biztonsagosan mas folyamatok mellett, ezert nem alapertelmezett cel; kezzel a local-only route-on erheto el.",
   "ollamaKeepAlive": "2m",
+  "_localOllama_kikapcsolva": "HELYI OLLAMA TILTASA (2026-11-11). Windows alatt a helyi Ollama (llama-server) és a DSH együtt nem fér el a memóriában: mért tünet, hogy ~22 GB használt RAM környékén a Windows újraindítja a DSH-t, és a folyamatban lévő munkamenetek megszakadnak. Ezért a route-láncokból az `ollama/...` célok KI VANNAK VÉVE (a kivett láncokat lent az `archivedTargets` őrzi), és a proxy.mjs `localOllamaGate()` kapuja Windows alatt akkor is tiltja a helyi hívást, ha valaki visszateszi őket. Linuxra átállás után: `enabled: true` + az `archivedTargets` visszamásolása a routes-ba — a részletes teendőket az AGENTS.md 2.1 pontja írja.",
+  "localOllama": {
+    "enabled": false,
+    "_enabled_megjegyzes": "Windows alatt HATÁSTALAN: a proxy a win32 platformon mindenképp tilt, csak a kézi `DSH_ALLOW_LOCAL_OLLAMA=1` környezeti változó oldja fel (kizárólag méréshez, rövid időre). Nem-win32 platformon ez a kapcsoló a döntő.",
+    "_archivedTargets_megjegyzes": "A 2026-11-11 előtti láncvégi helyi szakaszok, pontosan úgy, ahogy a láncokban álltak. Windows->Linux átállás után innen másolhatók vissza a routes megfelelő `targets` tömbjeinek VÉGÉRE, az `enabled: true` mellé. Windows alatt NE: a 13 GB-os gemma4-12b-128k betöltése indítja a 22 GB-os újraindulást.",
+    "archivedTargets": {
+      "worker": [
+        "ollama/gemma4-12b-128k",
+        "ollama/qwen2.5:7b-instruct",
+        "ollama/qwen25-32k:latest"
+      ],
+      "free-quota": [
+        "ollama/qwen2.5:7b-instruct",
+        "ollama/qwen25-32k:latest"
+      ],
+      "deepseek-chat": [
+        "ollama/qwen2.5:7b-instruct"
+      ],
+      "fast-chat": [
+        "ollama/qwen2.5:7b-instruct"
+      ],
+      "vision-worker": [
+        "ollama/gemma4-12b-128k"
+      ],
+      "auto.rules.kep": [
+        "ollama/qwen2.5:7b-instruct"
+      ],
+      "local-only": [
+        "ollama/gemma4-12b-128k",
+        "ollama/qwen2.5:7b-instruct"
+      ]
+    }
+  },
   "targetCooldownMs": 600000,
   "_targetContext_megjegyzes": "MERT VALOS kontextus-ablak celonkent (2026-10-22). A route `contextWindow` erteke a DSH fele csak HIRDETES; a cel tenyleges ablaka ettol elterhet. MERVE HIBA: a `worker` route 131072-t hirdetett, de a helyi ollama qwen2.5:7b-instruct 32768-cal futott (`ollama ps` -> CONTEXT 32768); egy 35k tokenes kereset az Ollama NEMAN csonkolt (az elejet eldobta, ahol az utasitas volt), a valasz megis ep JSON volt -> a proxy HIT-nek latta, a delegalas csendben elromlott. A proxy a routeChain-ben kiszuri azt a celt, amelynek itt mert ablaka kisebb a keresnel. Csak azt a celt erdemes ide felvenni, amit tenylegesen megmertunk.",
   "targetContext": {
@@ -223,7 +256,7 @@
   },
   "_valaszto_hangolas": "A szelektor becslesei: assumedCachedShare = a session 4. uzenete utan ennyi a feltetelezett cache-arany (merve 99,8%, de ovatosan 0,9); assumedOutputTokens = tipikus kimenet lepesenkent (merve ~870); assumedRemainingSteps = hany lepesre szamoljuk a valtas nyeresegét (a cache-ujraeles koltsege ellenében); switchMarginPct = ennyi% nyereseg alatt nem valtunk (cache-vedelem).",
   "assumedCachedShare": 0.95,
-  "assumedOutputTokens": 397,
+  "assumedOutputTokens": 400,
   "assumedRemainingSteps": 4,
   "switchMarginPct": 25,
   "dailyOverrides": {},
@@ -309,6 +342,7 @@
     },
     "ollama": {
       "label": "Ollama (helyi)",
+      "_kikapcsolva_20261111": "A provider-blokk MEGMARAD (a Linux-os visszakapcsoláshoz és a régi config-ok értelmezéséhez), de a proxy `localOllamaGate()` kapuja Windows alatt minden ollama-hívást tilt, és a route-láncokból a célok ki vannak véve. Egyetlen hívás sem megy ki a 11434-re a kapu feloldása nélkül (AGENTS.md 2.1).",
       "baseURL": "http://127.0.0.1:11434/v1",
       "apiKeyEnv": "OLLAMA_LOCAL_API_KEY",
       "optionalKey": true,
@@ -330,12 +364,10 @@
         "openrouter/nvidia/nemotron-3.5-lightning:free",
         "openrouter/nvidia/nemotron-3.5-super-vl:free",
         "groq/openai/gpt-oss-120b",
-        "google/gemini-3-flash-preview",
         "google/gemini-3.1-flash-lite",
-        "ollama/gemma4-12b-128k",
-        "ollama/qwen2.5:7b-instruct",
-        "ollama/qwen25-32k:latest"
+        "google/gemini-3-flash-preview"
       ],
+      "_comment_20261111": "A helyi Ollama záró szakasz (gemma4-12b-128k -> qwen2.5:7b-instruct -> qwen25-32k) KIVÉVE, a config.json `localOllama.archivedTargets`-ben őrizve — Windows alatt a betöltésük újraindítja a DSH-t.",
       "_comment_20261103": "2026-11-03: sorrend visszaallitva. A free-guard 2-napos demotalasa a Groq 413 (TPM 8000) es a lightning '200, de 0 tool_call' meresi artefakt miatt a ket legjobb ingyenes celot a 13 GB-os helyi modellek MOGE tette. A tagsag valtozatlan, csak a sorrend; a sorrendert a meresi ido (chain-doctor) a felelos."
     },
     "free-quota": {
@@ -346,11 +378,10 @@
         "openrouter/nvidia/nemotron-3.5-lightning:free",
         "openrouter/nvidia/nemotron-3.5-super-vl:free",
         "groq/openai/gpt-oss-120b",
-        "google/gemini-3-flash-preview",
         "google/gemini-3.1-flash-lite",
-        "ollama/qwen2.5:7b-instruct",
-        "ollama/qwen25-32k:latest"
+        "google/gemini-3-flash-preview"
       ],
+      "_comment_20261111": "A helyi Ollama záró szakasz KIVÉVE (localOllama.archivedTargets) — Windows alatt tilos a helyi modell betöltése.",
       "_comment_20261103": "2026-11-03: sorrend visszaallitva. A free-guard 2-napos demotalasa a Groq 413 (TPM 8000) es a lightning '200, de 0 tool_call' meresi artefakt miatt a ket legjobb ingyenes celot a 13 GB-os helyi modellek MOGE tette. A tagsag valtozatlan, csak a sorrend; a sorrendert a meresi ido (chain-doctor) a felelos."
     },
     "deepseek-chat": {
@@ -359,17 +390,17 @@
       "_comment": "2026-10-26: a fizetős openrouter/qwen/qwen3.8-27b helyett az ingyenes nemotron-3.5-lightning:free (mért: tool_calls OK 32K-n).",
       "targets": [
         "openrouter/nvidia/nemotron-3.5-lightning:free",
-        "groq/openai/gpt-oss-120b",
-        "ollama/qwen2.5:7b-instruct"
+        "groq/openai/gpt-oss-120b"
       ],
+      "_comment_20261111": "A helyi Ollama záró cél KIVÉVE (localOllama.archivedTargets).",
       "_comment_20261103": "2026-11-03: sorrend visszaallitva. A free-guard 2-napos demotalasa a Groq 413 (TPM 8000) es a lightning '200, de 0 tool_call' meresi artefakt miatt a ket legjobb ingyenes celot a 13 GB-os helyi modellek MOGE tette. A tagsag valtozatlan, csak a sorrend; a sorrendert a meresi ido (chain-doctor) a felelos."
     },
     "fast-chat": {
       "contextWindow": 131072,
       "maxTokens": 8192,
       "_comment": "2026-10-21: a nvidia/openai/gpt-oss-20b 404 (kivéve); a Groq gpt-oss-20b az ingyenes gyors cél.",
+      "_comment_20261111": "A helyi Ollama záró cél KIVÉVE (localOllama.archivedTargets).",
       "targets": [
-        "ollama/qwen2.5:7b-instruct",
         "groq/openai/gpt-oss-20b"
       ]
     },
@@ -380,9 +411,9 @@
       "targets": [
         "openrouter/nvidia/nemotron-3.5-lightning:free",
         "openrouter/nvidia/nemotron-3.5-super-vl:free",
-        "google/gemini-3-flash-preview",
-        "ollama/gemma4-12b-128k"
+        "google/gemini-3-flash-preview"
       ],
+      "_comment_20261111": "A helyi Ollama záró cél (gemma4-12b-128k) KIVÉVE (localOllama.archivedTargets) — képi feladatnál a helyi betöltés 13 GB VRAM + 22 GB RAM volt.",
       "_comment_20261103": "2026-11-03: sorrend visszaallitva. A free-guard 2-napos demotalasa a Groq 413 (TPM 8000) es a lightning '200, de 0 tool_call' meresi artefakt miatt a ket legjobb ingyenes celot a 13 GB-os helyi modellek MOGE tette. A tagsag valtozatlan, csak a sorrend; a sorrendert a meresi ido (chain-doctor) a felelos."
     },
     "auto": {
@@ -417,8 +448,7 @@
           "targets": [
             "deepseek/deepseek-flash",
             "alibaba-intl/qwen3.8-flash",
-            "alibaba/qwen3.8-flash",
-            "ollama/qwen2.5:7b-instruct"
+            "alibaba/qwen3.8-flash"
           ]
         }
       ],
@@ -426,12 +456,10 @@
       "_eszkalacio_megjegyzes": "ESZKALACIO (2026-10-14): a flash dolgozik, de ha a beszelgetes hosszu (>=40 uzenet) ES ugyanaz a tool-hivas legalabb 6x ismetlodik, a kovetkezo lepest a pro modell kapja. Ez NEM delegalas (lefele), hanem FELFELÉ eszkalacio; a szakirodalom kaszkad-routingnak (cascade) hivja. Miert ezek a küszöbök: egy flash-lepes ~$0,001-0,002, a pro belepes a teljes kontextus atvitelekor ~$0,21 (a modellvaltas a cache-t is elviszi), tomor brief-fel ~$0,02; fedezeti pont 220, illetve 21 elrontott lepes (analyze-escalation.mjs). Ezert csak ERŐS jelre es HOSSZU beszelgetesre eszkalalunk. Kikapcsolas: a szabaly torlese. A jelzes a naploban: 'AUTO auto: eszkalacio-porgas (... msg=.., ismetles=..)'."
     },
     "local-only": {
+      "_comment_20261111": "ÜRES LÁNC, SZÁNDÉKOSAN. A route neve megmarad (a DSH katalógus és a régi hivatkozások miatt), de a helyi Ollama Windows alatt tiltott, ezért a proxy 503-at ad rá `local_ollama_disabled` okkal. A korábbi lánc a localOllama.archivedTargets-ben van; Linux alatt innen másolható vissza, az enabled:true mellé.",
       "contextWindow": 131072,
       "maxTokens": 16384,
-      "targets": [
-        "ollama/gemma4-12b-128k",
-        "ollama/qwen2.5:7b-instruct"
-      ]
+      "targets": []
     }
   }
 }

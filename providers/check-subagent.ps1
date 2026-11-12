@@ -34,6 +34,11 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $settings = Join-Path $env:USERPROFILE '.dsh\settings.yaml'
 $creds = Join-Path $env:USERPROFILE '.dsh\.credentials.yaml'
 
+# 2026-11-11: HELYI OLLAMA TILTÁS (AGENTS.md 2.1). Windows alatt a helyi modell
+# betöltése ~22 GB RAM-nál újraindítja a DSH-t, ezért a helyi cél ellenőrzése is
+# tilos — még a /api/show sem megy ki. Feloldás: $env:DSH_ALLOW_LOCAL_OLLAMA = '1'.
+$LocalOllamaAllowed = ($env:DSH_ALLOW_LOCAL_OLLAMA -eq '1')
+
 if (-not (Test-Path $settings)) { Write-Host "Nincs settings.yaml: $settings" -ForegroundColor Red; return }
 
 $lines = Get-Content $settings
@@ -155,10 +160,15 @@ foreach ($r in $routes) {
     $note = ''
 
     if ($r.Provider -eq 'ollama-local') {
-        $t = Test-OllamaTool $r.Model
-        if ($t -eq $true) { $verdict = 'OK'; $note = 'tools képesség megvan' }
-        elseif ($t -eq $false) { $verdict = 'NEM ALKALMAS'; $note = 'nincs tools képesség' }
-        else { $verdict = '?'; $note = 'az Ollama nem válaszolt' }
+        if (-not $LocalOllamaAllowed) {
+            $verdict = 'TILTOTT'
+            $note = 'helyi Ollama tiltva (Windows, AGENTS.md 2.1) — nincs kérés'
+        } else {
+            $t = Test-OllamaTool $r.Model
+            if ($t -eq $true) { $verdict = 'OK'; $note = 'tools képesség megvan' }
+            elseif ($t -eq $false) { $verdict = 'NEM ALKALMAS'; $note = 'nincs tools képesség' }
+            else { $verdict = '?'; $note = 'az Ollama nem válaszolt' }
+        }
     } elseif ($NoProbe) {
         $verdict = '?'; $note = 'próba kihagyva (-NoProbe)'
     } else {

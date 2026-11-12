@@ -161,6 +161,44 @@ function resolveProviders() {
 
 let PROVIDERS = resolveProviders();
 
+// ── HELYI OLLAMA KAPU (2026-11-11) ─────────────────────────────────────────
+/**
+ * MIÉRT: Windows alatt a helyi Ollama (llama-server) és a DSH együtt nem fér el
+ * a memóriában. Mért tünet: ~22 GB használt RAM környékén a Windows újraindítja
+ * a DSH-t, és a folyamatban lévő munkamenetek megszakadnak. Ezért a helyi
+ * Ollama hívása Windows alatt TILOS (AGENTS.md 2.1); Linux alatt viszont a
+ * `localOllama.enabled` kapcsolóval egy sorral visszakapcsolható.
+ *
+ * EZ A MÁSODIK VÉDVONAL. Az első a `config.json`: a route-láncokból az
+ * `ollama/...` célok ki vannak véve, a kivett láncokat a
+ * `localOllama.archivedTargets` őrzi. Ha bármely jövőbeli eszköz (free-guard,
+ * autotune, kézi szerkesztés) visszateszi őket, a proxy akkor sem hívja a
+ * helyi modellt — ez a kapu fogja meg.
+ *
+ * Feloldás kézi méréshez (Windows alatt sem javasolt):
+ *   $env:DSH_ALLOW_LOCAL_OLLAMA = '1'
+ * Linux alatt: `"localOllama": { "enabled": true }` a config.json-ban.
+ */
+const LOCAL_OLLAMA_ENV = 'DSH_ALLOW_LOCAL_OLLAMA';
+const gatedLabelsLogged = new Set();
+
+function localOllamaGate() {
+  const cfg = CONFIG.localOllama ?? {};
+  if (envValue(LOCAL_OLLAMA_ENV) === '1') {
+    return { allowed: true, why: `env ${LOCAL_OLLAMA_ENV}=1 (kezi feloldas)` };
+  }
+  if (process.platform === 'win32') {
+    const asked = cfg.enabled === true ? ' — a config enabled:true ertekét FELULIRJA' : '';
+    return {
+      allowed: false,
+      why: `Windows: a helyi Ollama és a DSH nem fér el együtt (22 GB RAM-nál újraindul a DSH)${asked}`,
+    };
+  }
+  return cfg.enabled === true
+    ? { allowed: true, why: 'config localOllama.enabled=true' }
+    : { allowed: false, why: 'config localOllama.enabled=false' };
+}
+
 // ── kötelező kulcsok a route-okhoz ─────────────────────────────────────────
 /**
  * MEGMÉRT HIBA, amit ez a szakasz megszüntet:
@@ -967,11 +1005,26 @@ function routeChain(routeName, requestBody) {
   // Ezert: amelyik cel ablaka bizonyithatoan KISEBB a keresnel, azt nem
   // probaljuk meg. Csak azt dobjuk ki, aminek van mert `targetContext` erteke,
   // es soha nem ugy, hogy a lanc teljesen kiuruljon.
-  let sized = chain;
+  // ── HELYI OLLAMA KAPU (2026-11-11) — lásd a localOllamaGate() fejlécét ───
+  // A tiltott helyi cél a láncból MÉG A KONTEXTUS-SZŰRÉS ELŐTT kiesik, tehát
+  // nem lehet "utolsó tartalék": ha minden felhős cél elhalt, a kérés inkább
+  // hangos 503-at ad, mint hogy betöltse a 13 GB-os helyi modellt.
+  const gate = localOllamaGate();
+  const gated = gate.allowed
+    ? chain
+    : chain.filter((c) => {
+        if (c.provider.id !== 'ollama') return true;
+        if (!gatedLabelsLogged.has(c.label)) {
+          gatedLabelsLogged.add(c.label);
+          log(`GATE ${c.label} kihagyva — helyi Ollama tiltva: ${gate.why}`);
+        }
+        return false;
+      });
+  let sized = gated;
   if (requestBody) {
     try {
       const sig = requestSignals(requestBody);
-      const filtered = chain.filter((c) => {
+      const filtered = gated.filter((c) => {
         const cap = targetContextOf(c.label);
         if (!Number.isFinite(cap)) return true;
         if (sig.estTokens <= cap) return true;
@@ -1015,6 +1068,14 @@ function targetContextOf(label) {
  * induláskor kimondani.
  */
 async function lintOllamaContexts() {
+  // 2026-11-11: tiltott helyi Ollama esetén a lint MAGA is helyi hívás lenne
+  // (a /api/show nem tölt modellt, de a tiltás akkor is teljes: egyetlen
+  // 127.0.0.1:11434 kérés sem mehet ki).
+  const gateLint = localOllamaGate();
+  if (!gateLint.allowed) {
+    log(`  kontextus-lint: kihagyva — helyi Ollama tiltva (${gateLint.why})`);
+    return;
+  }
   const base = (CONFIG.providers?.ollama?.baseURL ?? 'http://127.0.0.1:11434/v1').replace(/\/v1\/?$/, '');
   const seen = new Set();
   const targets = [];
@@ -1409,6 +1470,32 @@ async function handleChat(req, res, bodyObj) {
       sendError(res, 503, msg, 'missing_provider_key');
       return;
     }
+    // A helyi Ollama kikapcsolása miatt üres lánc: ez NEM hiba, hanem szabály —
+    // ezért a hibaüzenet is ezt mondja, hogy senki ne a kulcsokat keresse.
+    // Honnan tudjuk, hogy ez "helyi" route? Vagy még benne van a deklarált
+    // láncban egy ollama-cél, vagy a config `archivedTargets`-ében szerepel
+    // (azaz 2026-11-11-ig helyi lánc volt), vagy a neve `local-only`.
+    const declared = CONFIG.routes?.[requested]?.targets;
+    const archived = CONFIG.localOllama?.archivedTargets?.[requested];
+    const wasLocalRoute =
+      (Array.isArray(declared) && declared.some((t) => String(t).startsWith('ollama/'))) ||
+      (Array.isArray(archived) && archived.length > 0) ||
+      LEGACY_LOCAL_ONLY.has(requested);
+    if (wasLocalRoute) {
+      const g = localOllamaGate();
+      if (!g.allowed) {
+        log(`LOCAL-OFF ${requested}: ${g.why}`);
+        sendError(
+          res,
+          503,
+          `A(z) "${requested}" route csak helyi Ollama-célt tartalmaz, a helyi Ollama pedig ` +
+            `tiltva van (${g.why}). Windows alatt ez szándékos: a helyi modell betöltése ` +
+            `újraindítja a DSH-t. Linux alatt a config.json localOllama.enabled kapcsolója oldja fel.`,
+          'local_ollama_disabled',
+        );
+        return;
+      }
+    }
     sendError(
       res,
       400,
@@ -1582,6 +1669,10 @@ function handleHealth(res, sessionFilter) {
     workerUsable: routeAvailability('worker').ok && routes.worker.length > 0,
     requiredAnyEnv: REQUIRED_ENV,
     port: PORT,
+    // A helyi Ollama tilalmának ÁLLAPOTA (2026-11-11): a felület és a doctor is
+    // ebből látja, hogy a tiltás aktív-e és miért. Ha valaki azt hiszi, hogy a
+    // lánc "csak úgy" nem éri el a helyi modellt, itt megtalálja az okot.
+    localOllama: localOllamaGate(),
     providers: Object.values(PROVIDERS).map((p) => ({
       id: p.id,
       baseURL: p.baseURL,
@@ -1708,6 +1799,10 @@ server.listen(PORT, HOST, () => {
     const state = p.apiKey ? 'kulcs OK' : p.optionalKey ? 'kulcs opcionális' : `HIÁNYZIK (${p.apiKeyEnv})`;
     log(`  provider ${id}: ${p.baseURL} [${state}]`);
   }
+  // A helyi Ollama tilalma: induláskor KI KELL MONDANI, mert a láncokból
+  // hiányzó cél egyébként úgy tűnne, mintha valaki elfelejtette volna.
+  const startupGate = localOllamaGate();
+  log(`  helyi Ollama: ${startupGate.allowed ? 'ENGEDVE' : 'TILTVA'} — ${startupGate.why}`);
   for (const name of routeNames()) {
     const chain = routeChain(name).map((t) => `${t.provider.id}/${t.model}`);
     const req = requiredEnvFor(name);

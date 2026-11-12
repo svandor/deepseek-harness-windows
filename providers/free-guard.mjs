@@ -20,6 +20,21 @@ const CONFIG = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
 const NO_PROBE = process.argv.includes("--no-probe");
 const APPLY = process.argv.includes("--apply");
 
+// ── HELYI OLLAMA TILTÁS (2026-11-11) ───────────────────────────────────────
+// Windows alatt a helyi Ollama (llama-server) és a DSH együtt nem fér el a
+// memóriában: ~22 GB használt RAM környékén a Windows újraindítja a DSH-t, és
+// a munkamenetek megszakadnak (AGENTS.md 2.1). Ezért a free-guard NEM csak azt
+// ellenőrzi, hogy nincs fizetős cél a delegálási láncban, hanem azt is, hogy
+// nincs benne HELYI Ollama-cél — ha valaki visszateszi, ez a szabálysértés
+// hibás kilépést ad, tehát a napi retune feladat hangosan elbukik rajta.
+const LOCAL_OLLAMA_ALLOWED = process.platform === "win32"
+  ? process.env.DSH_ALLOW_LOCAL_OLLAMA === "1"
+  : CONFIG.localOllama?.enabled === true;
+const LOCAL_OLLAMA_WHY = process.platform === "win32"
+  ? "Windows: a helyi Ollama betöltése újraindítja a DSH-t (AGENTS.md 2.1)"
+  : "config localOllama.enabled=false";
+const isLocalLabel = (label) => String(label).startsWith("ollama/");
+
 /** Ingyenesnek elfogadott providerek. google = AI Studio ingyenes szint (számlázás nélkül). */
 const FREE_PROVIDERS = new Set(["openrouter", "groq", "ollama", "nvidia", "google"]);
 /** Ezeken a route-okon fizetős cél NEM lehet: ezek a delegálás útjai. */
@@ -67,6 +82,12 @@ let ruleViolations = 0;
 console.log("=== 1. SZABALY: fizetos cel a delegalasi lancban? ===");
 for (const name of FREE_ROUTES) {
   for (const t of routeTargets(name)) {
+    if (!LOCAL_OLLAMA_ALLOWED && isLocalLabel(t)) {
+      bad += 1;
+      ruleViolations += 1;
+      console.log(`  SZABALYSERTES  ${name}: ${t}  (HELYI OLLAMA TILTVA — ${LOCAL_OLLAMA_WHY})`);
+      continue;
+    }
     if (!isFree(t)) {
       bad += 1;
       ruleViolations += 1;
@@ -176,6 +197,12 @@ if (!NO_PROBE) {
     for (const t of routeTargets(name)) {
       if (seen.has(t)) continue;
       seen.add(t);
+      // Tiltott helyi cél: NEM mérjük (a /api/show még nem tölt modellt, de a
+      // tiltás teljes: egyetlen 127.0.0.1:11434 kérés sem mehet ki).
+      if (!LOCAL_OLLAMA_ALLOWED && isLocalLabel(t)) {
+        console.log(`  TILTOTT ${t.padEnd(48)} helyi Ollama — nincs meres (${LOCAL_OLLAMA_WHY})`);
+        continue;
+      }
       const r = await probeRetry(t);
       if (!r.ok) { bad += 1; if (!failed.has(name)) failed.set(name, []); failed.get(name).push(t); }
       console.log(`  ${r.ok ? "OK    " : "HALOTT"}  ${r.label.padEnd(48)} ${r.why}`);

@@ -2,6 +2,22 @@
 
 > Hungarian version: [`README.md`](README.md).
 
+> ## ⛔ LOCAL OLLAMA IS FORBIDDEN ON WINDOWS (2026-11-11)
+>
+> The local Ollama (`llama-server`) and DSH **cannot coexist** on this 32 GB
+> machine: at around 22 GB of used RAM Windows restarts DSH and in-flight sessions
+> are cut off. Therefore, while running Windows, **no component may call
+> `127.0.0.1:11434`** — rule: AGENTS.md 2.1.
+>
+> - All `ollama/...` targets were removed from the route chains; the removed
+>   chains are preserved in `config.json` under `localOllama.archivedTargets`.
+> - `proxy.mjs`'s `localOllamaGate()` refuses them even if someone puts them back;
+>   the `/healthz` `localOllama` field states the reason.
+> - The `ollama-local` provider and the `local-only` model were removed from
+>   `~/.dsh/settings.yaml` (check: `node tools/local-ollama-settings.mjs`).
+> - The local-model notes in this document therefore apply **after moving to
+>   Linux**; restore steps: [`settings.ollama-local-disabled.yaml`](settings.ollama-local-disabled.yaml).
+
 This folder holds DSH's multi-provider setup: local Ollama, free cloud providers, and an automatic
 fallback proxy.
 

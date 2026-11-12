@@ -7,6 +7,16 @@
 **DSH home:** `%USERPROFILE%\.dsh`
 **Munkaterület:** `C:\Szerver\Deepseek Harness`
 
+> **FONTOS FRISSÍTÉS (2026-11-11): a helyi Ollama Windows alatt TILOS.**
+> Ebben a feljegyzésben a helyi Ollamára vonatkozó minden leírás (láncok, mérések,
+> `local-only` route, `ollama-local` provider) **Linuxra átállás után** érvényes.
+> Windows alatt ~22 GB használt RAM környékén a Windows újraindítja a DSH-t, ezért
+> a DSH nem hívhat helyi modellt: a route-láncokból az `ollama/...` célok ki vannak
+> véve (`config.json` → `localOllama.archivedTargets`), a proxyt a
+> `localOllamaGate()` kapu zárja, a `~/.dsh/settings.yaml`-ból pedig kikerült az
+> `ollama-local` provider és a `local-only` modell. Szabály: AGENTS.md 2.1;
+> visszaállítás: `providers/settings.ollama-local-disabled.yaml`.
+
 ---
 
 ## 1. Kiindulás és a fő megállapítás

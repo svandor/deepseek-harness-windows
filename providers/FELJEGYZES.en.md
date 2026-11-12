@@ -7,6 +7,16 @@
 **DSH home:** `%USERPROFILE%\.dsh`
 **Workspace:** `C:\Szerver\Deepseek Harness`
 
+> **IMPORTANT UPDATE (2026-11-11): local Ollama is FORBIDDEN on Windows.**
+> Every local-Ollama description in this record (chains, measurements, the
+> `local-only` route, the `ollama-local` provider) applies **after the move to
+> Linux**. On Windows, at around 22 GB of used RAM Windows restarts DSH, so DSH
+> must not call a local model: all `ollama/...` targets were removed from the route
+> chains (`config.json` → `localOllama.archivedTargets`), the proxy is closed by the
+> `localOllamaGate()` gate, and the `ollama-local` provider plus the `local-only`
+> model were removed from `~/.dsh/settings.yaml`. Rule: AGENTS.md 2.1; restore:
+> `providers/settings.ollama-local-disabled.yaml`.
+
 ---
 
 ## 1. Starting point and the main finding

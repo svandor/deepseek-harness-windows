@@ -30,8 +30,15 @@ llm-pi-ai:
   providers:
 
     # ------------------------------------------------------------------
-    # 1) HELYI OLLAMA
+    # 1) HELYI OLLAMA  —  WINDOWS ALATT TILTVA (2026-11-11, AGENTS.md 2.1)
     # ------------------------------------------------------------------
+    # EZ A BLOKK A TEMPLATBAN MARAD (dokumentacio + Linux-os visszaallitas), de
+    # a valos ~/.dsh/settings.yaml-bol KI VAN VÉVE, es a helyere nem kerul semmi:
+    # Windows alatt a helyi Ollama (llama-server) es a DSH egyutt nem fer el a
+    # memoriaban (~22 GB hasznalt RAM-nal a Windows ujrainditja a DSH-t, es a
+    # munkamenetek megszakadnak). A kivett beallitasok: providers/settings.ollama-local-disabled.yaml.
+    # Windows alatt a proxy `localOllamaGate()` kapuja is tilt (providers/proxy.mjs).
+    #
     # Az Ollama OpenAI-kompatibilis végpontja: http://localhost:11434/v1
     #
     # FONTOS: az OpenAI-kompatibilis implementáció akkor is kér kulcsot vagy

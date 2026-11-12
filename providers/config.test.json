@@ -1,5 +1,6 @@
 {
   "_comment": "TESZT konfiguráció: szándékosan rossz első provider + valódi helyi Ollama a lánc végén, hogy a fallback és a streaming éles körülmények között legyen ellenőrizhető.",
+  "_localOllama_megjegyzes": "2026-11-11: a helyi Ollama Windows alatt TILOS (AGENTS.md 2.1), ezért ezt a teszt-configot Windows alatt a proxy kapuja (localOllamaGate) megfosztja az ollama-céltól — a fallback-teszt a felhős célokkal így is lefut. Feloldás kizárólag kézi méréshez: DSH_ALLOW_LOCAL_OLLAMA=1.",
 
   "host": "127.0.0.1",
   "port": 4123,

@@ -130,6 +130,52 @@ Szabályok:
 - Ha a tartalék modell betöltése 10 GB fölé megy, az hibás konfiguráció, nem
   „lassú gép”.
 
+### 2.1 Windows alatt a helyi Ollama hívása TILOS  (2026-11-11, P0)
+
+**A szabály:** amíg ez a gép Windows alatt fut, **egyetlen komponens sem hívhatja
+a helyi Ollamát** (`127.0.0.1:11434`) — sem a DSH, sem az ingyenes delegálási
+lánc, sem mérő/ellenőrző szkript, sem bot-job. A tiltás nem a gyorsaságról szól:
+a betöltés memóriát foglal, és a Windows a DSH-t újraindítja.
+
+**Mért tünet (2026-11-11):** ~22 GB használt RAM környékén a Windows újraindítja
+a DSH-t, és a folyamatban lévő munkamenetek megszakadnak. A helyi modell
+(`llama-server`) és a DSH ezen a 32 GB-os gépen együtt nem fér el.
+
+**Kikényszerítés — két védvonal, mindkettő kötelező:**
+
+1. `providers\config.json`: a route-láncokban **nincs** `ollama/...` cél. A kivett
+   láncok az `localOllama.archivedTargets`-ben vannak (7 route), a `local-only`
+   route szándékosan **üres láncú** (a proxy `local_ollama_disabled` 503-at ad rá).
+2. `providers\proxy.mjs` → `localOllamaGate()`: win32 alatt akkor is tilt, ha
+   valaki visszateszi a célokat. A `DSH_ALLOW_LOCAL_OLLAMA=1` környezeti változó
+   az egyetlen feloldás (rövid, kézi méréshez); a config `enabled: true`-ja
+   Windows alatt **hatástalan**. A `/healthz` `localOllama` mezője kimondja.
+
+**Kapuzott eszközök** (mindegyik a saját fejlécében hivatkozik ide):
+`free-guard.mjs` (szabálysértés + hibás kilépés, ha helyi cél kerül a láncba),
+`chain-doctor.mjs`, `check-ollama.mjs`, `check-subagent.ps1`, valamint a
+`bot\collect\focus-ollama-check.mjs` (a napi fókusz-őr C) ellenőrzése kimarad, és
+a job összegzése kimondja a tiltást).
+
+**A DSH közvetlen útja is zárva:** a `~/.dsh/settings.yaml`-ból kivettük az
+`ollama-local` providert és a `local-only` modellt (mind az `allowedModels`, mind
+a `subagent-worker.models` alól). Ellenőrzés és kivétel:
+
+```
+node tools/local-ollama-settings.mjs          # 0 találat kell
+node tools/local-ollama-settings.mjs --apply  # ha mégis visszakerült
+```
+
+**Linuxra átállás után** a tiltás feloldható; a teendők (mind a 4 hely:
+settings.yaml 1–3. blokk, config.json 4. blokk) a
+`providers\settings.ollama-local-disabled.yaml` fejlécében vannak. Utána
+ellenőrizd a `/healthz` `localOllama.allowed` mezőjét és a `nvidia-smi`-t.
+
+**Amit NE tegyél:** ne „javítsd” úgy, hogy csak a `keep_alive`-t csökkented vagy a
+kontextusablakot húzod lejjebb — a tiltás oka nem a kontextus. Ne emeld a
+`OLLAMA_MAX_LOADED_MODELS`-t, és ne vezesd vissza a helyi célt a delegálási
+láncba „utolsó tartalékként”.
+
 ---
 
 ## 3. Ütemezett feladatok higiéniája
@@ -191,6 +237,20 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-11` — **a helyi Ollama hívása TILOS Windows alatt** (2.1. pont).
+  Mért tünet: ~22 GB használt RAM környékén a Windows újraindítja a DSH-t, és a
+  munkamenetek megszakadnak — a `llama-server` és a DSH együtt nem fér el a 32 GB-os
+  gépen. Kivéve: (1) `providers\config.json` minden `ollama/...` lánctagja, a kivett
+  láncok az `localOllama.archivedTargets`-ben (worker, free-quota, deepseek-chat,
+  fast-chat, vision-worker, `auto.rules.kep`, local-only), a `local-only` route
+  üres lánccal 503-at ad; (2) `~/.dsh/settings.yaml`: `ollama-local` provider és
+  `local-only` modell (mentés: `settings.yaml.bak-*-ollama-off`); (3) második
+  védvonal a `proxy.mjs` `localOllamaGate()` kapuja, ami win32 alatt a visszatett
+  célokat is ejti, és a `/healthz` kimondja; (4) kapuzva a `free-guard`, a
+  `chain-doctor`, a `check-ollama`, a `check-subagent.ps1` és a
+  `focus-ollama-check.mjs` bot-job 11434-es hívása. Új eszköz:
+  `tools\local-ollama-settings.mjs` (ellenőrzés/kivétel, YAML-validálással).
+  Linuxos visszaállítás: `providers\settings.ollama-local-disabled.yaml`.
 - `2026-10-28` — szabálytár létrehozva; a fókusz-tilalom eddig csak prózában élt
   a `bot\README.md`-ben, kikényszerítve nem volt. Ezt ez a fájl pótolja.
 - `2026-10-28` — a 09:00-s villanás valódi gyökere a `DSH model retune daily`

@@ -1,0 +1,105 @@
+# A HELYI OLLAMA kivett DSH-beállításai — ARCHÍVUM (2026-11-11)
+#
+# Ez a fájl NEM töltődik be sehova. Azért van, hogy a Windows → Linux átállás
+# után a helyi Ollama egy helyről, pontosan visszaállítható legyen.
+#
+# MIÉRT VAN KIVÉVE: Windows alatt a helyi Ollama (llama-server) és a DSH együtt
+# nem fér el a memóriában. Mért tünet: ~22 GB használt RAM környékén a Windows
+# újraindítja a DSH-t, és a folyamatban lévő munkamenetek megszakadnak.
+# Szabály: AGENTS.md 2.1.
+#
+# MI TÖRTÉNT (összesen 4 helyen kell visszaállítani):
+#   1. `~/.dsh/settings.yaml` → `llm-pi-ai.providers.ollama-local` (lent, 1. blokk)
+#   2. `~/.dsh/settings.yaml` → `subagent-worker.models` alá a `local-only` bejegyzés (2. blokk)
+#   3. `~/.dsh/settings.yaml` → `subagent-model-selection.allowedModels` alá (3. blokk)
+#   4. `providers/config.json` → a route-láncok végére az `archivedTargets` tartalma,
+#      és a `localOllama.enabled` átállítása `true`-ra (4. blokk, magyarázattal)
+#
+# Az 1-3. blokk visszatételét a `node tools/local-ollama-settings.mjs --check`
+# ellenőrzi (és --apply a kivétel), a 4.-et a proxy saját kapuja
+# (`providers/proxy.mjs` → `localOllamaGate()`) és a `chain-doctor` / `free-guard`.
+#
+# FONTOS: Linuxon a `localOllama.enabled: true` NÉLKÜL a proxy továbbra is tilt,
+# akkor is, ha a láncokban ott vannak a célok — a kapu szándékosan kétkulcsos.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. blokk — `~/.dsh/settings.yaml`, a `llm-pi-ai.providers` alá (4 spaces indent,
+#    közvetlenül az `alibaba:` provider ELŐTT vagy UTÁN; a sorrend nem számít)
+# ─────────────────────────────────────────────────────────────────────────────
+#    ollama-local:
+#      displayName: Ollama
+#      apiKeyEnv: OLLAMA_LOCAL_API_KEY
+#      api: openai-completions
+#      baseURL: http://localhost:11434/v1
+#      models:
+#        - id: gpt-oss:20b
+#          name: GPT-OSS 20B
+#          contextWindow: 131072
+#          maxTokens: 16384
+#        - id: qwen2.5-coder:14b
+#          name: Qwen2.5 Coder 14B
+#          contextWindow: 32768
+#          maxTokens: 8192
+#        - id: qwen2.5:14b
+#          name: Qwen2.5 14B
+#          contextWindow: 32768
+#          maxTokens: 8192
+#        - id: deepseek-r1:14b
+#          name: DeepSeek R1 14B (reasoning)
+#          contextWindow: 131072
+#          maxTokens: 16384
+#        - id: mistral-nemo:latest
+#          name: Mistral Nemo
+#          contextWindow: 131072
+#          maxTokens: 8192
+#        - id: llama3.1:8b
+#          name: Llama 3.1 8B
+#          contextWindow: 131072
+#          maxTokens: 8192
+#        - id: qwen2.5:7b-instruct
+#          name: Qwen2.5 7B Instruct
+#          contextWindow: 32768
+#          maxTokens: 8192
+#        - id: qwen3-vl:8b
+#          name: Qwen3-VL 8B (lat + tool)
+#          contextWindow: 32768
+#          maxTokens: 16384
+#          input: [ text, image ]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. blokk — `~/.dsh/settings.yaml`, a `llm-pi-ai.providers.subagent-worker.models`
+#    alá (8 spaces indent). A proxy `local-only` route-ját szolgálja ki.
+# ─────────────────────────────────────────────────────────────────────────────
+#        - id: local-only
+#          name: Helyi Ollama (VRAM-kimelo, utolso tartalek)
+#          contextWindow: 131072
+#          maxTokens: 16384
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. blokk — `~/.dsh/settings.yaml`, a `subagent-model-selection.allowedModels`
+#    listájának VÉGÉRE (4 spaces indent a `- provider` előtt)
+# ─────────────────────────────────────────────────────────────────────────────
+#    - provider: subagent-worker
+#      model: local-only
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. blokk — `providers/config.json`: a helyi záró szakasz visszatétele
+#
+#    a) `"localOllama": { "enabled": false, ... }` → `"enabled": true`
+#    b) az `archivedTargets` tömbjeit a routes megfelelő `targets` tömbjének
+#       VÉGÉRE másolni (a sorrend számít: a helyi cél az utolsó tartalék):
+#
+#    worker:        ["ollama/gemma4-12b-128k", "ollama/qwen2.5:7b-instruct", "ollama/qwen25-32k:latest"]
+#    free-quota:    ["ollama/qwen2.5:7b-instruct", "ollama/qwen25-32k:latest"]
+#    deepseek-chat: ["ollama/qwen2.5:7b-instruct"]
+#    fast-chat:     ["ollama/qwen2.5:7b-instruct"]
+#    vision-worker: ["ollama/gemma4-12b-128k"]
+#    auto.rules.kep:["ollama/qwen2.5:7b-instruct"]
+#    local-only:    ["ollama/gemma4-12b-128k", "ollama/qwen2.5:7b-instruct"]
+#
+#    c) a `local-only` route jelenleg `"targets": []` — ide kerül vissza a (b) sora.
+#
+#    Ellenőrzés visszaállítás után:
+#      node providers/free-guard.mjs --no-probe     # nem lehet SZABALYSERTES
+#      curl.exe -s http://127.0.0.1:4123/healthz    # localOllama.allowed = true
+#      nvidia-smi                                   # a betöltés után itt LÁTSZIK a foglalás

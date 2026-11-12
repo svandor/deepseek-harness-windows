@@ -1,5 +1,11 @@
 # LiteLLM proxy konfiguráció — alternatíva a proxy.mjs helyett.
 #
+# ⛔ 2026-11-11: WINDOWS ALATT NE INDÍTSD EL a helyi Ollama-modellekkel. A
+# llama-server és a DSH együtt nem fér el a memóriában (~22 GB használt RAM
+# környékén a Windows újraindítja a DSH-t, AGENTS.md 2.1). A lenti ollama_*
+# bejegyzéseket Linuxra átállás után lehet használni; Windows alatt hagyd ki
+# őket a modell-listából (vagy ne hívd ezeket a neveket).
+#
 # Ugyanazt adja, mint a proxy.mjs: egy OpenAI-kompatibilis végpont, mögötte
 # automatikus fallback-lánc. Többet is tud (spend tracking, virtual keys,
 # admin UI, auto-router), cserébe nagyobb függőség.

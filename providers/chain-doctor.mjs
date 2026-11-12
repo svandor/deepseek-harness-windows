@@ -122,6 +122,18 @@ if (!existsSync(CONFIG_PATH)) { log(`Nem találom: ${CONFIG_PATH}`); process.exi
 const CONFIG = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
 const REFS = readRefs();
 
+// ── HELYI OLLAMA TILTÁS (2026-11-11) ───────────────────────────────────────
+// Windows alatt a helyi Ollama és a DSH együtt nem fér el a memóriában
+// (~22 GB RAM-nál újraindul a DSH → megszakadt munkamenetek), ezért a tiltás
+// TELJES: egyetlen 127.0.0.1:11434 kérés sem mehet ki, még a /api/show sem.
+// Linux alatt a config `localOllama.enabled: true` oldja fel.
+const LOCAL_OLLAMA_BLOCKED = process.platform === 'win32'
+  ? process.env.DSH_ALLOW_LOCAL_OLLAMA !== '1'
+  : CONFIG.localOllama?.enabled !== true;
+const LOCAL_OLLAMA_WHY = process.platform === 'win32'
+  ? 'Windows: a helyi Ollama betöltése újraindítja a DSH-t (AGENTS.md 2.1)'
+  : 'config localOllama.enabled=false';
+
 const providers = {};
 for (const [id, def] of Object.entries(CONFIG.providers ?? {})) {
   const apiKey = (def.apiKeyEnv && REFS[def.apiKeyEnv]) || def.apiKey;
@@ -209,6 +221,12 @@ for (const target of allTargets.values()) {
     log(`  SKIP ${target.key.padEnd(52)} fizetős cél — nincs kérés (költség)`);
     continue;
   }
+  // Helyi Ollama: TILTVA (2026-11-11) — sem betöltés, sem /api/show.
+  if (LOCAL_OLLAMA_BLOCKED && (target.pid === 'ollama' || isLocal(p?.baseURL))) {
+    results.set(target.key, { verdict: 'SKIP', ms: 0, note: `helyi Ollama tiltva — nincs kérés (${LOCAL_OLLAMA_WHY})` });
+    log(`  SKIP ${target.key.padEnd(52)} helyi Ollama tiltva — nincs kérés`);
+    continue;
+  }
   // Helyi modell: 10+ GB VRAM betöltés — csak kifejezett kérésre mérjük.
   // Kihagyáskor is ellenőrizzük a tagot BETÖLTÉS NÉLKÜL; ha a tag hiányzik,
   // az valódi láncszakadás, ezért az HALOTT (nem SKIP).
@@ -271,6 +289,7 @@ md.push('');
 md.push(`- Mód: **${APPLY ? 'apply' : 'csak riport'}**`);
 md.push(`- Próba: tool-hívást igénylő kérés, időkorlát ${PROBE_TIMEOUT_MS} ms (helyi Ollama: ${LOCAL_PROBE_TIMEOUT_MS} ms), lassú > ${SLOW_MS} ms`);
 md.push(`- Fizetős-próba kapu: ${ALLOW_PAID ? '**KI** (CHAIN_ALLOW_PAID_PROBES=1)' : 'BE — deepseek/alibaba célra nem megy kérés'}${SKIP_LOCAL ? '; helyi Ollama kihagyva (--skip-local)' : ''}`);
+md.push(`- Helyi Ollama: ${LOCAL_OLLAMA_BLOCKED ? `**TILTVA** — ${LOCAL_OLLAMA_WHY}` : 'engedélyezve'}`);
 md.push('');
 md.push('| Cél | Eredmény | Részlet | Hol szerepel |');
 md.push('|---|---|---|---|');

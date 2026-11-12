@@ -7,6 +7,18 @@
  */
 const BASE = process.env.OLLAMA_URL ?? 'http://127.0.0.1:11434';
 
+// ── HELYI OLLAMA TILTÁS (2026-11-11) ───────────────────────────────────────
+// Windows alatt a helyi Ollama és a DSH együtt nem fér el a memóriában
+// (~22 GB RAM-nál újraindul a DSH → megszakadt munkamenetek), ezért ez a kézi
+// diagnosztika sem hívhatja a szervert. AGENTS.md 2.1; feloldás kizárólag
+// rövid, kézi méréshez: $env:DSH_ALLOW_LOCAL_OLLAMA = '1'.
+if (process.platform === 'win32' && process.env.DSH_ALLOW_LOCAL_OLLAMA !== '1') {
+  console.error('TILTVA: a helyi Ollama hívása Windows alatt tilos (AGENTS.md 2.1).');
+  console.error('  Ok: ~22 GB RAM környékén a Windows újraindítja a DSH-t, a munkamenetek megszakadnak.');
+  console.error('  Feloldás kézi méréshez: $env:DSH_ALLOW_LOCAL_OLLAMA = \'1\'');
+  process.exit(3);
+}
+
 const tags = await (await fetch(`${BASE}/api/tags`)).json();
 const models = tags.models ?? [];
 console.log(`Ollama: ${models.length} modell\n`);
