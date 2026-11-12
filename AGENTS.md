@@ -237,6 +237,20 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-12` — **a Git panel commitja nem működött HU módban.** A repó
+  publikus, ezért a `commit-msg` hook (`tools/check-commit-msg.mjs`) angol
+  üzenetet követel, a panel viszont HU kapcsolóval magyar üzenetet állít elő
+  (`Frissítés: …`) — a hook elutasította. A panel csak ennyit mutatott:
+  `git commit failed`, mert a hook stderr-je ÜRES SORRAL kezdődik, a kód pedig az
+  első sort vette. Javítás (`plugins\dsh-ui-extras\lib\index.js`): magyar
+  üzenethez a hook dokumentált `commit-lang: any` tracert fűzi (tehát a magyar
+  üzenet JELÖLVE megy át; a jelöletlen magyart a hook továbbra is elutasítja), a
+  hibaüzenet pedig az első NEM ÜRES sort adja vissza. A javítás a harness
+  újraindításakor lép életbe (a plugin szerveroldali kódja boot-időben töltődik;
+  a kliens a lap újratöltésével). Mellékesen: a DSH sandboxában a `git commit`
+  hookja MSYS `sh`-t indít, ami signal-pipe-ot nem tud létrehozni
+  (`couldn't create signal pipe, Win32 error 5`) — ilyenkor a commit emelt
+  hozzáféréssel megy át.
 - `2026-11-11` — **a helyi Ollama hívása TILOS Windows alatt** (2.1. pont).
   Mért tünet: ~22 GB használt RAM környékén a Windows újraindítja a DSH-t, és a
   munkamenetek megszakadnak — a `llama-server` és a DSH együtt nem fér el a 32 GB-os
