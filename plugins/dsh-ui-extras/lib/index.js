@@ -1037,11 +1037,35 @@ async function handleGithubAction(req, res) {
         : (lang === "hu"
           ? "Frissítés: " + (huAreas.length > 0 ? huAreas.join(", ") : "kisebb módosítások") + " (" + date + ")"
           : "Update: " + (enAreas.length > 0 ? enAreas.join(", ") : "minor changes") + " (" + date + ")");
-      const text = message.trim().length > 0 ? message.trim() : auto;
+      const base = message.trim().length > 0 ? message.trim() : auto;
+
+      // ── A HOOK NYELVI KAPUJA (2026-11-12) ──────────────────────────────────
+      // MEGMÉRT HIBA: a repó publikus, ezért a `commit-msg` hook
+      // (tools/check-commit-msg.mjs) ANGOL üzenetet követel. A panel HU módja
+      // viszont magyar üzenetet állít elő ("Frissítés: szabályok, …"), így MINDEN
+      // HU-s commit elhalt a hookon — a panel pedig csak ennyit mutatott:
+      // "git commit failed", mert a hook stderr-je ÜRES SORRAL kezdődik, és a
+      // kód az első sort vette (az üres). Két javítás:
+      //   1) magyar üzenethez a hook által ismert `commit-lang: any` tracert
+      //      fűzzük — a repó DOKUMENTÁLT kivétele, tehát a magyar üzenet nem
+      //      csendben csúszik át, hanem JELÖLVE (és a hook továbbra is fogja a
+      //      jelöletlen magyart, pl. kézzel írt üzenetet EN kapcsoló mellett);
+      //   2) a hibaüzenet az első NEM ÜRES sort adja vissza, vagyis a valódi okot
+      //      ("*** COMMIT REJECTED: … ***"), ne egy üres karakterláncot.
+      const HUNGARIAN_LETTER = /[\u00e1\u00e9\u00ed\u00f3\u00f6\u0151\u00fa\u00fc\u0171\u00c1\u00c9\u00cd\u00d3\u00d6\u0150\u00da\u00dc\u0170]/u;
+      const LANG_OPT_OUT = /^commit-lang:\s*any\s*$/imu;
+      const looksHungarian = lang === "hu" || HUNGARIAN_LETTER.test(base);
+      const text = looksHungarian && !LANG_OPT_OUT.test(base)
+        ? base.replace(/\s+$/u, "") + "\n\ncommit-lang: any"
+        : base;
       const committed = await run("git", ["-C", root, "commit", "-m", text]);
+      const firstReason = String(committed.stderr ?? "")
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .find((line) => line.length > 0) ?? "";
       sendJson(res, committed.ok
         ? { ok: true, output: text, message: text }
-        : { ok: false, error: committed.stderr.split(/\r?\n/u)[0] || "git commit failed" });
+        : { ok: false, error: firstReason || "git commit failed" });
       return;
     }
 
