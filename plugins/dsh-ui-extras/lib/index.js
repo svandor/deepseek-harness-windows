@@ -74,7 +74,7 @@
  *
  * The plugin also serves its own static asset directory.
  */
-import { readFileSync, readdirSync, existsSync, writeFileSync, statSync, mkdirSync, copyFileSync, renameSync, appendFileSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, writeFileSync, statSync, mkdirSync, copyFileSync, renameSync, appendFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -1605,7 +1605,7 @@ function persistRuns() {
       const pid = typeof run.pid === "number" ? run.pid : (typeof run.child?.pid === "number" ? run.child.pid : null);
       const survivors = Array.isArray(run.survivors) ? run.survivors.filter((value) => typeof value === "number") : [];
       if (pid === null && survivors.length === 0) continue;
-      const row = { id: run.id, workspace: run.workspace, label: run.label, pid, startedAt: run.startedAt };
+      const row = { id: run.id, workspace: canonicalWorkspace(run.workspace), label: run.label, pid, startedAt: run.startedAt };
       if (survivors.length > 0) row.survivors = survivors;
       rows.push(row);
     }
@@ -1698,6 +1698,11 @@ function restoreRuns() {
     return 0;
   }
   if (Array.isArray(rows) !== true) return 0;
+  // A rekordokat KANONIKUS munkaterület-kulccsal vesszük vissza, hogy a
+  // junctionos `C:`\s alak ne hozzon létre második bejegyzést ugyanarra a projektre.
+  for (const row of rows) {
+    if (typeof row?.workspace === "string") row.workspace = canonicalWorkspace(row.workspace);
+  }
 
   const liveRows = [];
   const orphanRows = [];
@@ -1769,10 +1774,126 @@ function runnablesPath() {
   return join(PACKAGE_ROOT, "..", "..", "state", "runnables.json");
 }
 
-/** Read the configured run commands (per workspace root). */
+/**
+ * Egy munkaterület-útvonal KANONIKUS alakja (junction-feloldással).
+ *
+ * MIÉRT KELL: a `C:\Szerver` junction a `D:\Szerver`-re mutat, ugyanaz a projekt
+ * tehát kétféle kulccsal él a panel állapotfájljaiban (mért 2026-11-13: 14 kulcs,
+ * 9 valódi projekt). A session-tároló már `realpath`-kulcsot használ, a panel
+ * viszont a kliens által küldött literális útvonalat mentette — így ugyanaz a
+ * projekt duplán jelent meg. A `realpathSync.native` az OS igazi útját adja
+ * (Windows alatt fel is oldja a junctiont és a valódi betűzést).
+ *
+ * Ha az útvonal nem létezik (törölt projekt), a bemenetet adja vissza: a
+ * kanonizálás soha nem dob, mert a panel memóriája nem halhat meg egy hiányzó
+ * mappától.
+ * @param value - a nyers munkaterület-útvonal.
+ * @returns a kanonikus útvonal, vagy a bemenet, ha nem oldható fel.
+ */
+function canonicalWorkspace(value) {
+  if (typeof value !== "string" || value.length === 0) return "";
+  try {
+    return typeof realpathSync.native === "function" ? realpathSync.native(value) : realpathSync(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * Egyszeri kulcs-kanonizálás a panel állapotfájljaiban.
+ *
+ * A `panel-layout.json` kulcsai a kliens literális útvonalai voltak, ezért a
+ * `C:`\s és `D:`\s változat külön bejegyzésként élt. Itt egyszer összevonjuk
+ * (a bővebb bejegyzés nyer), és a további írások már a `handleLayout`
+ * kanonizálásán mennek át.
+ * @returns {{layout: number, runnables: number, runs: number}} összevont kulcsok
+ */
+function migrateWorkspaceKeys() {
+  const result = { layout: 0, runnables: 0, runs: 0 };
+  // 1) panel-layout.json
+  const layout = readLayout();
+  /** @type {Record<string, any>} */
+  const mergedLayout = {};
+  let layoutChanged = false;
+  for (const [key, value] of Object.entries(layout)) {
+    const canonical = canonicalWorkspace(key);
+    if (canonical !== key) {
+      result.layout++;
+      layoutChanged = true;
+    }
+    const previous = mergedLayout[canonical];
+    mergedLayout[canonical] = previous === undefined ? value : { ...previous, ...value };
+  }
+  if (layoutChanged) {
+    try {
+      writeFileSync(layoutPath(), JSON.stringify(mergedLayout, null, 2), "utf8");
+    } catch {
+      /* a mentés hibája nem hathat a bootra */
+    }
+  }
+  // 2) runnables.json — a `readRunnables()` olvasáskor már kanonizál, ezért itt
+  // csak azt nézzük, történt-e változás, és ha igen, kiírjuk a kanonikus alakot.
+  let raw = null;
+  try {
+    raw = JSON.parse(readFileSync(runnablesPath(), "utf8"));
+  } catch {
+    raw = null;
+  }
+  if (raw !== null && typeof raw === "object") {
+    const keys = Object.keys(raw);
+    const canonicalKeys = keys.map((key) => canonicalWorkspace(key));
+    if (canonicalKeys.some((key, index) => key !== keys[index])) {
+      result.runnables = canonicalKeys.filter((key, index) => key !== keys[index]).length;
+      writeRunnables(readRunnables());
+    }
+  }
+  // 3) runs.json — a visszatöltés a rekord munkaterületét is kanonizálja, itt
+  // csak a fájlt igazítjuk, hogy a következő boot már tiszta kulcsot olvasson.
+  let runs = null;
+  try {
+    runs = JSON.parse(readFileSync(runsFilePath(), "utf8"));
+  } catch {
+    runs = null;
+  }
+  if (Array.isArray(runs)) {
+    let changed = false;
+    for (const row of runs) {
+      if (typeof row?.workspace !== "string") continue;
+      const canonical = canonicalWorkspace(row.workspace);
+      if (canonical !== row.workspace) {
+        row.workspace = canonical;
+        result.runs++;
+        changed = true;
+      }
+    }
+    if (changed) {
+      try {
+        writeFileSync(runsFilePath(), JSON.stringify(runs, null, 2), "utf8");
+      } catch {
+        /* nem kritikus */
+      }
+    }
+  }
+  return result;
+}
+
+/** Read the configured run commands (per workspace root), kanonikus kulcsokkal. */
 function readRunnables() {
   try {
-    return JSON.parse(readFileSync(runnablesPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync(runnablesPath(), "utf8"));
+    if (parsed === null || typeof parsed !== "object") return {};
+    /** @type {Record<string, any[]>} */
+    const merged = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      const canonical = canonicalWorkspace(key);
+      const bucket = Array.isArray(merged[canonical]) ? merged[canonical] : [];
+      const ids = new Set(bucket.map((entry) => entry?.id));
+      for (const entry of Array.isArray(value) ? value : []) {
+        if (ids.has(entry?.id) !== true) bucket.push(entry);
+      }
+      merged[canonical] = bucket;
+    }
+    return merged;
   } catch {
     return {};
   }
@@ -1831,6 +1952,10 @@ function runnablesOf(workspace) {
  */
 function startRun(workspace, command) {
   const id = "run-" + String(++runSequence);
+  // A futás a KANONIKUS útvonalat kapja (junction-feloldás), különben ugyanaz a
+  // projekt két külön terminál-fakként és két `runs.json`-rekordként élne.
+  const canonical = canonicalWorkspace(workspace);
+  const cwd = canonical.length > 0 ? canonical : workspace;
   const shell = process.platform === "win32" ? "powershell.exe" : "/bin/sh";
   // `-NoExit -Command -` reads statements from stdin and keeps the session.
   const shellArgs = process.platform === "win32"
@@ -1844,7 +1969,7 @@ function startRun(workspace, command) {
   // lets a stop signal reach the commands it started (`killRun`); on Windows it
   // would open a console window, and the tree is taken by `taskkill /T` instead.
   const child = spawn(shell, shellArgs, {
-    cwd: workspace,
+    cwd,
     windowsHide: true,
     detached: process.platform !== "win32",
     stdio: ["pipe", "pipe", "pipe"]
@@ -1852,7 +1977,7 @@ function startRun(workspace, command) {
 
   const run = {
     id,
-    workspace,
+    workspace: cwd,
     command: command ?? "",
     label: command && command.length > 0 ? command : "shell",
     startedAt: new Date().toISOString(),
@@ -3893,7 +4018,8 @@ function readLayout() {
  * own state without a host change.
  */
 function handleLayout(req, res, url) {
-  const workspace = url.searchParams.get("workspace") ?? "";
+  // Kanonikus kulcs: a `C:`\s és `D:`\s írásmód ugyanaz a projekt legyen.
+  const workspace = canonicalWorkspace(url.searchParams.get("workspace") ?? "");
   if (!workspace) {
     sendJson(res, { ok: false, error: "hianyzik a workspace parameter" });
     return;
@@ -4475,6 +4601,16 @@ function apply(ctx) {
     restoreRuns();
   } catch (error) {
     diagLine(`runs: a visszatoltes hibara futott: ${String(error?.message ?? error)}`);
+  }
+  // Egyszeri kulcs-kanonizálás: a panel állapotfájljaiban a `C:`\s / `D:`\s
+  // írásmód ugyanazt a projektet jelentette, ezért dupla bejegyzések voltak.
+  try {
+    const migrated = migrateWorkspaceKeys();
+    if (migrated.layout + migrated.runnables + migrated.runs > 0) {
+      diagLine(`workspace-kulcsok kanonizalva: layout=${migrated.layout} runnables=${migrated.runnables} runs=${migrated.runs}`);
+    }
+  } catch (error) {
+    diagLine(`workspace-kulcsok kanonizalasa hibara futott: ${String(error?.message ?? error)}`);
   }
   ctx.effect(() => startTerminalMailbox(), "ui-extras: terminal mailbox");
   diagLine("apply: terminal mailbox elindult");
