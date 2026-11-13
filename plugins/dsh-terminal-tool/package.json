@@ -1,0 +1,18 @@
+{
+  "name": "dsh-terminal-tool",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent-oldali `terminal` tool: a DSH beépített terminál-paneljében futtat és ír be (fájl-postafiókon keresztül, síkfüggetlenül).",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.2"
+  },
+  "license": "MIT"
+}
