@@ -74,7 +74,7 @@
  *
  * The plugin also serves its own static asset directory.
  */
-import { readFileSync, readdirSync, existsSync, writeFileSync, statSync, mkdirSync, copyFileSync, renameSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, writeFileSync, statSync, mkdirSync, copyFileSync, renameSync, appendFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -1568,6 +1568,185 @@ function safeReadFile(path) {
 const RUNS = new Map();
 let runSequence = 0;
 
+/**
+ * A panel-futások metaadata, ami TÚLÉLI a harness folyamatot.
+ *
+ * MIÉRT KELL: a `RUNS` szándékosan memóriabeli, a panel viszont hosszú életű
+ * folyamatokat indít (`npm run dev`, `npm run build`). Harness-restart után
+ * eddig a rekord NYOM NÉLKÜL eltűnt, a folyamat pedig árvaként tovább élt: a
+ * panelben nem látszott, csak `taskkill`-lel lehetett elérni. Mért eset
+ * (2026-11-13): két `vite` futott (5173/5174), a panelben egyik sem — a
+ * felhasználó joggal hitte, hogy eltűnt a munkája.
+ *
+ * A fájl a héjak pid-jét és a megtalált túlélő gyerekeket (`survivors`) tárolja:
+ * a héj ugyanis a restartkor kilép, a gyerekei viszont maradnak, és csak a
+ * munkaterület-útvonaluk alapján azonosíthatók újra.
+ */
+function runsFilePath() {
+  return join(PACKAGE_ROOT, "..", "..", "state", "runs.json");
+}
+
+/**
+ * A jelenleg futó panel-héjak kiírása a `state\runs.json`-ba.
+ *
+ * Egy rekord akkor is megmarad, ha a héj már nincs meg, de a gyerekei élnek
+ * (`survivors`): különben a visszatöltés utáni első kiírás elfelejtené őket, és
+ * a KÖVETKEZŐ restartnál megint láthatatlan árvák lennének.
+ */
+function persistRuns() {
+  try {
+    const rows = [];
+    for (const run of RUNS.values()) {
+      if (run.done === true) continue;
+      const pid = typeof run.pid === "number" ? run.pid : (typeof run.child?.pid === "number" ? run.child.pid : null);
+      const survivors = Array.isArray(run.survivors) ? run.survivors.filter((value) => typeof value === "number") : [];
+      if (pid === null && survivors.length === 0) continue;
+      const row = { id: run.id, workspace: run.workspace, label: run.label, pid, startedAt: run.startedAt };
+      if (survivors.length > 0) row.survivors = survivors;
+      rows.push(row);
+    }
+    writeFileSync(runsFilePath(), JSON.stringify(rows, null, 2), "utf8");
+  } catch {
+    /* a tárolás hibája nem hathat a panelre */
+  }
+}
+
+/**
+ * Túlélő folyamatok keresése munkaterület szerint, EGYETLEN CIM-hívással.
+ *
+ * MIÉRT KELL: a panel-héj (`powershell -NoExit -Command -`) a szülő halálakor
+ * EOF-ot kap a stdin-en és KILÉP, a gyerekei (`npm`, `vite`) viszont tovább
+ * élnek — a pid-jüket senki nem mentette el. Ezért bootkor a parancssor
+ * munkaterület-útvonalára illesztünk: a `vite` parancssora hordozza a projekt
+ * útvonalát (`…\node_modules\.bin\..\vite\bin\vite.js`). Mért eset
+ * (2026-11-13): két `vite` (5173/5174) élte túl a restartot, a panelben egyik
+ * sem látszott.
+ * @param workspaces - a vizsgálandó munkaterület-útvonalak.
+ * @returns {Map<string, number[]>} munkaterület -> élő pid-ek.
+ */
+function survivorPidsByWorkspace(workspaces) {
+  const result = new Map();
+  const wanted = workspaces.filter((value) => typeof value === "string" && value.length > 3);
+  if (process.platform !== "win32" || wanted.length === 0) return result;
+  try {
+    const list = wanted.map((value) => "'" + value.replace(/'/gu, "''") + "'").join(",");
+    const script = [
+      `$wanted = @(${list})`,
+      `$skipPid = ${process.pid}`,
+      "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object {",
+      "  $cl = $_.CommandLine",
+      "  if ($null -eq $cl) { return }",
+      // A kereső saját parancssora és a harness is tartalmazhatja az útvonalat.
+      "  if ($_.ProcessId -eq $PID -or $_.ProcessId -eq $skipPid) { return }",
+      "  if ($cl -like '*Get-CimInstance Win32_Process*') { return }",
+      // Héjakat NEM veszünk túlélőnek: egy parancssorában útvonalat említő
+      // terminál nem munkafolyamat, és a leállítása a felhasználó kezét vágná le.
+      "  if ($_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe' -or $_.Name -eq 'conhost.exe' -or $_.Name -eq 'WindowsTerminal.exe') { return }",
+      "  foreach ($w in $wanted) { if ($cl.IndexOf($w, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { Write-Output ($w + '|' + $_.ProcessId + '|' + $_.ParentProcessId); break } }",
+      "}"
+    ].join("\n");
+    const probe = spawnSync("powershell.exe", [
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script
+    ], { windowsHide: true, timeout: 15000, encoding: "utf8" });
+    const matched = [];
+    for (const line of String(probe.stdout ?? "").split(/\r?\n/u)) {
+      const parts = line.split("|");
+      if (parts.length < 3) continue;
+      const pid = Number(parts[parts.length - 2]);
+      const parentPid = Number(parts[parts.length - 1]);
+      const workspace = parts.slice(0, parts.length - 2).join("|");
+      if (Number.isFinite(pid) !== true || pid <= 0) continue;
+      matched.push({ workspace, pid, parentPid });
+    }
+    // Csak a GYÖKEREKET adjuk vissza: ha egy jelölt szülője is jelölt, akkor a
+    // gyereket a szülő `taskkill /T`-je amúgy is elviszi, és így nem lövünk rá
+    // kétszer (egyszer a saját, egyszer a szülő rekordjából).
+    const pids = new Set(matched.map((entry) => entry.pid));
+    const claimedPids = new Set();
+    for (const entry of matched) {
+      if (pids.has(entry.parentPid)) continue;
+      if (claimedPids.has(entry.pid)) continue;
+      claimedPids.add(entry.pid);
+      const bucket = result.get(entry.workspace);
+      if (bucket === undefined) result.set(entry.workspace, [entry.pid]);
+      else if (bucket.includes(entry.pid) !== true) bucket.push(entry.pid);
+    }
+  } catch {
+    /* a keresés hibája nem hathat a bootra */
+  }
+  return result;
+}
+
+/**
+ * A korábbi boot panel-futásainak visszatöltése olvasható rekordként.
+ *
+ * Két eset van: (1) a HÉJ él — ilyenkor a pid-je elég; (2) a héj kilépett
+ * (a restart EOF-ja miatt ez a tipikus), de a gyerekei élnek — ilyenkor a
+ * `survivorPidsByWorkspace()` találja meg őket. Mindkettő recovered rekord
+ * lesz: olvasható, leállítható, de nem írható.
+ * @returns {number} a visszatöltött rekordok száma
+ */
+function restoreRuns() {
+  let rows;
+  try {
+    rows = JSON.parse(readFileSync(runsFilePath(), "utf8"));
+  } catch {
+    return 0;
+  }
+  if (Array.isArray(rows) !== true) return 0;
+
+  const liveRows = [];
+  const orphanRows = [];
+  for (const row of rows) {
+    if (typeof row?.pid === "number" && isAlive(row.pid) === true) liveRows.push(row);
+    else if (typeof row?.workspace === "string" && row.workspace.length > 3) orphanRows.push(row);
+  }
+  const survivorsByWorkspace = orphanRows.length === 0
+    ? new Map()
+    : survivorPidsByWorkspace([...new Set(orphanRows.map((row) => row.workspace))]);
+
+  let restored = 0;
+  const restore = (row, pid, survivors) => {
+    const id = typeof row.id === "string" && row.id.length > 0 ? row.id : "run-" + String(++runSequence);
+    const match = /^run-(\d+)$/u.exec(id);
+    if (match !== null) runSequence = Math.max(runSequence, Number(match[1]));
+    const pidList = survivors.filter((value) => isAlive(value) === true);
+    const note = pid === null
+      ? `(a héj, ami ezt indította, a harness újraindulásakor kilépett — a folyamat viszont ÉL: ${pidList.join(", ")}. A kimenet már nem érhető el és a bemenet nem irányítható, de innen leállítható.)\r\n`
+      : "(ez a futás egy KORÁBBI bootból maradt folyamat. A kimenet már nem érhető el és a bemenet nem irányítható, de a folyamat él — innen leállítható.)\r\n";
+    RUNS.set(id, {
+      id,
+      workspace: typeof row.workspace === "string" ? row.workspace : "",
+      command: "",
+      label: typeof row.label === "string" ? row.label : "shell",
+      startedAt: typeof row.startedAt === "string" ? row.startedAt : new Date().toISOString(),
+      output: note,
+      done: false,
+      code: null,
+      detached: false,
+      promptAt: 0,
+      pid,
+      survivors: pidList,
+      recovered: true,
+      child: null
+    });
+    restored++;
+  };
+
+  for (const row of liveRows) restore(row, row.pid, []);
+  for (const row of orphanRows) {
+    const recorded = Array.isArray(row.survivors) ? row.survivors : [];
+    const found = survivorsByWorkspace.get(row.workspace) ?? [];
+    const survivors = [...new Set([...recorded, ...found])].filter((pid) => isAlive(pid) === true);
+    // Ha a héj és a gyerekek is elmentek, a rekordnak nincs mit mutatnia.
+    if (survivors.length === 0) continue;
+    restore(row, null, survivors);
+  }
+  diagLine(`runs: ${restored} korábbi futás visszatöltve (${rows.length} rekord, ebből ${orphanRows.length} héj nélküli)`);
+  persistRuns();
+  return restored;
+}
+
 /** Append one chunk to a run's bounded output buffer. */
 function appendOutput(run, chunk) {
   run.output += chunk;
@@ -1683,6 +1862,8 @@ function startRun(workspace, command) {
     run.done = true;
     run.code = code;
     appendOutput(run, "\r\n[vege, kilepesi kod: " + String(code) + "]\r\n");
+    run.pid = null;
+    persistRuns();
     // A session that ended is removed after a short grace period, so the panel
     // can still read its last output — but not so long that a closed terminal
     // looks like it came back. `action=forget` removes one immediately.
@@ -1692,6 +1873,10 @@ function startRun(workspace, command) {
   });
 
   RUNS.set(id, run);
+  // A pid azért kerül a rekordba, hogy a következő boot vissza tudja tölteni:
+  // a panel-futás így akkor sem tűnik el a szem elől, ha a harness újraindul.
+  run.pid = typeof child.pid === "number" ? child.pid : null;
+  persistRuns();
   // Several terminals can run at once, so the history is deeper than a single
   // command's would need to be.
   if (RUNS.size > 24) {
@@ -1725,15 +1910,20 @@ function startRun(workspace, command) {
  * repeating the result.
  */
 function writeToRun(run, text) {
+  if (run.recovered === true) return { ok: false, error: "ez a futas egy korabbi bootbol maradt folyamat: a bemenete nem iranyithato (allitsd le, es indits ujat)" };
   if (run.done === true) return { ok: false, error: "a folyamat mar lezarult" };
   if (!run.child || !run.child.stdin) return { ok: false, error: "a folyamat bemenete nem iranyithato" };
   const payload = text.endsWith("\n") ? text : text + "\n";
+  // MÉRT HIBA (2026-11-13): a felhasználó szerint „amit beírok, az elveszik".
+  // A héj `-NoExit -Command -` módban CSŐVEZETÉKEN nem echo-zik, ezért a beírt
+  // sor soha nem jelent meg a panelen. Ezért a host maga rajzolja ki a sort
+  // (ugyanúgy, ahogy egy terminál tenne), a kimenet pedig utána jön.
+  run.output += "\r\n> " + payload.replace(/\n$/u, "") + "\r\n";
+  if (run.output.length > 200000) run.output = run.output.slice(-200000);
   run.promptAt = run.output.length;
   run.echoAt = null;
   run.child.stdin.write(payload);
-  // The shell echoes the line back as it reads it; that echo is the boundary.
-  // A timer because the echo is written asynchronously, and the write must not
-  // block on it.
+  // A héj visszhangja aszinkron; a határt nem blokkolva jelöljük.
   const before = run.output.length;
   setTimeout(() => {
     if (run.echoAt === null && run.output.length > before) run.echoAt = before;
@@ -1796,7 +1986,71 @@ function descendantPids(rootPid) {
  * @param run - the registry entry.
  * @returns null on success, or the failure text.
  */
+/**
+ * Egy KORÁBBI bootból maradt futás leállítása.
+ *
+ * Két eset: (1) a héj pid-je él; (2) a héj kilépett, de a `survivors` listán
+ * szereplő gyerekek élnek (a `-NoExit` héj a szülő halálakor EOF-ot kap és
+ * kilép, a `vite` viszont marad). A pid újrahasznosítható, ezért NEM elég a
+ * `taskkill`: a parancssort is ellenőrizzük (CIM) — a héjnál `-NoExit`, a
+ * túlélőknél a munkaterület útvonala —, és csak egyezés esetén lövünk. Ha már
+ * nem egyezik, azt a pid-et kihagyjuk: az idegen folyamat életéhez nem nyúlunk.
+ * @param run - a visszatöltött (recovered) futás rekordja.
+ * @returns {string|null} hibaüzenet vagy null.
+ */
+function killRecoveredRun(run) {
+  if (process.platform !== "win32") return "csak Windows alatt tamogatott";
+  /** @type {{pid: number, needle: string}[]} */
+  const targets = [];
+  if (typeof run.pid === "number") targets.push({ pid: run.pid, needle: "-NoExit" });
+  for (const pid of Array.isArray(run.survivors) ? run.survivors : []) {
+    if (typeof pid === "number" && targets.some((entry) => entry.pid === pid) !== true) {
+      targets.push({ pid, needle: String(run.workspace ?? "") });
+    }
+  }
+  if (targets.length === 0) return "a rekordnak nincs pid-je";
+  const killed = [];
+  const skipped = [];
+  for (const target of targets) {
+    if (isAlive(target.pid) !== true) continue;
+    let commandLine = "";
+    try {
+      const probe = spawnSync("powershell.exe", [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+        `(Get-CimInstance Win32_Process -Filter 'ProcessId=${target.pid}').CommandLine`
+      ], { windowsHide: true, timeout: 8000, encoding: "utf8" });
+      commandLine = String(probe.stdout ?? "");
+    } catch {
+      commandLine = "";
+    }
+    const matches = target.needle.length > 0
+      && commandLine.toLowerCase().includes(target.needle.toLowerCase());
+    if (matches !== true) {
+      skipped.push(target.pid);
+      continue;
+    }
+    const result = spawnSync("taskkill", ["/F", "/T", "/PID", String(target.pid)], { windowsHide: true, timeout: 10000 });
+    run.evidence = { strategy: "recovered: verified taskkill /F /T", pid: target.pid, status: result.status };
+    if (isAlive(target.pid) !== true) killed.push(target.pid);
+    else skipped.push(target.pid);
+  }
+  const stillAlive = targets.filter((target) => isAlive(target.pid) === true).map((target) => target.pid);
+  run.survivors = stillAlive;
+  if (stillAlive.length > 0) {
+    persistRuns();
+    appendOutput(run, `\r\n[reszben leallitva: ${killed.join(", ") || "semmi"}; meg el: ${stillAlive.join(", ")}]\r\n`);
+    return `a folyamat egy resze nem vette a leallitast (el: ${stillAlive.join(", ")})`;
+  }
+  run.done = true;
+  run.code = 0;
+  run.pid = null;
+  appendOutput(run, `\r\n[leallitva: ${killed.join(", ") || "a folyamat mar nem elt"}]\r\n`);
+  persistRuns();
+  return null;
+}
+
 function killRun(run) {
+  if (run?.recovered === true) return killRecoveredRun(run);
   const child = run?.child;
   if (child === undefined || child === null) return null;
   try {
@@ -1939,6 +2193,9 @@ async function handleCmd(req, res, url) {
           promptAt: run.promptAt,
           echoAt: run.echoAt === null || run.echoAt === undefined ? null : run.echoAt,
           length: run.output.length,
+          // A korábbi bootból visszatöltött futás: a panel innen tudhatja, hogy
+          // a bemenet nem irányítható, csak leállítható.
+          recovered: run.recovered === true,
           output: run.output
         });
       }
@@ -3880,11 +4137,336 @@ function resolveDshBin() {
 }
 
 /** Host plugin body: register the routes. */
+// ------------------------------------------------------- ágens-terminál (2026-11-13)
+
+/**
+ * MIÉRT: eddig a "futtatás" panel csak a böngészőből volt használható, az ágens
+ * (a DSH saját modellje) nem tudott benne futtatni. Ez a tool UGYANAZT a `RUNS`
+ * nyilvántartást használja, amit a panel, ezért az ágens ugyanabban a
+ * terminálban dolgozik, amit a felhasználó lát — és a parancs megjelenik a
+ * panelen (a host echo-zza, mert a csővezetékes héj nem tesz ilyet).
+ *
+ * `action=insert` szándékosan ENTER NÉLKÜL írja be a parancsot: a felhasználó
+ * látja, és ő indítja el. Az `action=run` azonnal futtat és visszaadja a
+ * kimenetet.
+ */
+
+/** Az utolsó munkaterület, ahol a panel terminált indított. */
+let lastRunWorkspace = null;
+
+/**
+ * Egy sor a plugin saját diagnosztikájába. MIÉRT: a `terminal` tool
+ * regisztrációja csendben kimaradt (2026-11-13), és a plugin `ctx.logger`-je nem
+ * hagy nyomot a harness naplójában — így nem lehetett kideríteni, hol áll meg.
+ * A fájl a repó `state\` mappájába megy (a PACKAGE_ROOT-ból számolva).
+ * @param {string} line
+ */
+function diagLine(line) {
+  try {
+    const dir = join(PACKAGE_ROOT, "..", "..", "state");
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, "ui-extras-terminal-diag.log"), `${new Date().toISOString()} ${line}\n`, "utf8");
+  } catch {
+    /* a diagnosztika soha nem hathat a bootra */
+  }
+}
+
+/** A legfrissebb élő futás, vagy null. */
+function latestLiveRun() {
+  let best = null;
+  for (const run of RUNS.values()) {
+    if (run.done === true) continue;
+    // A visszatöltött (korábbi bootból maradt) futásba nem lehet írni, ezért a
+    // postafiók `run` kérésének mindig ÚJ, írható héjat kell találnia.
+    if (run.recovered === true) continue;
+    if (best === null || String(run.startedAt) > String(best.startedAt)) best = run;
+  }
+  return best;
+}
+
+/** Egy futás kimenetének vége (a panel 200 kB-os puffere miatt elég a farok). */
+function outputTail(run, limit = 8000) {
+  const text = String(run?.output ?? "");
+  return text.length > limit ? `…${text.slice(-limit)}` : text;
+}
+
+/** @returns {Promise<void>} */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * A `terminal` tool regisztrálása. Hibatűrő: ha a tools szolgáltatás vagy a
+ * `defineTool` nem érhető el, a plugin többi része akkor is működik.
+ * @param {object} ctx
+ */
+async function registerTerminalTool(ctx) {
+  if (ctx?.tools === undefined || typeof ctx.tools.register !== "function") {
+    diagLine(`register: nincs tools (ctx.tools=${ctx?.tools === undefined ? "undefined" : typeof ctx.tools})`);
+    return;
+  }
+  /** @type {(definition: object) => object} */
+  let defineTool = (definition) => definition;
+  try {
+    const module = await import("@deepseek-ai/dsh-tools");
+    if (typeof module.defineTool === "function") defineTool = module.defineTool;
+  } catch {
+    /* a nyers definíció is elfogadható */
+  }
+
+  const asText = (text) => [{ type: "text", text }];
+
+  try {
+    ctx.tools.register(defineTool({
+      name: "terminal",
+      description: "Run and type in the DSH built-in terminal panel (the same panel the user sees). "
+        + "action=run: start or reuse a terminal for the workspace, type the command, wait, and return the output. "
+        + "action=insert: type the command into the panel WITHOUT pressing Enter, so the user can start it. "
+        + "action=input: send a line to the running shell. action=output: read the recent output. "
+        + "action=stop: stop the run and its process tree. action=list: list live runs.",
+      parameters: {
+        action: { type: "string", required: true, description: "run | insert | input | output | stop | list" },
+        command: { type: "string", description: "Command (or text) to send. Omit for output/stop/list." },
+        workspace: { type: "string", description: "Workspace root; defaults to the panel's last workspace." },
+        wait_ms: { type: "number", description: "action=run: how long to wait for output (200..30000 ms, default 3000)." }
+      },
+      async execute(args) {
+        const action = String(args?.action ?? "output").toLowerCase();
+        const command = typeof args?.command === "string" ? args.command : "";
+        const explicit = typeof args?.workspace === "string" && args.workspace.length > 0 ? args.workspace : null;
+        const workspace = explicit ?? lastRunWorkspace ?? process.cwd();
+
+        if (action === "list") {
+          const lines = [...RUNS.values()].map((run) => `${run.id}  ${run.workspace}  ${run.done ? `kész (${run.code})` : "fut"}  ${run.label}`);
+          return asText(lines.length > 0 ? lines.join("\n") : "nincs terminál-futás");
+        }
+
+        let run = latestLiveRun();
+
+        if (action === "run") {
+          if (run === null || run.workspace !== workspace) {
+            const id = startRun(workspace, null);
+            run = RUNS.get(id) ?? null;
+          }
+          if (run === null) return asText("nem indult el a terminál");
+          lastRunWorkspace = workspace;
+          if (command.length > 0) writeToRun(run, command);
+          const waitMs = Math.min(Math.max(Number(args?.wait_ms ?? 3000), 200), 30000);
+          await sleep(waitMs);
+          return asText(`workspace: ${workspace}\nrun: ${run.id}\n> ${command}\n\n${outputTail(run)}`);
+        }
+
+        if (run === null) return asText("nincs élő terminál-futás — előbb action=run (vagy nyisd meg a panel terminálját)");
+
+        if (action === "insert") {
+          if (command.length === 0) return asText("az insert parancsot kér (command)");
+          // ENTER NÉLKÜL: a héj a sort puffereli, a felhasználó Enterje futtatja.
+          // A host echo-zza, mert a csővezetékes héj nem tenné.
+          run.output += `\r\n> ${command}`;
+          if (run.output.length > 200000) run.output = run.output.slice(-200000);
+          run.child.stdin.write(command);
+          return asText(`beillesztve a(z) ${run.id} terminálba Enter nélkül: ${command}`);
+        }
+
+        if (action === "input") {
+          if (command.length === 0) return asText("az input parancsot kér (command)");
+          const result = writeToRun(run, command);
+          if (result.ok !== true) return asText(`nem sikerült: ${result.error}`);
+          await sleep(500);
+          return asText(outputTail(run));
+        }
+
+        if (action === "stop") {
+          const failure = killRun(run);
+          return asText(failure === null ? `leállítva: ${run.id}` : `a leállítás nem sikerült: ${failure}`);
+        }
+
+        return asText(outputTail(run));
+      }
+    }));
+  } catch (error) {
+    ctx?.logger?.warn?.(`[ui-extras] a terminal tool nem regisztrálható: ${String(error)}`);
+  }
+}
+
+// ------------------------------------------------- ágens-terminál postafiók (2026-11-13)
+
+/**
+ * MIÉRT fájl és nem HTTP: az ágens toolja az **AGENT-síkon** fut (a preset
+ * kompozíciójában), a panel `RUNS` állapota a **HOST-síkon** él. A két sík
+ * között nincs közös szolgáltatás (a preset `isolate` realmjei miatt), a HTTP
+ * végpont pedig tokent kérne. Egy kérés/válasz fájlpár determinisztikus,
+ * síkfüggetlen, és nem igényel hitelesítést.
+ *
+ * A host itt figyeli a `state\terminal-request.json`-t, végrehajtja a kérést a
+ * panel `RUNS` nyilvántartásán, és a `state\terminal-response.json`-ba írja a
+ * választ. Az agent-oldali tool (`plugins\dsh-terminal-tool`) ezt a fájlpárt
+ * használja.
+ */
+const handledMailboxIds = new Set();
+
+/** A postafiók fájlpárjai a repó `state\` mappájában. */
+function terminalMailboxPaths() {
+  const stateDir = join(PACKAGE_ROOT, "..", "..", "state");
+  return {
+    request: join(stateDir, "terminal-request.json"),
+    response: join(stateDir, "terminal-response.json")
+  };
+}
+
+/** @param {object} payload */
+function writeTerminalResponse(payload) {
+  try {
+    const { response } = terminalMailboxPaths();
+    writeFileSync(response, JSON.stringify(payload), "utf8");
+  } catch {
+    /* a postafiók hibája nem hathat a panelre */
+  }
+}
+
+/**
+ * Egy postafiók-kérés végrehajtása a panel állapotán.
+ * @param {object} request
+ * @returns {Promise<object>} a válasz törzse
+ */
+async function runMailboxAction(request) {
+  const action = String(request?.action ?? "output").toLowerCase();
+  const command = typeof request?.command === "string" ? request.command : "";
+  const workspace = typeof request?.workspace === "string" && request.workspace.length > 0
+    ? request.workspace
+    : (lastRunWorkspace ?? process.cwd());
+
+  if (action === "list") {
+    return {
+      ok: true,
+      runs: [...RUNS.values()].map((run) => ({
+        id: run.id,
+        workspace: run.workspace,
+        done: run.done === true,
+        code: run.code,
+        label: run.label
+      }))
+    };
+  }
+
+  let run = latestLiveRun();
+
+  if (action === "run") {
+    if (run === null || run.workspace !== workspace) {
+      const id = startRun(workspace, null);
+      run = RUNS.get(id) ?? null;
+    }
+    if (run === null) return { ok: false, error: "nem indult el a terminál" };
+    lastRunWorkspace = workspace;
+    if (command.length > 0) writeToRun(run, command);
+    const waitMs = Math.min(Math.max(Number(request?.waitMs ?? 3000), 200), 30000);
+    await sleep(waitMs);
+    return { ok: true, runId: run.id, workspace, output: outputTail(run) };
+  }
+
+  if (run === null) return { ok: false, error: "nincs élő terminál-futás; előbb action=run" };
+
+  if (action === "insert") {
+    if (command.length === 0) return { ok: false, error: "az insert parancsot kér (command)" };
+    // ENTER NÉLKÜL: a héj puffereli a sort, a felhasználó Enterje futtatja.
+    // A host echo-zza, mert a csővezetékes héj nem tenné.
+    run.output += `\r\n> ${command}`;
+    if (run.output.length > 200000) run.output = run.output.slice(-200000);
+    run.child.stdin.write(command);
+    return { ok: true, runId: run.id, output: `beillesztve Enter nélkül: ${command}` };
+  }
+
+  if (action === "input") {
+    if (command.length === 0) return { ok: false, error: "az input parancsot kér (command)" };
+    const result = writeToRun(run, command);
+    if (result.ok !== true) return { ok: false, error: result.error };
+    await sleep(500);
+    return { ok: true, runId: run.id, output: outputTail(run) };
+  }
+
+  if (action === "stop") {
+    const failure = killRun(run);
+    return failure === null
+      ? { ok: true, runId: run.id, output: `leállítva: ${run.id}` }
+      : { ok: false, error: `a leállítás nem sikerült: ${failure}` };
+  }
+
+  return { ok: true, runId: run.id, output: outputTail(run) };
+}
+
+/** Egy kérés kiszolgálása, ha új (az `id` a deduplikáció kulcsa). */
+async function drainTerminalMailbox() {
+  const { request: requestPath } = terminalMailboxPaths();
+  let request;
+  try {
+    request = JSON.parse(readFileSync(requestPath, "utf8"));
+  } catch {
+    return; // nincs kérés (vagy félig írt) — ez a normál eset
+  }
+  const id = request?.id;
+  if (typeof id !== "string" || id.length === 0 || handledMailboxIds.has(id)) return;
+  // ELAVULT KÉRÉS ELDOBÁSA. A kérésfájl a lemezen marad, a `handledMailboxIds`
+  // viszont MEMÓRIABELI, ezért a harness újraindulásakor (üres halmaz) a
+  // legutolsó kérést újra végrehajtaná. Mért eset (2026-11-13, 21:15:56Z):
+  // egy korábbi `insert` a boot UTÁN újra beíródott a panelbe — `run` esetén ez
+  // minden bootnál lefuttatna egy parancsot. Ezért a 30 s-nál régebbi kérést
+  // eldobjuk (a tool oldalán egy kérés élettartama legfeljebb ~38 s).
+  let requestAgeMs = 0;
+  try {
+    requestAgeMs = Date.now() - statSync(requestPath).mtimeMs;
+  } catch {
+    /* olvashatatlan mtime esetén nem dobjuk el */
+  }
+  if (requestAgeMs > 30000) {
+    diagLine(`mailbox: elavult kérés eldobva (${Math.round(requestAgeMs / 1000)} s) id=${id}`);
+    return;
+  }
+  handledMailboxIds.add(id);
+  if (handledMailboxIds.size > 64) {
+    const oldest = handledMailboxIds.values().next().value;
+    if (oldest !== undefined) handledMailboxIds.delete(oldest);
+  }
+  diagLine(`mailbox: ${String(request.action)} id=${id}`);
+  try {
+    const result = await runMailboxAction(request);
+    writeTerminalResponse({ id, ...result });
+  } catch (error) {
+    writeTerminalResponse({ id, ok: false, error: String(error?.message ?? error) });
+  }
+}
+
+/**
+ * A postafiók figyelése. A `ctx.effect` miatt a plugin leszerelésekor leáll.
+ * @returns {() => void} disposer
+ */
+function startTerminalMailbox() {
+  const timer = setInterval(() => {
+    void drainTerminalMailbox();
+  }, 250);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
 function apply(ctx) {
   // The answerer is registered BEFORE the web-server guard: remembering an
   // approval type is useful even in a composition without a browser route, and
   // losing it silently would reintroduce the repeated prompt.
   ctx.effect(() => installApprovalAnswerer(ctx), "ui-extras: remembered approvals");
+
+  // ── ágens-terminál: HOST oldal ─────────────────────────────────────────
+  // A host-síkon NEM regisztrálunk agent-toolt: az ágens tool-listája a preset
+  // (agent-plane) kompozícióból jön, ezért a `terminal` toolt a
+  // `plugins\dsh-terminal-tool` adja, a preset-bejegyzéssel. Itt csak a
+  // postafiók figyelése van, ami a panel `RUNS` állapotát szolgálja ki.
+  // A korábbi boot panel-futásainak visszatöltése ELŐBB, mint a postafiók
+  // elindul: így a `list` már a valós, túlélő futásokat is mutatja.
+  try {
+    restoreRuns();
+  } catch (error) {
+    diagLine(`runs: a visszatoltes hibara futott: ${String(error?.message ?? error)}`);
+  }
+  ctx.effect(() => startTerminalMailbox(), "ui-extras: terminal mailbox");
+  diagLine("apply: terminal mailbox elindult");
 
   if (ctx.webServer === undefined) return;
 
