@@ -174,7 +174,35 @@ canonicalization differs because of the junction) opens a new project
 directory. The migration is therefore not theoretical: the two directories have
 to be merged under the canonical key.
 
-### 6.4 Session store merge — REVERTED (2026-11-13)
+### 6.4 Session store merge — REVERTED, THEN DONE THE RIGHT WAY
+
+> **Status 2026-11-13 12:20:** after the faulty attempt below, the correct method
+> (`tools\canonicalize-session-store.mjs`) **ran**: 1184 sessions moved under the
+> canonical key with the header `cwd` rewritten alongside, and the full check
+> reports **1188/1188 consistent**. Details: 6.4.2.
+
+#### 6.4.2 The correct method and its two side effects (2026-11-13, done)
+
+The core verifies that the path derived from the header `cwd` **equals** the
+physical location (`assertStoredIdentity`, `:3246–3257`), so both must change
+together:
+
+1. `tools\canonicalize-session-store.mjs` rewrites the header-frame `cwd` to the
+   canonical (realpath) path — only the first frame is recompressed, the rest is
+   byte-identical — then moves the session under the canonical key;
+2. **ordering bug fixed:** writing the header **updates the file mtime**, and the
+   session list sorts by it, so 1108 sessions appeared as "just now" and the order
+   was scrambled (measured: `2026-11-13 12:20:21` instead of `2026-10-23 17:33`).
+   Fix: `tools\restore-session-mtimes.mjs` restores the timestamps from the backup
+   (**1107 files**); directory timestamps need no change (the move preserved them);
+3. **ordering bug during the operation:** the first version rewrote the header
+   before renaming the directory; for 4 sessions held open by the running harness
+   the rename failed with `EPERM` while the header already said `D:\…` → 4
+   sessions inconsistent. Restored from the backup, and the tool now **reverts the
+   header when the rename fails**.
+
+Result: **17 project directories → 10, all canonical**; the seven `--C-…--`
+directories are empty; the full check is **1188/1188 consistent**.
 
 `tools\merge-session-store.mjs` — the pairing is based **not on the directory
 name** (lossy encoding) but on each session header's `cwd` field, with the
@@ -322,6 +350,244 @@ in the core. In order of measured impact:
 5. **A cap on `this.log`** via checkpoint + truncation (which needs design
    because of the `seq = log.length` contract), and paging for `eventsSnapshot`
    on large sessions.
+
+### 7.1 Why a `this.log` cap is NOT a local patch (code analysis, 2026-11-13)
+
+The request is legitimate, but per the code it **cannot be patched here** — and
+it is better to know that than to ship half a solution:
+
+- `dsh-session/lib/index.js:1200` — `this.log.push(event)` grows **without any
+  limit**; there is no `MAX_`, `truncate` or memory checkpoint in the file.
+- The `log` is the session's **authoritative event list**, with the `seq`
+  contract `seq = log.length` (`get seq()`, `:1129–1132`). Truncation would need a
+  `logStart` base offset and a rewrite of **every** `seq` consumer (`eventAt`,
+  `snapshotEvents`, persistence contiguity, projections).
+- Scanning the `snapshotEvents`/`ownEvents` consumers shows **~35 packages** call
+  them (agent-loop, api-session-controller, compaction, goal, subagent,
+  session-query, tools, …), so the API change is a large, co-designed effort.
+
+**What already bounds memory today:** protocol-level compaction
+(`compaction/start|replace|prune`, `:89–92`) — long sessions are compacted on
+disk, and reopening loads the reduced event set. The practical lever is therefore
+the **compaction policy**, not a new cap.
+
+**`eventsSnapshot` (dsh-session:1109)** copies an array of references (~8 bytes
+per event; ~0.8 MB at 100k events) and is invalidated on every append — cheap;
+paging only makes sense in the API layer.
+
+So the `this.log` cap is an **upstream, co-designed change** (introducing
+`logStart`), not a local patch. The gain available locally is tuning the
+compaction policy — which is core configuration, not wrapper code.
+
+### 6.8 The 6.7 GB is COMMIT CHARGE, not resident memory (2026-11-13)
+
+The plugin now samples memory **from inside** the process at boot (`boot-mem`
+every 2 s for 60 s). For the same process on 2026-11-13 13:13:
+
+| metric | value | source |
+|---|---|---|
+| **RSS peak** | **825–941 MB** | `process.memoryUsage().rss` (inside) |
+| heapUsed peak | 325 MB | inside |
+| arrayBuffers | ~102 MB | inside |
+| `PrivateMemorySize64` peak | 7 534 MB | outside (`Get-Process`) |
+| t = 60 s | RSS fell to 344 MB | inside |
+
+**Conclusion:** the "6.7 GB memory spike" is **commit charge** (reserved but
+untouched address space), not resident memory. That explains why
+- the byte-copying investigation found nothing (header read: 9.2 MB),
+- the **commit limit** (pagefile) was exhausted while RAM looked idle,
+- the report showed "1.2 → 3.0 → 6.7 → 1.7 GB" swings.
+
+**Criterion 3 is met on the correct metric:** startup resident memory is
+825–941 MB, i.e. **< 1 GB**. The criterion inherited the commit metric from the
+original report; it should be stated as RSS/working set.
+
+**Retracted hypothesis (6.8.1 in the Hungarian original):** removing
+`storages/session_projcache` did **not** reduce the peak (8 566.8 MB without it
+vs 5 853.7 MB with it), so the projection cache is not the cause. The controlled
+experiments with a temporary `DSH_HOME` under-measured the real boot because
+they restore less state — that is why they were misleading.
+
+**Still open:** *why* the commit charge is that large (V8 address-space
+reservation vs. actual allocation). Answering it needs deeper boot-phase
+measurement (`--heap-prof`/`trace-gc`), which requires a restart and a longer
+run; it does not affect functional behaviour.
+
+## 8. Tray and startup (2026-11-13)
+
+Two fixes that came out of today's measurements; they belong to the Windows
+wrapper (`src\DshTray.cs`, `bin\DshTray.exe`), not to the core.
+
+### 8.1 Restoring the panel settings in the tray menu
+
+**Symptom:** the panel settings disappeared from the tray menu — the pane count
+and the robot view could not be toggled.
+
+**Cause, with evidence:** when the launcher switched from the PowerShell tray
+(`tray\dsh-tray.ps1`, which has `panes`/`robotPane`/`robotOnly`, lines 102–105)
+to the native `bin\DshTray.exe` on 2026-10-31, the native menu **did not offer**
+them (it had six items). `git status` shows the tray source was **not** modified
+in this work (`src\DshTray.cs`, 2026-10-31 09:15) — so the regression came from
+that switch, not from today's code.
+
+**Fix** (`src\DshTray.cs`):
+
+- `Ablak felosztása` → **1 / 2 / 3 panes** (check mark on the current one),
+- `4. felület: robot panel` → `--pane-url "<panes>=<robotUrl>"` (the `DshWindow`
+  reads this as pane 4; `MaxPanes = 4`),
+- `Csak robot mód (1 felület)` → `panes = 1` plus the robot pane,
+- persisted into `state\tray-config.json`; `TinyJson.Set()` **only rewrites our
+  own keys**, leaving the rest (`autostart`, `logLevel`) untouched,
+- on change **only the window** reopens — the harness keeps running, no token
+  regeneration.
+
+Verification: the running new tray's log (`state\native-tray.log`):
+`config: port=3080 panes=3 robotPane=False robotOnly=False …`. The old binary is
+backed up at `bin\DshTray.exe.old-20261113-110249`.
+
+### 8.2 Preventing a double start
+
+**Symptom (measured):** two harness instances started on the same port — the
+tray and `restart-harness.ps1 -Force` each started one (24504 won, 35424 died);
+earlier three consecutive starts ran (6988 → 16956 → 14412) because the tray
+retried every ~20 s until a token URL appeared.
+
+**Fix — two sides, one shared gate:**
+
+| Where | What it does |
+|---|---|
+| `src\DshTray.cs` → `EnsureHarness()` | named **mutex** `Global\DshHarnessStart-<port>` (0 ms wait: if someone else is starting, skip) + "fresh `harness.pid` means already starting" (25 s) |
+| `tools\start-harness-once.ps1` (new) | the same mutex + pre-flight (live pid, port in use) + the fresh-pid window; hands the start to `restart-harness.ps1 -NoWait` |
+
+`-NoWait` also fixes the other measured defect: the synchronous call to
+`restart-harness.ps1` **hung** (its child sat at 0 CPU), which is why the
+acceptance test produced no report.
+
+Evidence: with a harness running, `start-harness-once.ps1` prints `a harness már
+fut (pid …) — nincs teendő` and no new process is started.
+
+
+## 10. Agent terminal: the model works in the built-in panel
+
+### 10.1 Architecture, and why a file mailbox
+
+The built-in terminal panel runs on the host side (`plugins\dsh-ui-extras\lib\index.js`) and tracks running terminals in an in-memory `RUNS` registry. The agent (model) cannot call the panel's JavaScript objects directly: the two live in different contexts, and the host-side panel is not exposed as a tool to the agent. They are coupled through a file-based mailbox:
+
+- request: `state\terminal-request.json` — fields: `id`, `action`, plus action-specific parameters
+- response: `state\terminal-response.json` — answers with the same `id`
+- watcher: `startTerminalMailbox()`, polls the request file every 250 ms
+- executor: `runMailboxAction()` against the in-memory `RUNS` registry
+- deduplication: the `handledMailboxIds` set prevents repeated processing of the same `id`
+- diagnostics: `state\ui-extras-terminal-diag.log`
+
+Why a file mailbox instead of direct IPC? The panel is the application UI layer, not a tool registry; the file mailbox needs no new channel into the harness core, and every action is traceable as a file. The host side is already a measured state: the log contains the `apply: terminal mailbox elindult` line.
+
+The preset entry lives on the agent side: `%USERPROFILE%\.dsh\.agent-presets\standard-free\agent.cordis.yml` (`id: tool-terminal`, `name: dsh-terminal-tool`); the plugin loads through the `%USERPROFILE%\.dsh\profiles\node_modules\dsh-terminal-tool` junction from the repo's `plugins\dsh-terminal-tool` folder.
+
+### 10.2 File protocol and actions
+
+The request is a JSON object in `state\terminal-request.json`; the response is an object with the same `id` in `state\terminal-response.json`. Supported actions:
+
+| Action | What it does |
+|---|---|
+| `run` | runs a command in the panel's in-memory terminal |
+| `insert` | types a command into the terminal **without Enter** (the user presses Enter); the host writes an echo to the output (`\r\n> <command>`), because the piped shell does not echo |
+| `input` | sends input to a running process |
+| `output` | reads terminal output |
+| `stop` | stops a run |
+| `list` | lists running terminals |
+
+Agent side (`plugins\dsh-terminal-tool\lib\index.js`, new plugin):
+
+- `inject = ["tools"]`
+- `terminal` tool registered via `defineTool`
+- `sendRequest()` communicates over the mailbox above
+- `sleep()`: `waitMs + 8000 ms` for `run`, `6000 ms` for other actions
+- diagnostics: `state\terminal-tool.log`
+
+Measured working state of the protocol: the `list` request returned two runs (`run-1` = `D:\Szerver\Video`, `run-2` = the repo), and `insert` really typed the command into the panel terminal.
+
+### 10.3 Measured pitfalls
+
+| # | Pitfall | Measured error message / characterization | Fix |
+|---|---|---|---|
+| 1 | `defineTool` used without an `output` declaration | `tool "terminal" must declare output { schema, render, presentationMeta? }` | `output: { schema, render }` is required |
+| 2 | `required: true` on a property in the `output.schema` value DSL | `unsupported JSON schema: schema.properties.text.required is not supported on type "string"` | omit `required` entirely from `output.schema` |
+| 3 | array `required: [...]` in `output.schema` | `unsupported JSON schema: schema.required is not supported by the value schema DSL` | omit `required` entirely from `output.schema` |
+| 4 | `required: true` in `parameters` | — (correct there: `defineTool` converts to JSON Schema via `parameterSchemaSpecToJsonSchema`) | `required: true` stays valid in `parameters` |
+| 5 | `import("@deepseek-ai/dsh-tools")` from the junction folder | Node resolves further imports from the junction's real path (the repo's `plugins\...` folder), which has no `node_modules` (`D:\Szerver\Deepseek Harness\node_modules` does not exist) | `createRequire` candidate list: the plugin's own URL, `process.cwd()`, `process.argv[1]` (harness entry point), then `~\.dsh\profiles\noop.mjs` |
+| 6 | `defineTool` unresolvable | — | fallback: register a raw definition with JSON Schema parameters (`register()` only validates `output.schema`) |
+| 7 | preset entry expected immediately | preset composition loads at SESSION CREATION | visible only in a new session or after a harness restart; the client re-composes on the `tools/change` event |
+| 8 | direct read of `ctx.tools` | `cannot get property "tools" without inject` | `ctx.inject(["tools"], cb)` is the safe pattern |
+| 9 | the request file stays on disk | `handledMailboxIds` is in memory, so after a boot the last request is **executed again** (measured 2026-11-13 21:15:56Z: an earlier `insert` typed itself in again) — for `run` that would execute a command on every boot | the tool deletes `state\terminal-request.json` after the response, AND the host drops requests older than 30 s (`mailbox: elavult kérés eldobva`) |
+
+### 10.4 Installation, verification, removal
+
+From the repo root:
+
+Install:
+```
+pwsh -NoProfile -File plugins\dsh-terminal-tool\install.ps1
+```
+
+Verify — junction, preset entry, node-side `PARAMS-OK` test:
+```
+pwsh -NoProfile -File plugins\dsh-terminal-tool\install.ps1 -Check
+```
+
+Remove:
+```
+pwsh -NoProfile -File plugins\dsh-terminal-tool\install.ps1 -Remove
+```
+
+The installer creates the `%USERPROFILE%\.dsh\profiles\node_modules\dsh-terminal-tool` junction (to the repo's `plugins\dsh-terminal-tool` folder) and the `tool-terminal` / `dsh-terminal-tool` entry in the `%USERPROFILE%\.dsh\.agent-presets\standard-free\agent.cordis.yml` preset.
+
+Manual mailbox test from PowerShell (the response lands in `state\terminal-response.json`):
+
+```
+# list action (measured output: {"id":"…","ok":true,"runs":[…]})
+$req = @{ id=[guid]::NewGuid().ToString(); action='list' } | ConvertTo-Json -Compress
+[IO.File]::WriteAllText((Join-Path $PWD 'state\terminal-request.json'), $req, (New-Object System.Text.UTF8Encoding($false)))
+Start-Sleep -Seconds 2
+Get-Content state\terminal-response.json -Raw
+
+# insert action: the field is named `command`, and it types WITHOUT Enter
+$req = @{ id=[guid]::NewGuid().ToString(); action='insert'; command='git status --short' } | ConvertTo-Json -Compress
+[IO.File]::WriteAllText((Join-Path $PWD 'state\terminal-request.json'), $req, (New-Object System.Text.UTF8Encoding($false)))
+Start-Sleep -Seconds 2
+Get-Content state\terminal-response.json -Raw
+```
+
+Two traps in the manual test: (1) the field is **`command`** — a `text` field is silently ignored and you get the error `az insert parancsot kér (command)`; (2) `Set-Content` writes ANSI in PowerShell 5.1, so UTF-8 must be requested explicitly, otherwise an accented command arrives garbled.
+
+### 10.5 Acceptance status
+
+- **Host side: LIVE (measured).** The mailbox is running: the log contains `apply: terminal mailbox elindult`.
+- **`insert` / `list`: MEASURED WORKING.** The `list` request returned two runs (`run-1` = `D:\Szerver\Video`, `run-2` = the repo), and `insert` really typed the command into the panel terminal.
+- **Agent side (`terminal` tool): VERIFIED (measured 2026-11-13 22:15).** After the harness restart `state\terminal-tool.log` recorded the harness's own mount: `21:15:59.947Z apply: defineTool feloldva (…\dsh-tools\lib\index.js)`, then `apply: a terminal tool beregisztrálva`; the restart itself is evidenced by `state\restart-later.log` line `22:15:47 restart-harness.ps1 -Force elinditva` (new harness pid 36144, started 22:15:51).
+- **FULL CHAIN: VERIFIED.** A `terminal` `action=run` call executed `git status --short` inside the panel's `run-2` run and returned its output (`run: run-2`, `workspace: D:\Szerver\Deepseek Harness`). The command ran in the user's panel, not through the agent's own `pwsh` tool.
+- **When the boot-replay fix (10.3 row 9) takes effect:** the host-side 30 s drop and the tool-side request-file deletion are not active until the next harness restart; until then the manual deletion of `state\terminal-request.json` (or the tool's deletion after a restart) keeps it clean.
+
+### 10.6 A panel run survives the harness restart
+
+`RUNS` is deliberately in-memory — yet the panel starts LONG-lived processes (`npm run dev`, `npm run build`). A restart used to forget them without a trace: the record vanished, the process kept running as an orphan, the panel no longer showed it, and only `taskkill` could reach it. Measured case (2026-11-13): two `vite` instances ran on 5173/5174 and neither appeared in the panel — the user reasonably believed their work was gone. `state\runs.json` closes that gap.
+
+- **Persistence (`persistRuns`):** every started run's `id + workspace + label + pid + startedAt`; rewritten on exit and after a restore. The `survivors` list is persisted too, otherwise the first write after a restore would forget it.
+- **Restore at boot (`restoreRuns`), two branches:** (1) the **shell is alive** → the pid is enough; (2) the **shell has exited** — the typical case, because `powershell -NoExit -Command -` gets **EOF on stdin when its parent dies and exits** — while its children live → `survivorPidsByWorkspace()` finds command lines containing the record's **workspace path** in one hidden CIM call (`vite` carries it: `…\node_modules\.bin\..\vite\bin\vite.js`).
+- **Scan filters:** itself, the harness pid, the scanner's own command line, and the **shells** (`powershell.exe`, `pwsh.exe`, `conhost.exe`, `WindowsTerminal.exe`) are excluded — a terminal that merely mentions a path is not a workload, and killing it would cut the user's hands off. Only **roots** survive the filter: when a candidate's parent is also a candidate, the parent's `taskkill /T` takes the child anyway (this is what drops the `esbuild` helpers).
+- **Stopping (`killRecoveredRun`):** verified per pid — `-NoExit` for the shell, workspace-path equality in the command line for survivors — and only on a match does it run `taskkill /F /T`. A non-matching pid is skipped (foreign processes are never touched) and the remainder is written back to the record.
+- **What it cannot do:** a recovered run's **output cannot be restored** (the pipe is gone) and its **input is not writable**. `writeToRun()` therefore returns a clear error and `latestLiveRun()` skips recovered runs so the `terminal` tool always gets a writable shell.
+
+**Measured acceptance evidence (2026-11-13, 22:34–22:38):**
+
+| Step | Measurement |
+|---|---|
+| restart with 2 records, no shell | `runs: 2 korábbi futás visszatöltve (2 rekord, ebből 2 héj nélküli)` |
+| the panel's list | `run-3` / `run-4` with `recovered: true` and the text "a héj, ami ezt indította, … kilépett — a folyamat viszont ÉL: 46676" |
+| the processes survived | 5173 = `46676`, 5174 = `42540` BOTH before and after the restart |
+| scan accuracy | raw: `46676`, `45352` (esbuild), `42540`, `47544` (esbuild) → after root filtering `D:\Herd…` → 46676, `C:\Herd…` → 42540 |
+| recovered stop | `action=kill&id=run-4` → `{"ok":true,"tree":true}`; 42540 gone, 5174 freed, **5173 untouched** |
+
 
 
 

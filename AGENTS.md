@@ -237,6 +237,73 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-13` — **a panel-futás túléli a harness-restartot** (a felhasználó
+  jelezte: „a gyorsgombbal indítottam és korábban megjelent újraindítás után
+  is"). A `RUNS` szándékosan memóriabeli, ezért a restart után a rekord eltűnt,
+  a folyamat (két `vite` az 5173/5174-en) pedig árvaként tovább élt — a panelben
+  nem látszott, csak `taskkill`-lel lehetett elérni. Javítás
+  (`plugins\dsh-ui-extras\lib\index.js`): `persistRuns()` a `state\runs.json`-ba
+  írja minden futás `id + workspace + label + pid + startedAt + survivors`
+  rekordját; `restoreRuns()` bootkor két ágat kezel — élő **héj** (pid elég),
+  illetve kilépett héj (a `powershell -NoExit -Command -` a szülő halálakor
+  EOF-ot kap a stdin-en és kilép), amikor a `survivorPidsByWorkspace()` egyetlen
+  rejtett CIM-hívással a rekord **munkaterület-útvonalát** keresi a
+  parancssorokban. A kereső kihagyja önmagát, a harness pid-jét és a héjakat
+  (`powershell`/`pwsh`/`conhost`/`WindowsTerminal`), és csak a gyökereket adja
+  vissza (ez szűri ki az `esbuild` segédeket). A `killRecoveredRun()` pid-enként
+  ellenőriz (`-NoExit`, illetve munkaterület-egyezés), és csak egyezésnél lő
+  `taskkill /F /T`-vel; ami nem egyezik, azt kihagyja. A recovered rekord
+  olvasható, de nem írható (`writeToRun()` hiba, `latestLiveRun()` kihagyja),
+  és a kimenete nem hozható vissza. **Mérve:** `runs: 2 korábbi futás
+  visszatöltve (2 rekord, ebből 2 héj nélküli)`; a panel `run-3`/`run-4`
+  `recovered: true`-val; a `46676`/`42540` a restart előtt és után is élt;
+  `action=kill&id=run-4` → `{"ok":true,"tree":true}`, 5174 felszabadult, 5173
+  érintetlen. Ugyanekkor: a lemezen maradt kérés **boot-replayét** is lezártuk —
+  a tool törli a `state\terminal-request.json`-t, a host pedig a 30 s-nál
+  régebbi kérést eldobja (mért eset: egy `insert` a boot után újra beíródott).
+  Részletek: `docs\DSH-ATADAS.md` 10.6.
+- `2026-11-13` — **a modell mostantól a beépített terminál-panelben dolgozik**
+  (`terminal` tool). A lánc három része: (1) HOST oldal a `dsh-ui-extras`-ban —
+  `startTerminalMailbox()` 250 ms-onként figyeli a `state\terminal-request.json`-t,
+  a `runMailboxAction()` a panel `RUNS` nyilvántartásán hajtja végre
+  (`run|insert|input|output|stop|list`), a válasz a `state\terminal-response.json`-ba
+  megy; az `insert` Enter NÉLKÜL gépel, és a host echo-t ír, mert a csővezetékes
+  héj nem echo-zna. (2) AGENT oldal: új plugin `plugins\dsh-terminal-tool`
+  (`inject = ["tools"]`, `defineTool` → `terminal` tool), telepítés/ellenőrzés/
+  visszavonás `plugins\dsh-terminal-tool\install.ps1` (`-Check`, `-Remove`), a
+  junction a `~\.dsh\profiles\node_modules\dsh-terminal-tool`. (3) A preset
+  bejegyzés (`tool-terminal` / `dsh-terminal-tool`) az agent-síkos
+  `~\.dsh\.agent-presets\standard-free\agent.cordis.yml`-ben — enélkül a tool
+  hiába regisztrálódik a host-síkon, a modell nem látja.
+  **Mért buktatók:** a `defineTool` kötelező `output { schema, render }`-je; az
+  `output.schema` value-DSL a `required` MINDKÉT formáját elutasítja (a
+  `parameters`-ban viszont a `required: true` helyes); a junction ellenére a Node
+  a valódi útvonalról oldja fel az importokat, ahol nincs `node_modules`, ezért a
+  `@deepseek-ai/dsh-tools`-t `createRequire` jelöltlistával kell feloldani; a
+  preset kompozíció SESSION-LÉTREHOZÁSKOR töltődik, tehát a tool csak új
+  sessionben vagy harness-újraindítás után jelenik meg. **Boot-replay hiba
+  (javítva):** a kérésfájl a lemezen maradt, a `handledMailboxIds` viszont
+  memóriabeli, ezért a boot után a legutolsó kérés újra végrehajtódott (mért:
+  egy `insert` még egyszer beíródott; `run` esetén ez minden bootnál lefuttatott
+  volna egy parancsot) — a tool most törli a kérésfájlt, a host pedig a 30 s-nál
+  régebbi kérést eldobja. **Mérve:** harness-oldali mount (`defineTool feloldva` +
+  `beregisztrálva`), és a tool `action=run` hívása a panel `run-2` futásában
+  végrehajtotta a `git status --short`-ot. Részletek: `docs\DSH-ATADAS.md` 10. szakasz.
+- `2026-11-13` — **a tálcaikonról eltűntek a panelbeállítások, és dupla
+  indítások futottak.** (1) A panelbeállítások a 2026-10-31-i váltásnál vesztek
+  el, amikor a launcher a PowerShell-tálcáról a natív `DshTray.exe`-re állt át: a
+  natív menü nem kínálta a felosztást és a robot felületet. Visszaállítva
+  `src\DshTray.cs`-ben (`Ablak felosztása` 1/2/3, `4. felület: robot panel`,
+  `Csak robot mód`), a `state\tray-config.json`-ba mentve — a `TinyJson.Set()`
+  csak a saját kulcsokat írja, a többit (`autostart`, `logLevel`) nem bántja —,
+  és váltáskor csak az ablak nyílik újra, a harness nem áll le. Régi bináris:
+  `bin\DshTray.exe.old-20261113-110249`. (2) A dupla indítás megszűnt: a natív
+  tálca `EnsureHarness()` és az új `tools\start-harness-once.ps1` **közös neves
+  mutexet** (`Global\DshHarnessStart-<port>`) és „friss `harness.pid` = éppen
+  indul" ablakot használ; mért eset: 24504 nyert / 35424 elhalt, illetve korábban
+  három indítás egymás után (6988 → 16956 → 14412). Az indítás `-NoWait`-tel
+  megy, mert a `restart-harness.ps1` szinkron hívása **elakadt** (0 CPU-s
+  gyermek), és emiatt az elfogadási próba riport nélkül maradt.
 - `2026-11-12` — **a Git panel commitja nem működött HU módban.** A repó
   publikus, ezért a `commit-msg` hook (`tools/check-commit-msg.mjs`) angol
   üzenetet követel, a panel viszont HU kapcsolóval magyar üzenetet állít elő
