@@ -731,6 +731,7 @@ A `RUNS` szándékosan memóriabeli — a panel viszont HOSSZÚ életű folyamat
 | recovered leállítás | `action=kill&id=run-4` → `{"ok":true,"tree":true}`; 42540 eltűnt, 5174 felszabadult, **5173 érintetlen** |
 
 - **Az üres terminál kimarad:** a `shell` feliratú (parancs nélküli) futásokat sem nem mentjük, sem nem keressük. Ennek oka a hamis találat: a munkaterület-útvonal a parancssorban bármilyen később indított folyamatra illeszkedhet (például egy `node tools\…` futásra), és abból „túlélő" lenne — üres terminálnál viszont nincs mit megmenteni.
+- **Kanonikus munkaterület-kulcs a panel állapotában is:** a `C:\Szerver` junction miatt ugyanaz a projekt KÉT kulccsal élt a `state\panel-layout.json`-ban — mért eset (2026-11-13): **14 kulcs, 9 valódi projekt**, és a beállítások (nyitott terminál, aktív fül, szűrő) kétfelé szóródtak. A `canonicalWorkspace()` `realpathSync.native`-tal oldja fel a junctiont; a `handleLayout()` és a `startRun()` már kanonikus kulccsal dolgozik, bootkor a `migrateWorkspaceKeys()` egyszer összevonja a meglévő bejegyzéseket (`state\panel-layout.json`, `state\runnables.json`, `state\runs.json`). Kézi eszköz ugyanerre: `node tools\canonicalize-panel-state.mjs [--apply]` (mentés `*.bak-<időbélyeg>` néven). Mért eredmény: 14 → 9 kulcs, a `runnables` kulcsa a `D:` alakra íródott, a `runs` 1 rekordjának workspace-e átíródott, és a `layout` API a kanonikus kulcsra válaszol.
 
 
 

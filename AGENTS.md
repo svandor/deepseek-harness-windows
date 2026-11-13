@@ -237,6 +237,21 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-13` — **a panel munkaterület-kulcsai kanonikusak** (junction-javítás a
+  panel állapotában). A `C:\Szerver` junction a `D:\Szerver`-re mutat, ezért
+  ugyanaz a projekt KÉT kulccsal élt a `state\panel-layout.json`-ban: mért
+  eset (2026-11-13) **14 kulcs, 9 valódi projekt**, és a panel beállításai
+  (nyitott terminál, aktív fül, szűrő, panelmagasságok) kétfelé szóródtak.
+  Javítás (`plugins\dsh-ui-extras\lib\index.js`): `canonicalWorkspace()`
+  `realpathSync.native`-tal oldja fel a junctiont; a `handleLayout()` fogadott
+  kulcsát és a `startRun()` munkaterületét is kanonizálja (így a `runs.json`
+  rekordjai és a túlélő-keresés is a valódi útvonalat használja), bootkor pedig
+  a `migrateWorkspaceKeys()` egyszer összevonja a meglévő bejegyzéseket
+  (`panel-layout`, `runnables`, `runs`). Új kézi eszköz:
+  `tools\canonicalize-panel-state.mjs` (`--apply`, előtte `*.bak-<időbélyeg>`
+  mentés; mérése: 14 → 9 kulcs). A `terminal` tool és a terminál-panel
+  érintetlen; a javítás a következő harness-újraindításnál lép életbe, a
+  `--apply` már most rendezte a fájlokat.
 - `2026-11-13` — **a panel-futás túléli a harness-restartot** (a felhasználó
   jelezte: „a gyorsgombbal indítottam és korábban megjelent újraindítás után
   is"). A `RUNS` szándékosan memóriabeli, ezért a restart után a rekord eltűnt,

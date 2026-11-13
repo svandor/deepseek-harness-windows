@@ -590,6 +590,7 @@ Two traps in the manual test: (1) the field is **`command`** — a `text` field 
 | recovered stop | `action=kill&id=run-4` → `{"ok":true,"tree":true}`; 42540 gone, 5174 freed, **5173 untouched** |
 
 - **Empty shells are skipped:** runs labelled `shell` (no command) are neither persisted nor scanned. The reason is the false positive: a workspace path can appear in the command line of any later process (for example a `node tools\…` run) and would become a "survivor" — and an empty terminal has nothing to preserve.
+- **Canonical workspace keys in the panel state too:** because of the `C:\Szerver` junction the same project lived under TWO keys in `state\panel-layout.json` — measured (2026-11-13): **14 keys for 9 real projects**, with the settings (open terminal, active tab, filter) split between them. `canonicalWorkspace()` resolves the junction via `realpathSync.native`; `handleLayout()` and `startRun()` already work with the canonical key, and `migrateWorkspaceKeys()` merges the existing entries once at boot (`state\panel-layout.json`, `state\runnables.json`, `state\runs.json`). Manual tool for the same job: `node tools\canonicalize-panel-state.mjs [--apply]` (backup written as `*.bak-<timestamp>`). Measured result: 14 → 9 keys, the `runnables` key rewritten to the `D:` form, one `runs` record's workspace rewritten, and the `layout` API answers on the canonical key.
 
 
 
