@@ -1,0 +1,18 @@
+{
+  "name": "dsh-process-guard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Perzisztens folyamat-ledger + induláskori reconciláció: a DSH összeomlása után is látszanak és leállíthatók az elárvult gyerekfolyamatok (PID + indítási idő alapján).",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.2"
+  },
+  "license": "MIT"
+}

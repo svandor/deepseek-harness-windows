@@ -47,6 +47,15 @@ namespace DshTray
         public string DshBin;
         public string Root;
 
+        // ── panelbeállítások (2026-11-13) ───────────────────────────────────
+        // MIÉRT: a 2026-10-31-i váltásnál a launcher a natív tálcára állt át, és
+        // ezzel ELVESZTEK a PowerShell-tálca panelbeállításai (felosztás, robot
+        // felület). A kulcsok a tray-config.json-ban végig megvoltak, csak a
+        // natív tálca nem olvasta és nem kínálta őket. Ezek a mezők pótolják.
+        public bool RobotPane = false;
+        public bool RobotOnly = false;
+        public string RobotUrl = "http://127.0.0.1:4180/";
+
         public string StateDir { get { return Path.Combine(Root, "state"); } }
         public string BinDir { get { return Path.Combine(Root, "bin"); } }
         public string ProvidersDir { get { return Path.Combine(Root, "providers"); } }
@@ -130,6 +139,35 @@ namespace DshTray
             Match m = Regex.Match(json ?? string.Empty, "\"" + Regex.Escape(key) + "\"\\s*:\\s*\"([^\"]*)\"");
             return m.Success ? m.Groups[1].Value : string.Empty;
         }
+
+        /// <summary>Logikai érték (`true`/`false`, illetve 1/0) a tray-config.json-ból.</summary>
+        public static bool Bool(string json, string key, bool fallback)
+        {
+            Match m = Regex.Match(json ?? string.Empty, "\"" + Regex.Escape(key) + "\"\\s*:\\s*(true|false|1|0)", RegexOptions.IgnoreCase);
+            if (!m.Success) return fallback;
+            string raw = m.Groups[1].Value.ToLowerInvariant();
+            return raw == "true" || raw == "1";
+        }
+
+        /// <summary>
+        /// Egy kulcs értékének cseréje a meglévő JSON-szövegben. A nem ismert
+        /// kulcsokat (pl. `autostart`, `logLevel`, amit a PowerShell-tálca ír)
+        /// SZÁNDÉKOSAN érintetlenül hagyja — csak a sajátunkat írjuk át, illetve
+        /// fűzzük be a záró kapcsos zárójel elé, ha még nincs benne.
+        /// </summary>
+        public static string Set(string json, string key, string value)
+        {
+            string text = string.IsNullOrWhiteSpace(json) ? "{}" : json;
+            string pattern = "(\"" + Regex.Escape(key) + "\"\\s*:\\s*)(\"[^\"]*\"|-?[\\d.]+|true|false)";
+            var regex = new Regex(pattern, RegexOptions.IgnoreCase);
+            if (regex.IsMatch(text)) return regex.Replace(text, m => m.Groups[1].Value + value, 1);
+            int closing = text.LastIndexOf('}');
+            if (closing < 0) return "{\n  \"" + key + "\":  " + value + "\n}";
+            string head = text.Substring(0, closing).TrimEnd();
+            bool empty = head.TrimEnd('{', ' ', '\r', '\n', '\t').Length == 0;
+            string separator = empty ? "\n  " : ",\n  ";
+            return head + separator + "\"" + key + "\":  " + value + "\n}";
+        }
     }
 
     internal sealed class TrayApp : ApplicationContext
@@ -188,8 +226,39 @@ namespace DshTray
             }
             _cfg.DshBin = TinyJson.Str(json, "dshBin");
             if (string.IsNullOrEmpty(_cfg.DshBin)) _cfg.DshBin = FindDshBin();
+
+            // Panelbeállítások: a PS-tálca által már használt kulcsok (a fájlban
+            // eddig is ott voltak, csak a natív tálca nem olvasta őket).
+            _cfg.RobotPane = TinyJson.Bool(json, "robotPane", false);
+            _cfg.RobotOnly = TinyJson.Bool(json, "robotOnly", false);
+            string robotUrl = TinyJson.Str(json, "robotUrl");
+            if (!string.IsNullOrEmpty(robotUrl)) _cfg.RobotUrl = robotUrl;
+
             Log.Info("config: port=" + _cfg.Port + " panes=" + _cfg.Panes
+                + " robotPane=" + _cfg.RobotPane + " robotOnly=" + _cfg.RobotOnly
                 + " proxyPort=" + _cfg.ProxyPort + " dsh=" + (_cfg.DshBin ?? "?"));
+        }
+
+        /// <summary>
+        /// A panelbeállítások mentése a tray-config.json-ba. Csak a saját
+        /// kulcsainkat írja; a többit (autostart, logLevel, ...) érintetlenül
+        /// hagyja, mert azokat a PowerShell-tálca kezeli.
+        /// </summary>
+        private void SaveLayoutConfig()
+        {
+            string path = Path.Combine(_cfg.StateDir, "tray-config.json");
+            try
+            {
+                string json = File.Exists(path) ? File.ReadAllText(path) : "{}";
+                json = TinyJson.Set(json, "panes", _cfg.Panes.ToString(CultureInfo.InvariantCulture));
+                json = TinyJson.Set(json, "robotPane", _cfg.RobotPane ? "true" : "false");
+                json = TinyJson.Set(json, "robotOnly", _cfg.RobotOnly ? "true" : "false");
+                json = TinyJson.Set(json, "robotUrl", "\"" + _cfg.RobotUrl + "\"");
+                Directory.CreateDirectory(_cfg.StateDir);
+                File.WriteAllText(path, json, new UTF8Encoding(false));
+                Log.Info("panelbeállítás mentve: panes=" + _cfg.Panes + " robotPane=" + _cfg.RobotPane + " robotOnly=" + _cfg.RobotOnly);
+            }
+            catch (Exception ex) { Log.Error("panelbeállítás mentése: " + ex.Message); }
         }
 
         /// <summary>A legfrissebb npx-telepítésű dsh bin.js megkeresése.</summary>
@@ -223,6 +292,48 @@ namespace DshTray
 
             var menu = new ContextMenuStrip();
             menu.Items.Add("Ablak megnyitása", null, (s, e) => ShowWindow(true));
+
+            // ── panelbeállítások (HELYREÁLLÍTVA, 2026-11-13) ────────────────
+            // A PS-tálcában voltak, a natív tálcára váltáskor elvesztek.
+            var split = new ToolStripMenuItem("Ablak felosztása");
+            for (int count = 1; count <= 3; count++)
+            {
+                int value = count;
+                var entry = new ToolStripMenuItem(value + " panel");
+                entry.Click += (s, e) => SetPanes(value);
+                split.DropDownItems.Add(entry);
+            }
+            split.DropDownOpening += (s, e) =>
+            {
+                foreach (ToolStripItem item in split.DropDownItems)
+                {
+                    var entry = item as ToolStripMenuItem;
+                    if (entry != null) entry.Checked = entry.Text.StartsWith(_cfg.Panes + " ", StringComparison.Ordinal);
+                }
+            };
+            menu.Items.Add(split);
+
+            var robotPane = new ToolStripMenuItem("4. felület: robot panel");
+            robotPane.ToolTipText = "A robot állapotpanelje (" + _cfg.RobotUrl + ") külön felületként.";
+            robotPane.Checked = _cfg.RobotPane;
+            robotPane.Click += (s, e) =>
+            {
+                SetRobotPane(!_cfg.RobotPane);
+                robotPane.Checked = _cfg.RobotPane;
+            };
+            menu.Items.Add(robotPane);
+
+            var robotOnly = new ToolStripMenuItem("Csak robot mód (1 felület)");
+            robotOnly.ToolTipText = "Az ablak egyetlen felülettel nyílik: csak a robot-konzol.";
+            robotOnly.Checked = _cfg.RobotOnly;
+            robotOnly.Click += (s, e) =>
+            {
+                SetRobotOnly(!_cfg.RobotOnly);
+                robotOnly.Checked = _cfg.RobotOnly;
+                robotPane.Checked = _cfg.RobotPane;
+            };
+            menu.Items.Add(robotOnly);
+
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Harness újraindítása", null, (s, e) => RestartHarness());
             menu.Items.Add("Proxy újraindítása", null, (s, e) => RestartProxy());
@@ -343,20 +454,70 @@ namespace DshTray
         private void EnsureHarness()
         {
             if (Listening(_cfg.Port)) return;
-            if (string.IsNullOrEmpty(_cfg.DshBin) || !File.Exists(_cfg.DshBin))
+
+            // ── dupla indítás elleni védelem (2026-11-13) ───────────────────
+            // MÉRT HIBA: a tálca és a `restart-harness.ps1 -Force` ugyanabban a
+            // másodpercben indított egy-egy példányt ugyanarra a portra; az
+            // egyik elhalt (24504 nyert, 35424 kiesett), a naplók összekeveredtek,
+            // és a plugin reconcilációja rossz példányban futhatott le.
+            // Két védvonal: (1) neves mutex a repo eszközeivel KÖZÖSEN, és
+            // (2) friss pid-fájl esetén „éppen indul" — nem indítunk másodikat.
+            bool ownsGate = false;
+            Mutex gate = null;
+            try
             {
-                Log.Error("harness nem indul: nincs dsh bin.js");
+                gate = new Mutex(false, "Global\\DshHarnessStart-" + _cfg.Port);
+                try { ownsGate = gate.WaitOne(0); }
+                catch (AbandonedMutexException) { ownsGate = true; }
+            }
+            catch (Exception ex)
+            {
+                Log.Error("indítási mutex nem hozható létre: " + ex.Message);
+                gate = null;
+            }
+
+            if (gate != null && !ownsGate)
+            {
+                Log.Info("harness indítás kihagyva: másik indító éppen fut (mutex)");
                 return;
             }
-            Log.Info("harness nem válaszol a " + _cfg.Port + " porton — indítás");
-            int pid = StartNode(_cfg.DshBin,
-                "web --host 127.0.0.1 --port " + _cfg.Port + " --no-open",
-                Path.GetDirectoryName(_cfg.DshBin),
-                Path.Combine(_cfg.StateDir, "harness.log"),
-                Path.Combine(_cfg.StateDir, "harness.err.log"),
-                CaptureTokenUrl);
-            Log.Info("harness pid=" + pid);
-            _windowUrl = string.Empty;
+
+            try
+            {
+                try
+                {
+                    string pidFile = Path.Combine(_cfg.StateDir, "harness.pid");
+                    if (File.Exists(pidFile) && (DateTime.Now - File.GetLastWriteTime(pidFile)).TotalSeconds < 25)
+                    {
+                        Log.Info("harness indítás kihagyva: a pid-fájl friss — a harness éppen indul");
+                        return;
+                    }
+                }
+                catch (Exception ex) { Log.Error("pid-fájl ellenőrzés: " + ex.Message); }
+
+                if (string.IsNullOrEmpty(_cfg.DshBin) || !File.Exists(_cfg.DshBin))
+                {
+                    Log.Error("harness nem indul: nincs dsh bin.js");
+                    return;
+                }
+                Log.Info("harness nem válaszol a " + _cfg.Port + " porton — indítás");
+                int pid = StartNode(_cfg.DshBin,
+                    "web --host 127.0.0.1 --port " + _cfg.Port + " --no-open",
+                    Path.GetDirectoryName(_cfg.DshBin),
+                    Path.Combine(_cfg.StateDir, "harness.log"),
+                    Path.Combine(_cfg.StateDir, "harness.err.log"),
+                    CaptureTokenUrl);
+                Log.Info("harness pid=" + pid);
+                _windowUrl = string.Empty;
+            }
+            finally
+            {
+                if (gate != null)
+                {
+                    if (ownsGate) { try { gate.ReleaseMutex(); } catch { } }
+                    gate.Dispose();
+                }
+            }
         }
 
         /// <summary>
@@ -468,8 +629,14 @@ namespace DshTray
                 Log.Info("ablak indítás halasztva: még nincs token URL");
                 return;
             }
+            // Robot felület: a PS-tálca `--pane-url "<panes>=<url>"` alakban adta
+            // át, a DshWindow ezt értelmezi a 4. (utolsó) panelként.
+            int paneCount = Math.Max(1, Math.Min(3, _cfg.Panes));
+            bool robotPane = _cfg.RobotPane || _cfg.RobotOnly;
+            if (_cfg.RobotOnly) paneCount = 1;
+
             string args = "--port " + _cfg.Port
-                + " --panes " + _cfg.Panes
+                + " --panes " + paneCount
                 + " --no-boot --width " + _cfg.Width.ToString(CultureInfo.InvariantCulture)
                 + " --height " + _cfg.Height.ToString(CultureInfo.InvariantCulture)
                 + " --log \"" + _cfg.WindowLog + "\""
@@ -477,6 +644,13 @@ namespace DshTray
                 + " --dsh-home \"" + _cfg.DshHome + "\""
                 + " --dsh-bin \"" + _cfg.DshBin + "\""
                 + " --url \"" + url + "\" --restart-if-stale";
+            if (robotPane)
+            {
+                args += " --pane-url \"" + paneCount + "=" + _cfg.RobotUrl + "\"";
+                Log.Info("robot felület: a " + paneCount + ". panel tolti be (" + _cfg.RobotUrl + ")"
+                    + (_cfg.RobotOnly ? " [CSAK ROBOT MOD]" : string.Empty));
+            }
+
             // Az induló ablak "nyitva van": a korábbi bezárás jelölője nem élhet tovább.
             ClearCloseMarker();
             try
@@ -641,6 +815,53 @@ namespace DshTray
             Log.Info("proxy újraindítás kérés");
             try { StopPort(_cfg.ProxyPort); } catch { }
             EnsureProxy();
+        }
+
+        // ── panelbeállítások (a PS-tálcából visszaállítva, 2026-11-13) ─────
+        /// <summary>Felosztás beállítása, mentés és az ablak újranyitása.</summary>
+        private void SetPanes(int panes)
+        {
+            int clamped = Math.Max(1, Math.Min(3, panes));
+            if (_cfg.Panes == clamped) return;
+            _cfg.Panes = clamped;
+            SaveLayoutConfig();
+            RestartWindowForLayout();
+        }
+
+        /// <summary>A robot felület (4. panel) ki-/bekapcsolása.</summary>
+        private void SetRobotPane(bool enabled)
+        {
+            if (_cfg.RobotPane == enabled) return;
+            _cfg.RobotPane = enabled;
+            SaveLayoutConfig();
+            RestartWindowForLayout();
+        }
+
+        /// <summary>Csak robot mód: egyetlen, teljes szélességű robot-felület.</summary>
+        private void SetRobotOnly(bool enabled)
+        {
+            if (_cfg.RobotOnly == enabled) return;
+            _cfg.RobotOnly = enabled;
+            if (enabled) _cfg.RobotPane = true;
+            SaveLayoutConfig();
+            RestartWindowForLayout();
+        }
+
+        /// <summary>
+        /// Az ablak bezárása és újranyitása a mostani panelbeállításokkal.
+        /// A harness-hez NEM nyúlunk: csak a megjelenítés változik, tehát nincs
+        /// token-újragenerálás és nincs szükségtelen leállás.
+        /// </summary>
+        private void RestartWindowForLayout()
+        {
+            try
+            {
+                foreach (Process p in Process.GetProcessesByName("DshWindow")) { try { p.Kill(); } catch { } }
+                Thread.Sleep(600);
+                ClearCloseMarker();
+                StartWindow();
+            }
+            catch (Exception ex) { Log.Error("ablak újranyitás: " + ex.Message); }
         }
 
         private static void StopPort(int port)
