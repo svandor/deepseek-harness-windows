@@ -1598,6 +1598,10 @@ function persistRuns() {
     const rows = [];
     for (const run of RUNS.values()) {
       if (run.done === true) continue;
+      // Az üres terminál (`shell`, parancs nélkül) nem érdemes rekordot: a héja
+      // a restartkor amúgy is kilép, és nincs benne leállítanivaló folyamat.
+      const label = typeof run.label === "string" ? run.label.trim() : "";
+      if (label === "shell" && run.recovered !== true) continue;
       const pid = typeof run.pid === "number" ? run.pid : (typeof run.child?.pid === "number" ? run.child.pid : null);
       const survivors = Array.isArray(run.survivors) ? run.survivors.filter((value) => typeof value === "number") : [];
       if (pid === null && survivors.length === 0) continue;
@@ -1699,7 +1703,14 @@ function restoreRuns() {
   const orphanRows = [];
   for (const row of rows) {
     if (typeof row?.pid === "number" && isAlive(row.pid) === true) liveRows.push(row);
-    else if (typeof row?.workspace === "string" && row.workspace.length > 3) orphanRows.push(row);
+    else if (typeof row?.workspace === "string" && row.workspace.length > 3) {
+      // Az ÜRES terminálokat (`shell` felirat, parancs nélkül) nem keressük: a
+      // munkaterület-útvonal a parancssorban bármilyen, később indított
+      // folyamatra is illeszkedhet (például egy `node tools\…` futásra), és
+      // abból hamis „túlélő" lenne. Üres terminálnál nincs mit megmenteni.
+      const label = typeof row.label === "string" ? row.label.trim() : "";
+      if (label.length > 0 && label !== "shell") orphanRows.push(row);
+    }
   }
   const survivorsByWorkspace = orphanRows.length === 0
     ? new Map()
