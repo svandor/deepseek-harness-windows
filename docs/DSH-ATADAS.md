@@ -728,6 +728,8 @@ A `RUNS` szándékosan memóriabeli — a panel viszont HOSSZÚ életű folyamat
 | a kereső pontossága | nyers: `46676`, `45352` (esbuild), `42540`, `47544` (esbuild) → gyökér-szűrés után `D:\Herd…` → 46676, `C:\Herd…` → 42540 |
 | recovered leállítás | `action=kill&id=run-4` → `{"ok":true,"tree":true}`; 42540 eltűnt, 5174 felszabadult, **5173 érintetlen** |
 
+- **Az üres terminál kimarad:** a `shell` feliratú (parancs nélküli) futásokat sem nem mentjük, sem nem keressük. Ennek oka a hamis találat: a munkaterület-útvonal a parancssorban bármilyen később indított folyamatra illeszkedhet (például egy `node tools\…` futásra), és abból „túlélő" lenne — üres terminálnál viszont nincs mit megmenteni.
+
 
 
 

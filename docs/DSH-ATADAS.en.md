@@ -588,6 +588,8 @@ Two traps in the manual test: (1) the field is **`command`** — a `text` field 
 | scan accuracy | raw: `46676`, `45352` (esbuild), `42540`, `47544` (esbuild) → after root filtering `D:\Herd…` → 46676, `C:\Herd…` → 42540 |
 | recovered stop | `action=kill&id=run-4` → `{"ok":true,"tree":true}`; 42540 gone, 5174 freed, **5173 untouched** |
 
+- **Empty shells are skipped:** runs labelled `shell` (no command) are neither persisted nor scanned. The reason is the false positive: a workspace path can appear in the command line of any later process (for example a `node tools\…` run) and would become a "survivor" — and an empty terminal has nothing to preserve.
+
 
 
 
