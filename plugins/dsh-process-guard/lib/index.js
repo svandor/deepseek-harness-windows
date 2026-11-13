@@ -78,6 +78,44 @@ function diag(kind, data) {
 }
 
 /**
+ * Boot-memória mintavételezés BELÜLRŐL.
+ *
+ * MIÉRT: kívülről csak `PrivateMemorySize64` látszik, abból nem derül ki, MELYIK
+ * boot-fázis foglal. A mért commit-csúcs (5,9–8,6 GB) forrása ismeretlen maradt,
+ * ezért a folyamat SAJÁT `process.memoryUsage()`-ját mintavételezzük a boot
+ * első percében — így a növekedés időponthoz (és a reconcilációhoz) köthető.
+ *
+ * Költség: 2 mp-enként egy sor a `_diag.jsonl`-ba (az fájlméret-rotációval védett).
+ * @param {object} ctx
+ * @param {number} [durationMs]
+ * @param {number} [intervalMs]
+ */
+function startBootMemoryWatch(ctx, durationMs = 60_000, intervalMs = 2_000) {
+  const startedAt = Date.now();
+  let samples = 0;
+  const limit = Math.ceil(durationMs / intervalMs);
+  const timer = setInterval(() => {
+    try {
+      const usage = process.memoryUsage();
+      diag('boot-mem', {
+        t: Date.now() - startedAt,
+        rssMB: Math.round(usage.rss / 1048576),
+        heapUsedMB: Math.round(usage.heapUsed / 1048576),
+        heapTotalMB: Math.round(usage.heapTotal / 1048576),
+        externalMB: Math.round(usage.external / 1048576),
+        arrayBuffersMB: Math.round(usage.arrayBuffers / 1048576),
+      });
+    } catch {
+      /* a diagnosztika soha nem hathat a bootra */
+    }
+    samples += 1;
+    if (samples >= limit) clearInterval(timer);
+  }, intervalMs);
+  timer.unref?.();
+  return timer;
+}
+
+/**
  * Egy subprocess handle leírása: milyen mezők érhetők el rajta. Azért kell,
  * mert a PID kinyerése best-effort (a nyilvános típus nem írja elő), és a
  * mezők a mag verziójával változhatnak.
@@ -127,6 +165,20 @@ function handlePid(handle) {
 }
 
 /**
+ * A spawn spec végrehajtható útvonala/neve. A párosítás ebből képzi a
+ * folyamat-nevet — így nem kell a szóközös parancssort törni (mért hiba:
+ * a `C:\Program Files\…\node.exe …` szövegből „program" token lett).
+ * @param {any} spec
+ * @returns {string|undefined}
+ */
+function specExecutable(spec) {
+  const raw = spec?.argv ?? spec?.command ?? spec?.file ?? spec?.program;
+  if (Array.isArray(raw)) return typeof raw[0] === 'string' && raw[0].length > 0 ? raw[0] : undefined;
+  if (typeof raw === 'string' && raw.length > 0) return raw;
+  return undefined;
+}
+
+/**
  * Az első szó egy spawn spec-ből (naplózáshoz és címkéhez).
  * @param {any} spec
  * @returns {string}
@@ -161,6 +213,9 @@ function recordSpawn(ctx, handle, spec, kind) {
       t: 'untracked',
       at: Date.now(),
       cmdline: specLabel(spec),
+      // A végrehajtható út pontosan (a szóközös parancssorból nem lehet
+      // megbízhatóan kinyerni — mért téves találat: „program" token).
+      exe: specExecutable(spec),
       cwd: untrackedCwd,
       workspaceRealpath: untrackedCanonical,
       kind,
@@ -266,6 +321,12 @@ function instrument(ctx, service, method, kind) {
  */
 async function reconcile(ctx) {
   const startedAt = Date.now();
+  const memoryAtStart = process.memoryUsage();
+  diag('reconcile-start', {
+    sinceBootMs: Math.round(process.uptime() * 1000),
+    rssMB: Math.round(memoryAtStart.rss / 1048576),
+    heapUsedMB: Math.round(memoryAtStart.heapUsed / 1048576),
+  });
   const registry = ctx?.jobs;
   const store = registry?.store;
   if (!(store instanceof Map)) {
@@ -342,9 +403,24 @@ async function reconcile(ctx) {
   const untracked = readUntracked().filter(({ record }) => Number.isFinite(record.at) && record.at < PLUGIN_BOOT_MS - 5000);
   if (untracked.length > 0) {
     const snapshot = await processSnapshot();
+    // DIAGNOSZTIKA (2026-11-13): a párosítás kudarcát eddig nem lehetett kívülről
+    // látni. Ez a sor megmondja, hány jelölt rekord volt, és hány folyamatot
+    // látott egyáltalán a WMI-pillanatkép — ha utóbbi 0, a hiba nem a
+    // matcherben van, hanem a pillanatkép elkészítésében.
+    const misses = [];
     for (const { file, record } of untracked) {
       const match = matchUntracked(record, snapshot);
-      if (match === null) continue; // kilépett vagy nem egyértelmű — nem tippelünk
+      if (match === null) {
+        if (misses.length < 12) {
+          misses.push({
+            at: new Date(record.at).toISOString(),
+            exe: record.exe === undefined ? null : String(record.exe).split(/[\\/]/u).pop(),
+            spawnerPid: record.spawnerPid ?? null,
+            sameExeAlive: snapshot.filter((row) => String(row.cmdline ?? '').toLowerCase().includes(String(record.exe ?? '').split(/[\\/]/u).pop()?.replace(/\.exe$/iu, '').toLowerCase() ?? '\u0000')).length,
+          });
+        }
+        continue; // kilépett vagy nem egyértelmű — nem tippelünk
+      }
       // A cancel() a rekordból dolgozik, ezért a pid INNEN kerül bele.
       const candidate = { ...record, pid: match.pid, started: match.started };
       if (registerRecovered(ctx, registry, store, match.pid, candidate, true)) {
@@ -352,11 +428,25 @@ async function reconcile(ctx) {
         appendRecord(file, { t: 'adopted', at: Date.now(), pid: match.pid, started: match.started });
       }
     }
+    diag('untracked-pass', { records: untracked.length, snapshot: snapshot.length, adopted, misses });
   }
 
   // Tömörítés: a régi `untracked` sorok (már nem párosíthatók) és a félig írt
   // sorok kiesnek; a spawn/identity/exit rekordok maradnak.
   const compaction = compactAll();
+
+  const memoryAtEnd = process.memoryUsage();
+  diag('reconcile-end', {
+    sinceBootMs: Math.round(process.uptime() * 1000),
+    elapsedMs: Date.now() - startedAt,
+    rssMB: Math.round(memoryAtEnd.rss / 1048576),
+    heapUsedMB: Math.round(memoryAtEnd.heapUsed / 1048576),
+    externalMB: Math.round(memoryAtEnd.external / 1048576),
+    records,
+    recovered,
+    adopted,
+    dead,
+  });
 
   logLine(
     ctx,
@@ -477,7 +567,10 @@ function apply(ctx, config = {}) {
       terminalInstrumented,
       cwd: process.cwd(),
       ledger: ledgerFileFor(canonicalWorkspace(process.cwd())),
+      uptimeMs: Math.round(process.uptime() * 1000),
     });
+    // Belső memória-mintavételezés a boot első percében (lásd startBootMemoryWatch).
+    startBootMemoryWatch(ctx, config.bootMemoryWatchMs ?? 60_000);
     logLine(ctx, 'info', `aktív (ledger: ${ledgerFileFor(canonicalWorkspace(process.cwd()))})`);
   } catch (error) {
     // A bootot ez SOHA nem állíthatja meg.

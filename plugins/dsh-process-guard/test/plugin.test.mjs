@@ -137,14 +137,16 @@ const { matchUntracked } = await import('../lib/identity.js');
 const base = Date.parse('2026-11-13T07:00:00Z');
 const snapshot = [
   { pid: 100, parentPid: 1, startedMs: base + 500, cmdline: 'C:\\Program Files\\nodejs\\node.exe ...\\bin.js web --port 3080' },
-  { pid: 200, parentPid: 1, startedMs: base + 400, cmdline: 'C:\\Program Files\\nodejs\\node.exe ...\\vite.js' },
+  { pid: 200, parentPid: 1, startedMs: base + 400, cmdline: 'C:\\Apps\\vite.exe --serve' },
 ];
-check(matchUntracked({ at: base, cmdline: 'vite.js' }, snapshot)?.pid === 200, 'egyetlen jelölt → párosít');
-check(matchUntracked({ at: base + 60_000, cmdline: 'node ...\\bin.js' }, snapshot) === null, 'időben távoli folyamat → nincs párosítás');
-check(matchUntracked({ at: base, cmdline: 'node' }, [snapshot[0], snapshot[1]]) === null, 'két jelölt → nem tippelünk');
-check(matchUntracked({ at: base, cmdline: 'rg --json' }, snapshot) === null, 'túl rövid token (rg) → kihagyva');
-check(matchUntracked({ at: base, cmdline: 'nincsilyen --x' }, snapshot) === null, 'nincs találat → null');
-check(matchUntracked({ at: base, cmdline: 'node ...' }, [{ ...snapshot[0], pid: process.pid }]) === null, 'a saját folyamatot kizárja');
+// A rekord a valóságban `exe` mezőt is hordoz (a plugin írja), ezért a
+// párosítás a végrehajtható nevet hasonlítja, nem a parancssor részstringjét.
+check(matchUntracked({ at: base, exe: 'C:\\Apps\\vite.exe', cmdline: 'vite --serve' }, snapshot)?.pid === 200, 'egyező exe → párosít');
+check(matchUntracked({ at: base + 60_000, exe: 'C:\\Program Files\\nodejs\\node.exe', cmdline: 'node ...\\bin.js' }, snapshot) === null, 'időben távoli folyamat → nincs párosítás');
+check(matchUntracked({ at: base, exe: 'C:\\Program Files\\nodejs\\node.exe', cmdline: 'node' }, [snapshot[0], { ...snapshot[0], pid: 101, startedMs: base + 200 }]) === null, 'két azonos exe (kétértelmű) → nem tippelünk');
+check(matchUntracked({ at: base, exe: 'C:\\x\\rg.exe', cmdline: 'rg --json' }, snapshot) === null, 'túl rövid exe-név (rg) → kihagyva');
+check(matchUntracked({ at: base, exe: 'C:\\x\\nincsilyen.exe', cmdline: 'nincsilyen --x' }, snapshot) === null, 'nincs találat → null');
+check(matchUntracked({ at: base, exe: 'C:\\Program Files\\nodejs\\node.exe', cmdline: 'node ...' }, [{ ...snapshot[0], pid: process.pid }]) === null, 'a saját folyamatot kizárja');
 
 // A gyakorlatban mért eset (2026-11-13, éles próba): három azonos nevű `pwsh`
 // indult 11 s alatt, ezért a token + időablak kétértelmű lett és nem volt

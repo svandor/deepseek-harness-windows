@@ -290,19 +290,41 @@ export function matchUntracked(record, snapshot, toleranceMs = 3_000, selfPid = 
     };
     const descendants = snapshot.filter((row) => inWindow(row) && row.cmdline.toLowerCase().includes(token) && descendsFromSpawner(row));
     if (descendants.length === 1) return { pid: descendants[0].pid, started: String(descendants[0].startedMs) };
-    if (descendants.length > 1) return null; // kétértelmű — nem tippelünk
+    // MÉRT HIBA (2026-11-13): itt korábban `return null` állt, ezért a
+    // kétértelmű lánc-ág MINDIG elnyelte a lehetőséget, és a legközelebbi-idő
+    // ág soha nem futott le (a valós, elárvuló próba sem talált párt). Most a
+    // lánc csak akkor dönt, ha egyértelmű — különben továbbengedünk.
   }
 
-  // 2) TARTALÉK: a harness közvetlen gyermekei, majd token-szűrés.
+  // MÉRT HIBA (2026-11-13): a `cmdline.includes(token)` RÉSZSTRING volt, ezért
+  // egy parancssor, amely több programot is megnevez (pl. `node.exe … pwsh.exe`),
+  // KÉT különböző rekordhoz is illeszkedett, és ugyanazt a PID-et adta vissza.
+  // Ezért a jelölt SAJÁT exe-nevét hasonlítjuk (ugyanazzal a kinyeréssel).
+  const sameExecutable = (row) => executableToken({ cmdline: row.cmdline }) === token;
+
+  // 2) TARTALÉK: a harness közvetlen gyermekei, exe-egyezéssel.
   const children = snapshot.filter((row) => inWindow(row) && row.parentPid === selfPid);
-  const byToken = children.filter((row) => row.cmdline.toLowerCase().includes(token));
-  let candidates = byToken.length > 0 ? byToken : children;
+  let candidates = children.filter(sameExecutable);
 
-  // Nincs közvetlen gyermek (pl. héj közbeiktatásával indult): vissza a tokenre.
-  if (candidates.length === 0) candidates = snapshot.filter((row) => inWindow(row) && row.cmdline.toLowerCase().includes(token));
+  // Nincs egyező gyermek (pl. héj közbeiktatásával indult): exe-egyezés bárhol.
+  if (candidates.length === 0) candidates = snapshot.filter((row) => inWindow(row) && sameExecutable(row));
 
-  if (candidates.length !== 1) return null;
-  return { pid: candidates[0].pid, started: String(candidates[0].startedMs) };
+  if (candidates.length === 1) return { pid: candidates[0].pid, started: String(candidates[0].startedMs) };
+
+  // 3) MÉRT ESET (2026-11-13): a köztes sandbox-runner kilép, így a folyamat
+  //    újraszülőül — a leszármazási lánc ELSZAKAD, és a fenti ágak sem
+  //    egyértelműek. Ilyenkor a LEGKÖZELEBBI indítási idő dönt, szigorú
+  //    feltételekkel: max. 5 s eltérés, és a második legközelebbi legalább
+  //    1,5 s-mal messzebb legyen (különben kétértelmű → nem tippelünk).
+  const sameName = snapshot.filter((row) => row.pid !== selfPid && row.startedMs !== null && sameExecutable(row));
+  if (sameName.length === 0) return null;
+  const ranked = sameName
+    .map((row) => ({ row, distance: Math.abs(row.startedMs - record.at) }))
+    .sort((left, right) => left.distance - right.distance);
+  const best = ranked[0];
+  if (best.distance > 5_000) return null;
+  if (ranked.length > 1 && ranked[1].distance - best.distance < 1_500) return null;
+  return { pid: best.row.pid, started: String(best.row.startedMs) };
 }
 
 /**

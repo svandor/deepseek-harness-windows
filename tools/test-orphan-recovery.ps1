@@ -8,6 +8,19 @@
   volt, hogy egy DSH-ból indított dev szerver a DSH összeomlása után tovább fut,
   de a felületen nem jelenik meg és nem állítható le.
 
+  FONTOS KORLÁT (mért, 2026-11-13): a KÖZÖNSÉGES spawnból indított folyamat
+  NEM maradhat elárvult ezen a builden, mert a mag kill-on-close Job Objectbe
+  teszi (`dsh-win32-process`: `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`,
+  `AssignProcessToJobObject`) — a harness halálakor a kernel levágja a teljes
+  gyermekfát, `Stop-Process -Force` esetén is. Három próba ezért adott
+  `no-orphan-adopted`-et, holott a matcher működött: nem volt mit párosítani.
+
+  Orphan csak a TERMINÁLBÓL (ConPTY) indított folyamat lehet, mert az a mag
+  saját figyelmeztetése szerint kívül esik a Jobon
+  (`dsh-subprocess-local`: „Windows ConPTY remains outside Job containment").
+  A valódi elfogadási próba ezért: a FELÜLETEN, terminál-panelben indított
+  hosszú folyamat + ez a szkript. Háttér-jobbal a próba soha nem lehet `pass`.
+
   A próba menete:
     1) megjegyzi az indulás előtti ledger-állapotot,
     2) DURVÁN leállítja a harness folyamatát (Stop-Process -Force = kill -9),
@@ -66,14 +79,40 @@ function Read-HarnessPid {
   return 0
 }
 
+<#
+  A harness PID-je ROBUSZTUSAN. MÉRT HIBA (2026-11-13): a `state\harness.pid`
+  elavult lehet (a tálca indította példányt nem írja senki), ezért a próba
+  egy halott PID-re próbált támaszkodni, és az őr leállította a futást.
+  Sorrend: pid-fájl (ha él) → a port BIRTOKLÓJA (`netstat -ano`) → 0.
+#>
+function Resolve-HarnessPid([int]$Port) {
+  $candidate = Read-HarnessPid
+  if ($candidate -ne 0 -and (Get-Process -Id $candidate -ErrorAction SilentlyContinue)) {
+    return @{ pid = $candidate; source = 'state\harness.pid' }
+  }
+  try {
+    $lines = & "$env:SystemRoot\System32\NETSTAT.EXE" -ano -p TCP 2>$null
+    foreach ($line in $lines) {
+      if ($line -notmatch ":$Port\s+\S+\s+LISTENING\s+(\d+)") { continue }
+      $ownerPid = [int]$Matches[1]
+      if ($ownerPid -gt 0 -and (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue)) {
+        return @{ pid = $ownerPid; source = 'netstat (portbirtokos)' }
+      }
+    }
+  } catch { }
+  return @{ pid = 0; source = 'nem oldható fel' }
+}
+
 # --- 1) kiindulás -------------------------------------------------------------
 if ($DelaySeconds -gt 0) {
   Note ("várakozás {0} s (a folyamatban lévő munka kiéréséhez)" -f $DelaySeconds)
   Start-Sleep -Seconds $DelaySeconds
 }
 
-$oldPid = Read-HarnessPid
+$resolved = Resolve-HarnessPid -Port $Port
+$oldPid = $resolved.pid
 $report.oldHarnessPid = $oldPid
+$report.oldHarnessPidSource = $resolved.source
 $untrackedBefore = 0
 if (Test-Path $ledgerDir) {
   foreach ($file in Get-ChildItem $ledgerDir -Filter '*.jsonl' | Where-Object { $_.Name -ne '_diag.jsonl' }) {
@@ -81,7 +120,7 @@ if (Test-Path $ledgerDir) {
   }
 }
 $report.untrackedRecordsBefore = $untrackedBefore
-Note ("induló harness pid: {0} · untracked rekord: {1}" -f $oldPid, $untrackedBefore)
+Note ("induló harness pid: {0} ({1}) · untracked rekord: {2}" -f $oldPid, $resolved.source, $untrackedBefore)
 
 if ($oldPid -eq 0) {
   Note 'NINCS harness.pid — a próba nem értelmezhető.'
@@ -148,6 +187,14 @@ if ($DryRun) {
   try { & $starter -Port $Port -Force | Out-Host } catch { Note ("  restart hiba: " + $_.Exception.Message) }
 }
 
+# MÉRT HIBA (2026-11-13, súlyos): a riport a ledger ÖSSZES `adopted` sorát
+# olvasta, ezért egy KORÁBBI futás rekordjait értékelte `pass`-nak — és a
+# takarítás leállította azokat a folyamatokat (két Chrome példány), amelyek nem
+# ehhez a futáshoz tartoztak. Ezért csak az EZEN újraindítás UTÁN keletkezett
+# `adopted` sorok számítanak.
+$restartAt = Get-Date
+$report.restartAt = $restartAt.ToString('o')
+
 # --- 4) boot megvárása --------------------------------------------------------
 $deadline = (Get-Date).AddSeconds(120)
 $newPid = 0
@@ -159,8 +206,16 @@ if ($DryRun) {
   # így a régi és az új példány adata nem keveredik.
   $bootWatch = @{}
   $bootDeadline = (Get-Date).AddSeconds(120)
+  $tick = 0
   while ((Get-Date) -lt $bootDeadline) {
+    $tick += 1
+    # A pid-fájl elavult lehet (a tálca indította példányt nem írja senki),
+    # ezért másodpercenként a port birtokosát is megkérdezzük.
     $samplePid = Read-HarnessPid
+    if ($tick % 4 -eq 1) {
+      $resolvedNow = Resolve-HarnessPid -Port $Port
+      if ($resolvedNow.pid -ne 0) { $samplePid = $resolvedNow.pid }
+    }
     if ($samplePid -eq 0) { $samplePid = $oldPid }
     $process = Get-Process -Id $samplePid -ErrorAction SilentlyContinue
     if ($process -ne $null) {
@@ -196,16 +251,23 @@ Note ("új harness pid: {0}" -f $newPid)
 if (-not $DryRun) { Start-Sleep -Seconds 25 }
 
 # --- 5) az `adopted` sorok kiolvasása ----------------------------------------
+# CSAK a mostani újraindítás utáni sorok (lásd a $restartAt megjegyzését).
+$restartMs = [DateTimeOffset]::new($restartAt).ToUnixTimeMilliseconds()
 $adopted = @()
+$staleAdopted = 0
 if (Test-Path $ledgerDir) {
   foreach ($file in Get-ChildItem $ledgerDir -Filter '*.jsonl') {
     foreach ($line in (Select-String -Path $file.FullName -Pattern '"t":"adopted"').Line) {
-      try { $adopted += ($line | ConvertFrom-Json) } catch { }
+      try {
+        $entry = $line | ConvertFrom-Json
+        if ([int64]$entry.at -ge $restartMs) { $adopted += $entry } else { $staleAdopted += 1 }
+      } catch { }
     }
   }
 }
 $report.adopted = $adopted
-Note ("párosított (adopted) rekord: {0}" -f $adopted.Count)
+$report.staleAdoptedIgnored = $staleAdopted
+Note ("párosított (adopted) rekord EBBEN a futásban: {0}  (korábbi futásból kihagyva: {1})" -f $adopted.Count, $staleAdopted)
 
 # Az ítélet csak akkor `pass`, ha a párosított folyamat TÉNYLEG él és tényleg a
 # régi futásból való (a PID a mostani folyamatlistában létezik). Enélkül a riport
