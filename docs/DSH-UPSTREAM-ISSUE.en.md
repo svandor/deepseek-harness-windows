@@ -101,3 +101,50 @@ offset and a review of every `seq` consumer (≈35 packages). That is why it is
 not proposed as a local patch; protocol-level compaction
 (`compaction/replace`) already bounds disk usage and the memory of a reopened
 session.
+
+---
+
+## Appendix: long-session memory (`this.log` and `eventsSnapshot`)
+
+Verified against the running code (2026-11-13); line numbers refer to
+`@deepseek-ai/dsh-session/lib/index.js`.
+
+**1. The log grows without bound.** `append()` → `this.log.push(event)`
+(`:1200`), then `this.eventsSnapshot = void 0` (`:1201`): every event
+invalidates the cache. The `seq` contract is `seq = log.length` (`:1129–1131`)
+and `eventAt(seq)` indexes the array directly (`:1096–1098`), so the log
+**cannot be truncated from the front**: a cap needs a `baseSeq`/`logStart`
+offset and a review of every `seq` consumer (≈35 packages).
+
+**2. The "full" snapshot is a COPY, not a view.** For the full range
+`snapshotEvents()` returns `Object.freeze([...this.log])` (`:1109`); for a
+partial range it returns `this.log.slice(...)` (`:1112`) — both are NEW arrays.
+
+**3. The expensive caller sits on the hot path.** `dsh-agent-loop:231` calls
+`session.snapshotEvents().toReversed()` — so every LLM request builds two
+arrays from the whole log (the copy and the reversed copy). Full snapshots are
+also taken by the projection rebuild (`dsh-session-projection:381`), session
+attach (`dsh-api-session-controller:904, 2815`), session title (`:282`) and the
+`log-deepseek` writer (`:124`); `dsh-session-query:303` even clones DEEPLY via
+`structuredClone`.
+
+**4. A prefix concept already exists — for a different purpose.** A fork's
+`inheritedEventCount` (`:1083–1084`, `ownEvents()` `:1118–1120`) is exactly a
+prefix boundary, except the prefix is KEPT. A cap would need the same thing
+with a discarded prefix.
+
+**5. Proposal (5 points).**
+1. `logStart`/`baseSeq` in the session header and in the persisted form;
+   `eventAt(seq)` and `snapshotEvents` index through it.
+2. `snapshotEvents()` should return a **view** (iterator + `length` + `at()`),
+   not an array; replace `.toReversed()` with a reverse iterator.
+3. A periodic `session/checkpoint` event carrying the folded state, so loading
+   replays from the checkpoint band instead of from 0.
+4. A configurable cap (`maxLogEvents`), and trimming only after checkpoint(s).
+5. Client-facing calls (`dsh-api-session-controller`) should use offset/limit
+   paging — the API already supports the half-open range.
+
+**What NOT to do:** blind truncation of `this.log`. Loading builds from the log,
+`seq` continuity is the contract, and `storedCount` / `inheritedEventCount` /
+the projections would point at the discarded prefix — the same failure class as
+relocating the session store's key (item 3).
