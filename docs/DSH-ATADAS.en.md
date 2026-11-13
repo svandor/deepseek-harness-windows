@@ -121,15 +121,16 @@ harness, so it is a separate, deliberate step (it terminates the session).
 
 | # | Criterion | Status | Evidence / what is missing |
 |---|---|---|---|
-| 1 | an orphaned job appears and can be stopped | **NOT PROVEN** | the mechanism is ready (ledger + reconciliation + `job_kill`), but the end-to-end test returned `restart-failed`: after the hard kill the boot died on my broken session merge (6.5). It must be re-run on a clean store. |
+| 1 | an orphaned job appears and can be stopped | **PARTLY PROVEN — structurally bounded on the job path** | The ledger and the boot-time reconciliation are ready, and `job_kill` stops by PID + start time. The test returned `no-orphan-adopted` three times because an ordinary spawn dies with the harness thanks to the **kill-on-close Job Object** (§9) — there is nothing to recover on that path. The **panel-run** path, however, has been proven since 2026-11-13 (10.6): `vite` survived the restart, appeared as a recovered run, and was stopped with a verified `taskkill /T`. |
 | 2 | PID + start time; no foreign kill on PID reuse | **PROVEN (unit and live)** | 6 unit assertions on matching (single / ambiguous / time-distant / short token / no match / own process excluded); the `cancel()` test proves it does not kill our own process. Live: 2/13 matches, 2 distinct PIDs. |
-| 3 | startup peak < 1 GB | **NOT MEASURED** | steady state is 811 MB; the boot peak has not been sampled yet (`tools\sample-startup-memory.ps1` is ready). The original 6.7 GB is **not reproducible** per the static analysis (6.7). |
-| 4 | sessions under the correct workspace after relocation | **DESIGN ERROR — NOT MOVABLE** | the storage key is the literal header `cwd`, which the core verifies (`assertStoredIdentity`, `:3246–3257`). It cannot be fixed by moving; either the header `cwd` must be rewritten or the core must canonicalize at store time → upstream item 3. |
+| 3 | startup peak < 1 GB | **MEASURED — interpretation-dependent** | boot RSS 825–941 MB, heap 325–376 MB, `arrayBuffers` ~100 MB (2 s × 60 s sample, `_diag.jsonl` `boot-mem`) → the **RSS** peak is < 1 GB; `PrivateMemorySize64` is 5 853–8 588 MB, but that is commit charge, not resident memory (6.8). The original 6.7 GB is not reproducible (6.7). |
+| 4 | sessions under the correct workspace after relocation | **SOLVED (by rewriting the header, not by moving)** | Moving alone is broken because the key is the header's literal `cwd`, which the core verifies (`assertStoredIdentity`, `:3246–3257`) — and I did break that once (6.5). The correct route is rewriting the header `cwd` and then moving: `tools\canonicalize-session-store.mjs`, result **1188/1188 consistent sessions, 17 → 10 project directories**, mtimes restored (`tools\restore-session-mtimes.mjs`). Core-side canonicalization remains an upstream request (item 3). |
 | 5 | no "may be orphaned" line on clean shutdown | **NOT ADDRESSED** | that line comes from the core teardown branch (`dsh-jobs-local:444–445`) when a `cancel()` throws. The plugin does not affect it; only an upstream fix removes it. |
 
-This table is the document's most important statement: **none of the delivered
-work is fully proven against its acceptance criteria**, and the partial results
-do not paper over that.
+This table is the document's most important claim: of the delivered work's
+criteria **two are fully proven (2, 4), one is measured (3), and two are still
+not met** — item 1 is structurally bounded by the Job Object (its panel path
+is not), and item 5 only disappears with an upstream fix.
 
 
 ---

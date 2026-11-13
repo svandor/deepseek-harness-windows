@@ -121,15 +121,17 @@ ezért külön, tudatos lépés (a munkamenet megszakad vele).
 
 | # | Kritérium | Állapot | Bizonyíték / mi hiányzik |
 |---|---|---|---|
-| 1 | elárvult job megjelenik és leállítható | **NEM IGAZOLT** | a mechanizmus kész (ledger + reconciláció + `job_kill`), de a végpontig tartó próba `restart-failed` lett: a durva leállítás után a boot elhalt a hibás session-összevonásomon (6.5). Tiszta állapotban újra kell futtatni. |
+| 1 | elárvult job megjelenik és leállítható | **RÉSZBEN IGAZOLT — a job-ágon strukturálisan korlátos** | A ledger + induláskori reconciliáció kész, a `job_kill` PID + indítási idő ellenőrzéssel öl. A próba háromszor `no-orphan-adopted` lett, mert a szokásos spawn a **Job Object kill-on-close** miatt a harness halálakor meghal (9. pont) — ezen az ágon nincs mit visszanyerni. A **panel-futás** ága viszont 2026-11-13 óta igazoltan működik (10.6): a `vite` túlélte a restartot, recovered futásként megjelent, és ellenőrzött `taskkill /T`-vel leállt. |
 | 2 | PID + indítási idő; PID-újrahasznosításnál nem öl | **IGAZOLT (egység- és élő szinten)** | 6 egységteszt a párosításra (egy jelölt / kétértelmű / időben távoli / rövid token / nincs találat / saját folyamat kizárása); a `cancel()` tesztje igazolja, hogy a saját folyamatot nem öli meg. Élő mérés: 2/13 találat, 2 különböző PID. |
-| 3 | induláskori csúcs < 1 GB | **NEM MÉRT** | a futó állapot 811 MB; a boot-csúcsot még nem mintavételeztük (`tools\sample-startup-memory.ps1` kész). A kiinduló 6,7 GB a statikus elemzés szerint **nem reprodukálható** (6.7). |
-| 4 | áthelyezés után helyes workspace | **TERVEZÉSI HIBA — NEM MOZGATHATÓ** | a tároló kulcsa a fejléc `cwd` literális szövege, ezt a mag ellenőrzi (`assertStoredIdentity`, `:3246–3257`). Áthelyezéssel nem javítható, csak ha a fejléc `cwd` is átíródik VAGY a mag kanonizál tároláskor → upstream 3. pont. |
+| 3 | induláskori csúcs < 1 GB | **MÉRVE — értelmezésfüggő** | boot RSS 825–941 MB, heap 325–376 MB, `arrayBuffers` ~100 MB (2 s × 60 s minta, `_diag.jsonl` `boot-mem`) → az **RSS**-csúcs < 1 GB; a `PrivateMemorySize64` 5 853–8 588 MB, de az commit charge, nem rezidens memória (6.8). A korábbi 6,7 GB-os kiinduló nem reprodukálható (6.7). |
+| 4 | áthelyezés után helyes workspace | **MEGOLDVA (fejléc-átírással, nem áthelyezéssel)** | Az áthelyezés önmagában hibás, mert a kulcs a fejléc literális `cwd`-je, amit a mag ellenőriz (`assertStoredIdentity`, `:3246–3257`) — ezt egyszer el is rontottam (6.5). A helyes út a fejléc `cwd` átírása + move: `tools\canonicalize-session-store.mjs`, eredmény **1188/1188 konzisztens session, 17 → 10 projektmappa**, az mtime-ok helyreállítva (`tools\restore-session-mtimes.mjs`). A mag-oldali kanonizálás továbbra is upstream kérés (3. pont). |
 | 5 | szabályos leállásnál nincs „may be orphaned" | **NEM CÉLZOTT** | a sor a mag teardown-ágából jön (`dsh-jobs-local:444–445`), amikor egy `cancel()` dob. A plugin ezt nem érinti; csak upstream javítással szűnik meg. |
 
-Ez a táblázat a dokumentum legfontosabb állítása: **a leadott munka egyik
-kritériuma sincs teljes egészében bizonyítva**, és ezt nem szépíti a
-részeredmények felsorolása.
+
+Ez a táblázat a dokumentum legfontosabb állítása: a leadott munka kritériumai
+közül **kettő teljesen igazolt (2, 4), egy mérve (3), kettő pedig továbbra sem
+teljesül** — az 1. a Job Object miatt strukturálisan korlátos (a panel-ága
+viszont igen), az 5. csak upstream javítással szűnik meg.
 
 
 ---
