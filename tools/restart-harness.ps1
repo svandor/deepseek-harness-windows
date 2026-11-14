@@ -488,12 +488,19 @@ if ($null -ne $candidate) {
 }
 
 # --- 4) token URL mentese (atomikusan) ---------------------------------------
+# CSAPDA (mért hiba, 2026-11-14): ha a naplóban EGYETLEN találat van, a
+# `.Matches.Value` STRING (nem tömb), és a `$match[-1]` az utolsó KARAKTERT
+# adja — a `state\harness.url` így „M", majd „I" lett, a plugin pedig
+# `a harness.url érvénytelen` hibával esett el. Ezért: `@()` burkolás, és a
+# kiválasztott értéket ELLENŐRIZZÜK a mintával, mielőtt kiírjuk.
 $url = $null
+$urlPattern = "^http://127\.0\.0\.1:$Port/\?token=[A-Za-z0-9_\-]+$"
 $deadline = (Get-Date).AddSeconds(45)
 while ((Get-Date) -lt $deadline) {
   if (Test-Path $logFile) {
-    $match = ((Get-Content $logFile -Raw) | Select-String -Pattern "http://127\.0\.0\.1:$Port/\?token=[A-Za-z0-9_\-]+" -AllMatches).Matches.Value
-    if ($match -and $match.Count -gt 0) { $url = $match[-1]; break }
+    $matches = @(((Get-Content $logFile -Raw) | Select-String -Pattern "http://127\.0\.0\.1:$Port/\?token=[A-Za-z0-9_\-]+" -AllMatches).Matches.Value |
+      Where-Object { $_ -match $urlPattern })
+    if ($matches.Count -gt 0) { $url = [string]($matches[-1]); break }
   }
   Start-Sleep -Seconds 2
 }

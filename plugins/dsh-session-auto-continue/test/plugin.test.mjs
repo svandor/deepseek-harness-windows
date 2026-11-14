@@ -104,7 +104,7 @@ test("megszakadt kör: a folytatás átmegy a HTTP RPC-n", async () => {
   process.env.DSH_AUTO_CONTINUE_BASE_URL = rpc.url;
   const plugin = await loadPlugin("interrupted");
   const now = Date.now();
-  const sessions = [fakeSession("session-1", [turnStart(1, now - 1000), turnEnd(2, now - 500, "interrupted")])];
+  const sessions = [fakeSession("session-1", [turnStart(1, now - 600000), turnEnd(2, now - 599000, "interrupted")])];
   plugin.apply(fakeCtx(sessions));
   await new Promise((resolve) => setTimeout(resolve, WAIT_MS));
   await rpc.close();
@@ -124,7 +124,7 @@ test("befejezett kör: nincs RPC-hívás", async () => {
   process.env.DSH_AUTO_CONTINUE_BASE_URL = rpc.url;
   const plugin = await loadPlugin("completed");
   const now = Date.now();
-  const sessions = [fakeSession("session-2", [turnStart(1, now - 1000), turnEnd(2, now - 500, "completed")])];
+  const sessions = [fakeSession("session-2", [turnStart(1, now - 600000), turnEnd(2, now - 599000, "completed")])];
   plugin.apply(fakeCtx(sessions));
   await new Promise((resolve) => setTimeout(resolve, WAIT_MS));
   await rpc.close();
@@ -136,18 +136,33 @@ test("nyitott turn (nyers crash-állapot): RPC-hívás történik", async () => 
   process.env.DSH_AUTO_CONTINUE_BASE_URL = rpc.url;
   const plugin = await loadPlugin("open");
   const now = Date.now();
-  const sessions = [fakeSession("session-3", [turnStart(1, now - 1000)])];
+  const sessions = [fakeSession("session-3", [turnStart(1, now - 600000)])];
   plugin.apply(fakeCtx(sessions));
   await new Promise((resolve) => setTimeout(resolve, WAIT_MS));
   await rpc.close();
   assert.equal(rpc.calls.length, 1, "a nyitott kört is folytatni próbálja");
 });
 
+test("ÉLŐ session (a boot UTÁNI körhatár): nincs RPC-hívás", async () => {
+  const rpc = await fakeRpcServer();
+  process.env.DSH_AUTO_CONTINUE_BASE_URL = rpc.url;
+  const plugin = await loadPlugin("live");
+  const now = Date.now();
+  // A kör-határ a MOSTANI boot után van: a session dolgozik, nem szakadt meg.
+  // Mért hiba (2026-11-14 06:56): enélkül a plugin sorba állított egy
+  // „Automatikus folytatás" üzenetet egy élő beszélgetésben.
+  const sessions = [fakeSession("session-live", [turnStart(1, now - 1000)])];
+  plugin.apply(fakeCtx(sessions));
+  await new Promise((resolve) => setTimeout(resolve, WAIT_MS));
+  await rpc.close();
+  assert.equal(rpc.calls.length, 0, "élő sessionbe nem szabad beleírni");
+});
+
 test("jelölő: ugyanaz a kör nem küldődik kétszer", async () => {
   const rpc = await fakeRpcServer();
   process.env.DSH_AUTO_CONTINUE_BASE_URL = rpc.url;
   const now = Date.now();
-  const sessions = [fakeSession("session-4", [turnStart(1, now - 1000), turnEnd(2, now - 500, "interrupted")])];
+  const sessions = [fakeSession("session-4", [turnStart(1, now - 600000), turnEnd(2, now - 599000, "interrupted")])];
   const first = await loadPlugin("marker-1");
   first.apply(fakeCtx(sessions));
   await new Promise((resolve) => setTimeout(resolve, WAIT_MS));

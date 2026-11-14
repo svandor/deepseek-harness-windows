@@ -136,18 +136,26 @@ const MAX_AGE_MS = 6 * 60 * 60 * 1000;
  * @returns {Promise<string|null>} hibaüzenet vagy null siker esetén.
  */
 async function promptViaHttp(sessionId) {
-  let base;
-  try {
-    base = process.env.DSH_AUTO_CONTINUE_BASE_URL ?? readFileSync(join(stateDir(), "harness.url"), "utf8").trim();
-  } catch (error) {
-    return `a harness.url nem olvasható: ${String(error?.message ?? error)}`;
-  }
-  let origin;
-  try {
-    origin = new URL(base).origin;
-  } catch {
-    return `a harness.url érvénytelen: ${base.slice(0, 40)}`;
-  }
+  // A token-forrás: `state\harness.url`, és ha az sérült/üres, akkor a
+  // `state\harness.log` (amit a harness maga ír). Mért eset (2026-11-14): a
+  // restart-szkript egy hibája miatt a `harness.url` egyetlen KARAKTER volt
+  // („M", majd „I"), és a folytatás emiatt hasalt el — a naplóból viszont
+  // mindig kinyerhető az érvényes URL.
+  const urlPattern = /^http:\/\/127\.0\.0\.1:\d+\/\?token=[A-Za-z0-9_-]+$/u;
+  const readUrlSource = () => {
+    const candidates = [];
+    if (process.env.DSH_AUTO_CONTINUE_BASE_URL) candidates.push(process.env.DSH_AUTO_CONTINUE_BASE_URL);
+    try { candidates.push(readFileSync(join(stateDir(), "harness.url"), "utf8").trim()); } catch { /* nincs fájl */ }
+    try {
+      const log = readFileSync(join(stateDir(), "harness.log"), "utf8");
+      const found = log.match(/http:\/\/127\.0\.0\.1:\d+\/\?token=[A-Za-z0-9_-]+/u);
+      if (found !== null) candidates.push(found[0]);
+    } catch { /* nincs napló */ }
+    return candidates.find((value) => urlPattern.test(value)) ?? null;
+  };
+  const base = readUrlSource();
+  if (base === null) return "a harness.url és a harness.log sem tartalmaz érvényes token-URL-t";
+  const origin = new URL(base).origin;
   // 1) token -> süti
   let cookie = "";
   try {
@@ -514,6 +522,8 @@ async function runOnce(ctx) {
   }
   const markers = readMarkers();
   const now = Date.now();
+  // A MOSTANI harness indulása: ami ez UTÁN történt, az nem összeomlás.
+  const harnessStart = now - Math.round(process.uptime() * 1000);
   /** @type {{sessionId: string, key: string, seq: number, lastAt: number, open: boolean, fromDisk: boolean}[]} */
   const candidates = [];
   let sessions = [];
@@ -530,6 +540,9 @@ async function runOnce(ctx) {
     if (candidate === null) continue;
     attached.add(String(session.id));
     if (now - candidate.lastAt > MAX_AGE_MS) continue;
+    // ÉLŐ SESSION KIZÁRÁSA: ha a kör-határ a mostani boot UTÁN van, a session
+    // dolgozik (a nyitott turn futó kört jelent, nem összeomlást).
+    if (candidate.lastAt >= harnessStart) continue;
     if (markers[candidate.key] === true) continue;
     candidates.push({
       sessionId: String(session.id),
@@ -546,11 +559,20 @@ async function runOnce(ctx) {
   if (candidates.length === 0) {
     for (const recent of listRecentSessionFiles(3)) {
       if (attached.has(recent.id)) continue;
+      // ÉLŐ SESSION KIZÁRÁSA. Ha a napló a MOSTANI boot után íródott, akkor a
+      // session dolgozik — a nyitott `turn/start` nem összeomlás, hanem futó
+      // kör. Mért hiba (2026-11-14 06:56): enélkül a plugin egy ÉLŐ
+      // beszélgetésbe tett be egy „Automatikus folytatás" üzenetet, ami a
+      // `mode:"queue"` miatt nem hibázott, hanem SORBA ÁLLT — a felhasználó
+      // „2 várakozó üzenet"-et látott.
+      if (Number.isFinite(recent.mtime) && recent.mtime >= harnessStart) continue;
       const boundary = lastBoundaryFromDisk(recent.file);
       if (boundary === null) continue;
       const open = boundary.type === "turn/start";
       if (open !== true && boundary.reason !== "interrupted") continue;
       if (Number.isFinite(boundary.time) !== true || now - boundary.time > MAX_AGE_MS) continue;
+      // Ugyanez a határ időben is: a kör-határ nem lehet a boot utáni.
+      if (boundary.time >= harnessStart) continue;
       const key = `${recent.id}:${boundary.seq}:${open ? "open" : "interrupted"}`;
       if (markers[key] === true) continue;
       candidates.push({ sessionId: recent.id, key, seq: boundary.seq, lastAt: boundary.time, open, fromDisk: true });
