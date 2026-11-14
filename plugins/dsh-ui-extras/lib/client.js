@@ -6787,6 +6787,15 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       // closed terminal; these ids are refused by the merge.
       var closedRef = react.useRef({});
 
+      // Ha az aktív terminál eltűnik (leállt, bezárták, más bootból volt),
+      // essünk vissza a legjobb élő futásra — üres terminál-felület helyett.
+      react.useEffect(function () {
+        if (activeId === null || activeId === undefined) return;
+        if (terminals[activeId]) return;
+        var fallback = pickBestTerminal(terminals, workspaceDir);
+        if (fallback !== null) setActiveId(fallback);
+      }, [terminals, activeId, workspaceDir]);
+
       // Current directory per terminal, tracked from the commands that change it
       // (the shell's own cwd is not visible from the host), starting at the
       // workspace root the session was opened in.
@@ -6971,7 +6980,15 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
         });
         dirsRef.current = {};
         setDirs({});
-        setActiveId(null);
+        // NEM nullázunk: a felhasználó célja, hogy a futó munkafolyamatok
+        // mindig elérhetők legyenek, és a váltás ne üres terminált mutasson.
+        // Előbb a MÁR kiválasztott (ha még él), aztán az új munkaterülethez
+        // tartozó legfrissebb élő, végül bármelyik legfrissebb élő futás.
+        setActiveId(function (current) {
+          var all = terminalsRef.current || {};
+          if (current && all[current] && all[current].done !== true && all[current].alive !== false) return current;
+          return pickBestTerminal(all, workspaceDir);
+        });
         setZoomId(null);
         reportToHost("terminal workspace switch", String(previous) + " -> " + String(workspaceDir));
       }, [workspaceDir]);
@@ -6989,8 +7006,32 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
        * session) would otherwise each start a shell for the same project. A
        * workspace that already has a run keeps it and starts nothing.
        */
+      /**
+       * A legjobb aktív terminál egy munkaterület-váltáshoz.
+       *
+       * Sorrend: (1) az új munkaterülethez tartozó ÉLŐ futás, a legfrissebb
+       * indulás szerint; (2) ha ott nincs, bármely ÉLŐ futás (a felhasználó
+       * célja: „minden futó munkafolyamat elérhető, bármelyik repó van
+       * kiválasztva"); (3) null, ha semmi nem fut.
+       *
+       * @param all - a terminál-rekordok térképe (id -> rekord).
+       * @param workspaceDir - a most kiválasztott munkaterület.
+       * @returns {string|null} a kiválasztandó terminál id-ja.
+       */
+      function pickBestTerminal(all, workspaceDir) {
+        var entries = Object.keys(all || {}).map(function (id) { return all[id]; });
+        var alive = entries.filter(function (entry) {
+          return entry && entry.done !== true && entry.alive !== false;
+        });
+        if (alive.length === 0) return null;
+        var key = workspaceKey(workspaceDir);
+        alive.sort(function (left, right) {
+          return String(right.startedAt || "").localeCompare(String(left.startedAt || ""));
+        });
+        var own = alive.filter(function (entry) { return workspaceKey(entry.workspace) === key; });
+        return (own.length > 0 ? own[0] : alive[0]).id;
+      }
       var autoStartedRef = react.useRef(false);
-      var autoStartCountRef = react.useRef(0);
       var panelTagRef = react.useRef(String(Math.floor(Math.random() * 1e9)));
       react.useEffect(function () {
         if (autoStartedRef.current || !docked || !workspaceDir) return undefined;
