@@ -62,8 +62,16 @@ const MAX_SESSIONS = 2;
 /** Ennél régebbi megszakadást nem folytatunk (6 óra). */
 const MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
-/** Boot utáni próbák (ms): a sessionök csak akkor kerülnek a store-ba, amikor a felület megnyitja őket. */
-const DELAYS_MS = [8000, 20000, 45000];
+/**
+ * Boot utáni próbák (ms). MIÉRT NEM ELÉG HÁROM: a sessionök a memóriabeli
+ * store-ban élnek, és csak akkor kerülnek bele, amikor a felület MEGNYITJA
+ * őket — mért eset (2026-11-14 04:47): a boot után 8/20/45 s-mal a store még
+ * nem tartalmazta ezt a beszélgetést (`nincs megszakadt kör (3 session)`),
+ * holott a naplója nyitott `turn/start#5972`-vel végződött és a farok
+ * `tool/call, approval/asked, approval/decided` volt. Ezért ~3 percig
+ * figyelünk, 10 s-onként; a jelölő és a `sentOnce` zárja ki az ismétlést.
+ */
+const DELAYS_MS = [8000, 20000, 45000, ...Array.from({ length: 15 }, (_value, index) => 60000 + index * 10000)];
 
 /** Ebben a bootban már küldtünk-e folytatást (a további próbák kilépnek). */
 let sentOnce = false;
