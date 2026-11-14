@@ -2649,6 +2649,18 @@ async function handleCmd(req, res, url) {
       // accumulate.
       const runs = [];
       for (const run of RUNS.values()) {
+        // ÜRES, HALOTT terminál ne jelenjen meg „meglévő futásként": a
+        // felhasználó jelezte (2026-11-14), hogy a panel a kiválasztott repóhoz
+        // „behasalt egy üres terminált". Az ilyen rekordnak nincs parancsa,
+        // nincs kimenete és nincs élő folyamata — semmit nem hordoz, viszont
+        // úgy néz ki, mintha lenne ott egy terminál.
+        const shellPid = typeof run.pid === "number" ? run.pid : (typeof run.child?.pid === "number" ? run.child.pid : null);
+        const anyAlive = isAlive(shellPid) === true
+          || (Array.isArray(run.survivors) && run.survivors.some((value) => isAlive(value) === true));
+        const emptyShell = String(run.command ?? "").trim().length === 0
+          && String(run.output ?? "").trim().length === 0
+          && anyAlive !== true;
+        if (emptyShell) continue;
         runs.push({
           id: run.id,
           workspace: run.workspace,
@@ -2656,6 +2668,9 @@ async function handleCmd(req, res, url) {
           label: run.label,
           startedAt: run.startedAt,
           done: run.done,
+          // Van-e élő folyamat: a panel ebből tudja, hogy egy visszatöltött
+          // rekordnál nincs mit „folytatni", csak újraindítani.
+          alive: anyAlive,
           code: run.code,
           // `promptAt` and `echoAt` mark where the shell's own output starts and
           // where the echoed input line starts: the panel draws the echo as
