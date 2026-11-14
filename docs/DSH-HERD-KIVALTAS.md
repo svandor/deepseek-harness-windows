@@ -110,25 +110,55 @@ A hosts fájl írása emelt szintet igényel. Terv:
 
 ## 4. Sorrend (mi történik most)
 
-1. **Előfeltétel — önálló PHP.** Standalone PHP 8.4 (NTS, x64) telepítése a
-   Herd `bin` könyvtárán kívülre (pl. `C:\Tools\php84`), és a `php`/`composer`
-   PATH-elése. **Amíg ez nincs meg, a 2. és 5. kritérium nem teljesíthető**
-   (a Herd eltávolítása elvinné a PHP-t).
-2. **`tools\dev.ps1 status`** — az első, kockázatmentes szelet: profil
-   beolvasása, portok, hosts-sor, futó folyamatok, DB-port. Semmit nem indít.
+1. **Előfeltétel — önálló PHP a D: meghajtón, verzióválasztóval.** A Herd
+   `bin` könyvtára helyett **minden új eszköz a D:-re** kerül (a C: nem
+   szemetelődik, mert a Linux-telepítéshez üríteni kell):
+   ```
+   D:\Tools\php\8.4.27\        (NTS, x64, a Herd-től független)
+   D:\Tools\php\current\        -> junction a kiválasztott verzióra
+   D:\Tools\caddy\             (HTTPS, a Herd nélkül)
+   D:\Tools\mkcert\            (helyi CA + tanúsítványok)
+   ```
+   A **verzióválasztó** (`tools\php-version.ps1 -List|-Use 8.4`) a `current`
+   junctiont állítja át, a `.dsh\dev.yaml` `php:` kulcsa pedig a főverziót
+   kéri — így a projekt a maga PHP-ját kapja, nem a Herdét.
+   **Amíg ez nincs meg, a 2. és 5. kritérium nem teljesíthető.**
+2. **`tools\dev.ps1 status`** — KÉSZ. Kockázatmentes szelet: profil, portok,
+   hosts-sor, futó folyamatok, DB-port. Semmit nem indít.
 3. **`dev_start` + `artisan-serve`** — a legegyszerűbb indulás (HTTPS nélkül),
    hogy a lánc mérhető legyen.
 4. **Caddy + mkcert** a `8443`-on, a Herd mellett; az 1. kritérium mérése.
 5. **Job-integráció** (`plugins\dsh-devserver`), hogy a restart utáni
    recovered job (3. kritérium) működjön.
 6. **Hosts-kezelés** emelt segédszkripttel (4. kritérium).
-7. **Herd kivétele** csak az 1–5 teljesülése után (5. kritérium), a
+7. **Adatbázis — DBngin integráció (nem új adatbázis-kezelő).** A DBngin adja
+   a MySQL-t (mért: `dbngin-go` + 2 `mysqld`, `0.0.0.0:3306`). A DSH ezt
+   **felismeri és kiszolgálja**, nem telepít helyette mást:
+   - `dev_status` kimondja, hogy a 3306 figyel-e, és melyik PID tartja;
+   - a `dev_start` a projekt `.env`-jében ellenőrzi a `DB_HOST/DB_PORT`
+     egyezést (írni csak kifejezett `--fix-env` kapcsolóval ír);
+   - `dev_logs` a MySQL-t **nem** naplózza (az a DBngin dolga); csak az
+     alkalmazás `storage\logs\laravel.log`-ját.
+8. **Herd kivétele** csak az 1–5 teljesülése után (5. kritérium), a
    `HKCU\...\Run\de.beyondco.herd` érték törlésével.
 
 ---
 
-## 5. Nem cél
+## 5. Vezérelv: faék egyszerűség
 
-- Nem általános webszerver-menedzser, nem PHP-verziókezelő.
-- Nem helyettesíti a MySQL/DBngin kezelését (a DB-port csak olvasott
-  állapotinformáció a `dev_status`-ban).
+A cél egy **minimalista Laravel fejlesztői környezet** — nem termék, nem
+szolgáltatás-ajánlat. Ezért:
+
+- **Csak az van benne, ami muszáj:** egy profil (`.dsh\dev.yaml`), egy
+  parancs (`tools\dev.ps1`), PHP + Caddy + mkcert. Nincs plugin-marketplace,
+  nincs bejelentkezés, nincs telemetria, nincs upsell.
+- **Semmit nem telepít magától**: minden hiányzó eszközre érthető hiba és a
+  telepítési hely (D:) mondja meg, mit kell tenni.
+- **Nem ír olyat, amihez nincs joga**: hosts/port/tanúsítvány csak kifejezett
+  művelettel, és minden írás naplózva, visszavehetően.
+- **Nem kezel mást, mint a dev szervert**: az adatbázist (DBngin), a Node-ot
+  és a Composer-t használja, nem helyettesíti.
+
+Az átadási spec „nem PHP-verziókezelő" pontja a felhasználói döntés szerint
+**nem érvényes**: kell verziókövető és -választó (2.1/4. pont), mert a Herd
+eltávolítása után a projektnek a saját PHP-verzióját kell megkapnia.

@@ -107,24 +107,55 @@ Writing the hosts file needs elevation on Windows. Plan:
 
 ## 4. Order (what happens now)
 
-1. **Precondition — standalone PHP.** Install PHP 8.4 (NTS, x64) outside Herd's
-   `bin` (e.g. `C:\Tools\php84`) and put `php`/`composer` on PATH. **Until that
-   exists, criteria 2 and 5 cannot be met** (removing Herd would remove PHP).
-2. **`tools\dev.ps1 status`** — the first risk-free slice: read the profile,
-   ports, hosts line, running processes, DB port. Starts nothing.
+1. **Precondition — standalone PHP on the D: drive, with a version selector.**
+   Instead of Herd's `bin` directory, **every new tool goes to D:** (C: is not
+   polluted, because it has to be emptied for the Linux installation):
+   ```
+   D:\Tools\php\8.4.27\        (NTS, x64, independent of Herd)
+   D:\Tools\php\current\        -> junction to the selected version
+   D:\Tools\caddy\             (HTTPS, without Herd)
+   D:\Tools\mkcert\            (local CA + certificates)
+   ```
+   The **version selector** (`tools\php-version.ps1 -List|-Use 8.4`) repoints the
+   `current` junction, and the `php:` key of `.dsh\dev.yaml` asks for the major
+   version — so the project gets its own PHP, not Herd's.
+   **Until that exists, criteria 2 and 5 cannot be met.**
+2. **`tools\dev.ps1 status`** — DONE. The risk-free slice: profile, ports,
+   hosts line, running processes, DB port. Starts nothing.
 3. **`dev_start` + `artisan-serve`** — the simplest start (no HTTPS) so the
    chain becomes measurable.
 4. **Caddy + mkcert** on `8443`, alongside Herd; measure criterion 1.
 5. **Job integration** (`plugins\dsh-devserver`) so the post-restart recovered
    job (criterion 3) works.
 6. **hosts management** via the elevated helper script (criterion 4).
-7. **Remove Herd** only after 1–5 pass (criterion 5), by deleting the
+7. **Database — DBngin integration (not another database manager).** DBngin
+   provides MySQL (measured: `dbngin-go` + 2 `mysqld`, `0.0.0.0:3306`). The DSH
+   **detects and serves** it rather than installing a replacement:
+   - `dev_status` states whether 3306 is listening and which PID holds it;
+   - `dev_start` checks the project's `.env` `DB_HOST/DB_PORT` consistency
+     (writes only with an explicit `--fix-env` switch);
+   - `dev_logs` does **not** log MySQL (that is DBngin's job); only the
+     application's `storage\logs\laravel.log`.
+8. **Remove Herd** only after 1–5 pass (criterion 5), by deleting the
    `HKCU\...\Run\de.beyondco.herd` value.
 
 ---
 
-## 5. Non-goals
+## 5. Guiding principle: dead simple
 
-- Not a general web server manager, not a PHP version manager.
-- Does not replace MySQL/DBngin management (the DB port is read-only status
-  information in `dev_status`).
+The goal is a **minimalist Laravel development environment** — not a product,
+not a service offer. Therefore:
+
+- **Only what is necessary:** one profile (`.dsh\dev.yaml`), one command
+  (`tools\dev.ps1`), PHP + Caddy + mkcert. No plugin marketplace, no login, no
+  telemetry, no upsell.
+- **It installs nothing by itself**: every missing tool produces a clear error
+  naming the installation location (D:).
+- **It writes nothing it has no right to**: hosts/port/certificate only through
+  an explicit operation, and every write is logged and reversible.
+- **It manages nothing beyond the dev server**: it uses the database (DBngin),
+  Node and Composer — it does not replace them.
+
+The handover's "not a PHP version manager" item is **void per the user's
+decision**: a version tracker and selector are required (2.1/4), because after
+Herd is removed the project must get its own PHP version.
