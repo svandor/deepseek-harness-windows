@@ -6401,6 +6401,29 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       var workspaceDir = workspace || liveWorkspace || (sessionListPending() ? "" : (hostWorkspace || ""));
 
       /**
+       * Két munkaterület-útvonal összehasonlítható kulcsa.
+       *
+       * MIÉRT KELL: a panel eddig SZÖVEGESEN hasonlított (`toLowerCase`), viszont
+       * a munkaterület ugyanaz a mappa lehet két alakban — ezen a gépen a
+       * `C:\Szerver` és `C:\Herd` junction a `D:\Szerver`/`D:\Herd` alá mutat.
+       * Mért eset (2026-11-14): a session fejléce `C:\Herd\termeszetgyogyaszoktatas-L12`
+       * volt, a panelben visszatöltött futás viszont `D:\Herd\…` — a futás
+       * ezért „másik projektnek" látszott, és a csempéje eltűnt, noha a dev
+       * szerver FUTOTT (5173). A kulcs ezért a meghajtójelet és az elválasztót
+       * normalizálja; a dokumentált kompromisszum: azonos farok + eltérő meghajtó
+       * ezen a gépen ugyanazt a mappát jelenti.
+       * @param {string} value
+       * @returns {string}
+       */
+      function workspaceKey(value) {
+        return String(value || "")
+          .replace(/^[a-zA-Z]:/u, "")
+          .replace(/[\\/]+/gu, "\\")
+          .replace(/\\+$/u, "")
+          .toLowerCase();
+      }
+
+      /**
        * A terminal's output height, when the user dragged it.
        *
        * The number is the height of the OUTPUT area in pixels, which is what the
@@ -6864,7 +6887,7 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                 // other project's dev server showed up here as if it were running
                 // in this directory. Switching workspaces is switching projects;
                 // the other one's output is not this panel's business.
-                if (String(run.workspace).toLowerCase() !== String(workspaceDir).toLowerCase()) return;
+                if (workspaceKey(run.workspace) !== workspaceKey(workspaceDir)) return;
                 var previousEntry = previous[run.id];
                 var known = previousEntry ? previousEntry.received : 0;
                 // The prompt prefix is stripped per line, but a chunk can arrive
@@ -6902,7 +6925,7 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                 if (closedRef.current[id] === true) { delete next[id]; return; }
                 // A terminal of another workspace is dropped outright, even while it
                 // runs: this panel shows one project.
-                if (String(next[id].workspace).toLowerCase() !== String(workspaceDir).toLowerCase()) { delete next[id]; return; }
+                if (workspaceKey(next[id].workspace) !== workspaceKey(workspaceDir)) { delete next[id]; return; }
                 if (!present[id] && next[id].done === true) delete next[id];
               });
               return next;
