@@ -237,6 +237,26 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-14` — **a megszakadt panel-futás automatikusan folytatódik** (a
+  felhasználó kérése: „újraindítás után automatikus folytatódjanak a
+  megszakadt folyamatok"). A `state\runs.json` rekord mostantól a **parancsot**
+  is tárolja (`command`), nem csak a pidet és a túlélőket. Ha bootkor a
+  munkaterületen **semmi nem él** (a héj EOF-fal kilépett ÉS a gyerekek is
+  elmentek), a `plugins\dsh-ui-extras` `autoResumeRuns()`-ja újraindítja
+  ugyanazzal a munkaterülettel és paranccsal, és a kimenetbe beírja, hogy
+  `[automatikus folytatas a korabbi bootbol: …]`. **Nem** indít újra, ha a
+  munkaterületen még él folyamat (az a folytatás), ha a rekordnak nincs parancsa,
+  vagy ha a `state\no-auto-resume` jelölő / `DSH_NO_AUTO_RESUME=1` kikapcsolja;
+  legfeljebb 8 rekord indul (3 s késleltetés, 1,5 s lépésköz), hogy a boot ne
+  kapjon egyszerre nyolc indulást. A felhasználói szándékot a rekord
+  **eltűnése** hordozza: `stop`/`forget` után a futás `done`, a `persistRuns()`
+  kiveszi a fájlból, tehát semmi nem támasztja fel. Ugyanekkor javítva a
+  **kétfázisú visszatöltés** is: két rekord ugyanarra a munkaterületre a
+  kereséssel nem különböztethető meg, ezért előbb minden rekord a SAJÁT mentett
+  túlélőit kapja, és csak a maradékot osztja ki a keresés (mért eset 04:35:
+  a `run-3` mindkét `vite`-ot elorozta, a `run-7` elveszett; 04:53 után
+  `runs: 2 korábbi futás visszatöltve`, külön rekorddal `46676`-ra és
+  `41572`-re).
 - `2026-11-14` — **két hiba a 2026-11-13-i panel-javítások után** (a 23:33-as
   restart mérése). (1) **A `state\harness.pid` elavultan maradt:** a
   `tools\restart-harness.ps1` a pid-fájlt csak a token-URL megtalálása UTÁN

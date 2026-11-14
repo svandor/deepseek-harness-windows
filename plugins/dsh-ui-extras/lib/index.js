@@ -1604,8 +1604,12 @@ function persistRuns() {
       if (label === "shell" && run.recovered !== true) continue;
       const pid = typeof run.pid === "number" ? run.pid : (typeof run.child?.pid === "number" ? run.child.pid : null);
       const survivors = Array.isArray(run.survivors) ? run.survivors.filter((value) => typeof value === "number") : [];
-      if (pid === null && survivors.length === 0) continue;
+      // A rekord akkor is marad, ha nincs élő pid, de van PARANCS: azt a
+      // következő boot automatikusan újraindíthatja (lásd `autoResumeRuns`).
+      const command = typeof run.command === "string" ? run.command : "";
+      if (pid === null && survivors.length === 0 && command.length === 0) continue;
       const row = { id: run.id, workspace: canonicalWorkspace(run.workspace), label: run.label, pid, startedAt: run.startedAt };
+      if (command.length > 0) row.command = command;
       if (survivors.length > 0) row.survivors = survivors;
       rows.push(row);
     }
@@ -1616,18 +1620,53 @@ function persistRuns() {
 }
 
 /**
- * Túlélő folyamatok keresése munkaterület szerint, EGYETLEN CIM-hívással.
+ * A MEGSZAKADT futások automatikus újraindítása bootkor.
  *
- * MIÉRT KELL: a panel-héj (`powershell -NoExit -Command -`) a szülő halálakor
- * EOF-ot kap a stdin-en és KILÉP, a gyerekei (`npm`, `vite`) viszont tovább
- * élnek — a pid-jüket senki nem mentette el. Ezért bootkor a parancssor
- * munkaterület-útvonalára illesztünk: a `vite` parancssora hordozza a projekt
- * útvonalát (`…\node_modules\.bin\..\vite\bin\vite.js`). Mért eset
- * (2026-11-13): két `vite` (5173/5174) élte túl a restartot, a panelben egyik
- * sem látszott.
- * @param workspaces - a vizsgálandó munkaterület-útvonalak.
- * @returns {Map<string, number[]>} munkaterület -> élő pid-ek.
+ * MIÉRT: ha a harness leáll, a panel-héj EOF-ot kap és kilép. A hosszú életű
+ * gyerekek (`vite`) túlélik és recovered rekordként megjelennek — de ha a
+ * gyerek is elment (összeomlás, `taskkill`, gép-újraindítás), eddig a
+ * felhasználónak kellett kézzel újraindítania. A rekord mostantól a PARANCSOT
+ * is tárolja, így a boot maga indíthatja újra, ugyanazzal a munkaterülettel.
+ *
+ * MIKOR NEM INDÍT ÚJRA:
+ *  - ha a munkaterületen MÉG ÉL folyamat (az a folytatás, nem kell második),
+ *  - ha a rekordnak nincs parancsa (üres terminál),
+ *  - ha a `state\no-auto-resume` jelölő vagy a `DSH_NO_AUTO_RESUME=1` kikapcsolja.
+ * Legfeljebb 8 rekord indul, 3 s késleltetéssel és 1,5 s lépésközzel, hogy a
+ * boot ne kapjon egyszerre nyolc indulást.
+ *
+ * A felhasználói szándékot a rekord ELTŰNÉSE hordozza: ha ő állította le
+ * (`stop`) vagy zárta be (`forget`), a futás `done` lesz, a `persistRuns()`
+ * kiveszi a fájlból, tehát semmi nem indítja újra.
+ * @param rows - a visszatöltés után megmaradt (nem recovered) rekordok.
+ * @returns {number} az újraindított rekordok száma.
  */
+function autoResumeRuns(rows) {
+  if (process.env.DSH_NO_AUTO_RESUME === "1") return 0;
+  if (existsSync(join(PACKAGE_ROOT, "..", "..", "state", "no-auto-resume"))) return 0;
+  const attempts = rows
+    .filter((row) => typeof row?.command === "string" && row.command.trim().length > 0)
+    .filter((row) => typeof row?.workspace === "string" && existsSync(row.workspace))
+    .slice(0, 8);
+  if (attempts.length === 0) return 0;
+  attempts.forEach((row, index) => {
+    const timer = setTimeout(() => {
+      try {
+        const id = startRun(row.workspace, row.command);
+        const run = RUNS.get(id);
+        if (run !== undefined) {
+          appendOutput(run, `\r\n[automatikus folytatas a korabbi bootbol: ${row.command}]\r\n`);
+        }
+        diagLine(`runs: automatikus folytatás ${String(row.id)} (${row.command})`);
+      } catch (error) {
+        diagLine(`runs: az automatikus folytatás nem sikerült (${String(row.id)}): ${String(error?.message ?? error)}`);
+      }
+    }, 3000 + index * 1500);
+    timer.unref?.();
+  });
+  return attempts.length;
+}
+
 /**
  * Egy munkaterülethez tartozó kereső-tűk.
  *
@@ -1784,7 +1823,9 @@ function restoreRuns() {
     RUNS.set(id, {
       id,
       workspace: typeof row.workspace === "string" ? row.workspace : "",
-      command: "",
+      // A parancsot is megtartjuk: ha a folyamat a KÖVETKEZŐ restartra teljesen
+      // eltűnik, ebből indul újra (`autoResumeRuns`).
+      command: typeof row.command === "string" ? row.command : "",
       label: typeof row.label === "string" ? row.label : "shell",
       startedAt: typeof row.startedAt === "string" ? row.startedAt : new Date().toISOString(),
       output: note,
@@ -1815,10 +1856,20 @@ function restoreRuns() {
     if (restore(row, null, survivors)) continue;
     pending.push(row);
   }
+  const interrupted = [];
   for (const row of pending) {
-    restore(row, null, survivorsByWorkspace.get(row.workspace) ?? []);
+    if (restore(row, null, survivorsByWorkspace.get(row.workspace) ?? [])) continue;
+    interrupted.push(row);
   }
-  diagLine(`runs: ${restored} korábbi futás visszatöltve (${rows.length} rekord, ebből ${orphanRows.length} héj nélküli)`);
+  // Amiről kiderült, hogy a munkaterületen SEMMI nem él, azt a parancsával
+  // újraindítjuk (ha van parancsa) — ez a „megszakadt folyamat folytatása”.
+  const resumeCandidates = interrupted.filter((row) => {
+    const found = survivorsByWorkspace.get(row.workspace) ?? [];
+    const recorded = Array.isArray(row.survivors) ? row.survivors : [];
+    return [...found, ...recorded].every((pid) => isAlive(pid) !== true);
+  });
+  const autoResumed = autoResumeRuns(resumeCandidates);
+  diagLine(`runs: ${restored} korábbi futás visszatöltve (${rows.length} rekord, ebből ${orphanRows.length} héj nélküli)${autoResumed > 0 ? `, ${autoResumed} automatikus folytatás` : ""}`);
   persistRuns();
   return restored;
 }
