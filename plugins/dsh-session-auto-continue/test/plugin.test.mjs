@@ -80,14 +80,16 @@ test("befejezett kör: nincs folytatás", async () => {
   assert.equal(sent.length, 0, "nem küld semmit");
 });
 
-test("nyitott turn (élő kör): nincs folytatás", async () => {
+test("nyitott turn (nyers crash-állapot): folytatás megkísérelve", async () => {
   const plugin = await loadPlugin("open");
   const now = Date.now();
   const sent = [];
   const sessions = [fakeSession("session-3", [turnStart(1, now - 1000)])];
   plugin.apply(fakeCtx(sessions, sent));
   await new Promise((resolve) => setTimeout(resolve, WAIT_MS));
-  assert.equal(sent.length, 0, "élő kört nem szabad folytatni");
+  // A crash-javítás nem fut le bootkor, ezért a nyitott kör a NYERS jel — a
+  // promptot meg kell kísérelni; ha a kör éppen fut, az `agent-busy` véd.
+  assert.equal(sent.length, 1, "a nyitott kört is folytatni próbálja");
 });
 
 test("jelölő: ugyanaz a kör nem küldődik kétszer", async () => {

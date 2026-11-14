@@ -142,18 +142,20 @@ function interruptedCandidate(session) {
     }
   }
   if (boundary === null) return null;
-  // SZIGORÚ JEL: csak a mag crash-javítása által bezárt kör (`interrupted`
-  // `turn/end`). A nyitott `turn/start`-ot SZÁNDÉKOSAN nem fogadjuk el: az
-  // lehet egy MOST FUTÓ kör is (a saját hosszú köreimet is beleértve), és akkor
-  // a plugin egy élő beszélgetésbe lőne be — mért következmény: felesleges kör,
-  // LLM-költség. A javítás a `resume()`/megnyitás hatására úgyis lezárja a
-  // félkörben maradt naplót, és a 8/20/45 s-os próbák ezt elkapják.
-  if (boundary.type !== "turn/end") return null;
-  if (boundary.data?.reason?.kind !== "interrupted") return null;
+  // KÉT JEL, mert a crash-javítás NEM fut le automatikusan bootkor (mért:
+  // 2026-11-14 04:41, `nincs megszakadt kör (3 session vizsgálva)`, pedig a kör
+  // nyitva maradt):
+  //  (a) `interrupted` `turn/end` — a javított napló;
+  //  (b) NYITOTT `turn/start` `turn/end` nélkül — a nyers crash-állapot.
+  // A (b) nem lő bele élő körbe: ha a kör TÉNYLEG fut, a prompt `agent-busy`
+  // hibát ad (dsh-api-session-controller:785), amit a hívó „később újra"-ként
+  // kezel — a jelölőt ilyenkor NEM írjuk be.
+  const open = boundary.type === "turn/start";
+  if (open !== true && boundary.data?.reason?.kind !== "interrupted") return null;
   const lastAt = Number(boundary.time ?? Number.NaN);
   if (Number.isFinite(lastAt) !== true) return null;
-  const key = `${String(session.id)}:${String(boundary.seq)}`;
-  return { session, key, seq: boundary.seq, lastAt, open: false };
+  const key = `${String(session.id)}:${String(boundary.seq)}:${open ? "open" : "interrupted"}`;
+  return { session, key, seq: boundary.seq, lastAt, open };
 }
 
 /**
@@ -294,7 +296,14 @@ async function runOnce(ctx) {
       sentOnce = true;
       log(`folytatás elküldve (${entry.via}): ${String(sessionId)} (seq ${String(candidate.seq)}, open=${String(candidate.open === true)}, requestId ${requestId})`);
     } catch (error) {
-      log(`a folytatás nem sikerült (${String(sessionId)}): ${String(error?.message ?? error)}`);
+      const message = String(error?.message ?? error);
+      // Ha a kör ÉPPEN fut, ez nem hiba, hanem „majd később": a jelölőt ilyenkor
+      // NEM írjuk be, hogy a következő próba (vagy a következő boot) újra tudja.
+      if (message.includes("agent-busy")) {
+        log(`a kör éppen fut (agent-busy), később újra: ${String(sessionId)}`);
+        continue;
+      }
+      log(`a folytatás nem sikerült (${String(sessionId)}): ${message}`);
     }
   }
 }
