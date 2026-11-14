@@ -140,12 +140,18 @@ function interruptedCandidate(session) {
     }
   }
   if (boundary === null) return null;
-  const open = boundary.type === "turn/start";
-  if (open !== true && boundary.data?.reason?.kind !== "interrupted") return null;
+  // SZIGORÚ JEL: csak a mag crash-javítása által bezárt kör (`interrupted`
+  // `turn/end`). A nyitott `turn/start`-ot SZÁNDÉKOSAN nem fogadjuk el: az
+  // lehet egy MOST FUTÓ kör is (a saját hosszú köreimet is beleértve), és akkor
+  // a plugin egy élő beszélgetésbe lőne be — mért következmény: felesleges kör,
+  // LLM-költség. A javítás a `resume()`/megnyitás hatására úgyis lezárja a
+  // félkörben maradt naplót, és a 8/20/45 s-os próbák ezt elkapják.
+  if (boundary.type !== "turn/end") return null;
+  if (boundary.data?.reason?.kind !== "interrupted") return null;
   const lastAt = Number(boundary.time ?? Number.NaN);
   if (Number.isFinite(lastAt) !== true) return null;
-  const key = `${String(session.id)}:${String(boundary.seq)}:${open ? "open" : "interrupted"}`;
-  return { session, key, seq: boundary.seq, lastAt, open };
+  const key = `${String(session.id)}:${String(boundary.seq)}`;
+  return { session, key, seq: boundary.seq, lastAt, open: false };
 }
 
 /**
