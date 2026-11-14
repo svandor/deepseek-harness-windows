@@ -114,6 +114,81 @@ const MAX_SESSIONS = 2;
 /** Ennél régebbi megszakadást nem folytatunk (6 óra). */
 const MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * A folytatás beadása a HOST HTTP RPC-n — ez a MŰKÖDŐ út.
+ *
+ * MIÉRT NEM a szolgáltatás közvetlen hívása: a `sessionController.prompt()`
+ * folyamaton belüli hívása `Cannot read properties of undefined (reading
+ * 'throwIfAborted')` hibát ad (mért 2026-11-14 05:06), mert a typert réteg a
+ * híváshoz `signal`-t (cancellation) ad, a `resume()` pedig nem is létezik a
+ * szolgáltatáson. A böngésző viszont ugyanezt a metódust a `/api` transzporton
+ * keresztül éri el, ahol a kontextus megvan.
+ *
+ * A protokoll (mért, 2026-11-14 06:4x):
+ *   1. GET `state\harness.url` (token) -> `dsh-auth-…` süti,
+ *   2. POST `<origin>/api/session/prompt`,
+ *      `{ type:"client-request", rpcId, method:"session/prompt",
+ *         payload:{ args:{ request:{ sessionId, requestId, mode:"queue",
+ *                                   content:[{type:"text", text}] } } } }`,
+ *   3. a válasz `{ result:{ ok:true, value:{ accepted:true } } }`.
+ * A `mode` KÖTELEZŐ (`queue` | `steer`), a `requestId`/`sessionId` string.
+ * @param {string} sessionId
+ * @returns {Promise<string|null>} hibaüzenet vagy null siker esetén.
+ */
+async function promptViaHttp(sessionId) {
+  let base;
+  try {
+    base = process.env.DSH_AUTO_CONTINUE_BASE_URL ?? readFileSync(join(stateDir(), "harness.url"), "utf8").trim();
+  } catch (error) {
+    return `a harness.url nem olvasható: ${String(error?.message ?? error)}`;
+  }
+  let origin;
+  try {
+    origin = new URL(base).origin;
+  } catch {
+    return `a harness.url érvénytelen: ${base.slice(0, 40)}`;
+  }
+  // 1) token -> süti
+  let cookie = "";
+  try {
+    const login = await fetch(base, { redirect: "manual" });
+    const raw = typeof login.headers.getSetCookie === "function" ? login.headers.getSetCookie() : [];
+    cookie = raw.map((value) => value.split(";", 1)[0]).join("; ");
+    if (cookie.length === 0) return `a token-csere nem adott sütit (HTTP ${login.status})`;
+  } catch (error) {
+    return `a token-csere nem sikerült: ${String(error?.message ?? error)}`;
+  }
+  // 2) a prompt RPC
+  const envelope = {
+    type: "client-request",
+    rpcId: randomUUID(),
+    method: "session/prompt",
+    payload: {
+      args: {
+        request: {
+          sessionId,
+          requestId: randomUUID(),
+          mode: "queue",
+          content: [{ type: "text", text: CONTINUE_TEXT }]
+        }
+      }
+    }
+  };
+  try {
+    const response = await fetch(`${origin}/api/session/prompt`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify(envelope)
+    });
+    const body = await response.json();
+    const result = body?.result;
+    if (result?.ok === true && result?.value?.accepted === true) return null;
+    return result?.error?.message ?? `HTTP ${response.status}`;
+  } catch (error) {
+    return `a prompt RPC nem sikerült: ${String(error?.message ?? error)}`;
+  }
+}
+
 /** Mély fagyasztás — a mag `freezeMessage`-ének a mintája. */
 function deepFreeze(value) {
   if (value === null || typeof value !== "object") return value;
@@ -432,10 +507,10 @@ async function runOnce(ctx) {
     log(off);
     return;
   }
-  const entry = resolvePrompt(ctx);
-  if (entry === null) {
-    log(`nincs prompt-belépő — ${describeSurface(ctx)} | szolgáltatások: ${listServiceNames(ctx)}`);
-    return;
+  // A folytatás a HOST HTTP RPC-n megy (`/api/session/prompt`), ezért a
+  // folyamaton belüli prompt-belépő NEM feltétel — csak diagnosztika.
+  if (resolvePrompt(ctx) === null) {
+    log(`megjegyzés: nincs folyamaton belüli prompt-belépő (${describeSurface(ctx)}) — a HTTP RPC-t használjuk | szolgáltatások: ${listServiceNames(ctx)}`);
   }
   const markers = readMarkers();
   const now = Date.now();
@@ -491,60 +566,25 @@ async function runOnce(ctx) {
   candidates.sort((left, right) => right.lastAt - left.lastAt);
   const chosen = candidates.slice(0, MAX_SESSIONS);
   for (const candidate of chosen) {
-    const requestId = `auto-continue-${randomUUID()}`;
     const sessionId = candidate.sessionId;
     try {
-      // A kontroller resume() a session-attach útvonala: lemezről tölti be a
-      // sessiont (sessionQuery.observeSession → agents.resume), lefuttatja a
-      // crash-javítást, és VISSZAADJA az ágenst — ezt felhasználjuk.
-      let agent = null;
-      for (const holder of [serviceOrNull(ctx, "sessionController"), serviceOrNull(ctx, "sessions")]) {
-        if (holder !== null && holder !== undefined && typeof holder.resume === "function") {
-          try {
-            agent = await holder.resume(sessionId);
-            log(`resume: ${String(sessionId)}${candidate.fromDisk ? " (lemezről)" : ""}`);
-          } catch (error) {
-            log(`resume hiba (${String(sessionId)}): ${String(error?.message ?? error)}`);
-          }
-          break;
+      // A MŰKÖDŐ ÚT: host HTTP RPC (`/api/session/prompt`). A folyamaton belüli
+      // `prompt()`/`followup()` nem járható (lásd `promptViaHttp` fejlécét).
+      const failure = await promptViaHttp(sessionId);
+      if (failure !== null) {
+        if (String(failure).includes("agent-busy")) {
+          log(`a kör éppen fut (agent-busy), később újra: ${String(sessionId)}`);
+          continue;
         }
-      }
-      // ELSŐDLEGES ÚT: `agent.followup(message)`.
-      //
-      // MIÉRT: a `sessionController.prompt()` belül pontosan ezt hívja
-      // (`dsh-api-session-controller/lib/index.js:767–774`: `createUserMessage`,
-      // majd `agent.followup(message)`), de a hívás elhasal a hiányzó RPC-
-      // kontextuson (`Cannot read properties of undefined (reading
-      // 'throwIfAborted')`, mért 2026-11-14 05:06). A `followup` viszont a
-      // publikus Agent-interfészen van, üzenetet pedig magunk is építhetünk.
-      if (agent !== null && typeof agent.followup === "function") {
-        const message = buildUserMessage(requestId);
-        agent.followup(message);
-        markers[candidate.key] = true;
-        writeMarkers(markers);
-        sentOnce = true;
-        log(`folytatás elküldve (agent.followup): ${String(sessionId)} (seq ${String(candidate.seq)}, open=${String(candidate.open)}, lemez=${String(candidate.fromDisk)})`);
+        log(`a folytatás nem sikerült (${String(sessionId)}): ${failure}`);
         continue;
       }
-      // TARTALÉK: a kontroller prompt()-ja (ha az ágens nem érhető el).
-      await entry.prompt({
-        sessionId,
-        content: [{ type: "text", text: CONTINUE_TEXT }],
-        requestId
-      });
       markers[candidate.key] = true;
       writeMarkers(markers);
       sentOnce = true;
-      log(`folytatás elküldve (${entry.via}): ${String(sessionId)} (seq ${String(candidate.seq)}, open=${String(candidate.open)}, lemez=${String(candidate.fromDisk)}, requestId ${requestId})`);
+      log(`folytatás elküldve (HTTP RPC): ${String(sessionId)} (seq ${String(candidate.seq)}, open=${String(candidate.open)}, lemez=${String(candidate.fromDisk)})`);
     } catch (error) {
-      const message = String(error?.message ?? error);
-      // Ha a kör ÉPPEN fut, ez nem hiba, hanem „majd később": a jelölőt ilyenkor
-      // NEM írjuk be, hogy a következő próba (vagy a következő boot) újra tudja.
-      if (message.includes("agent-busy")) {
-        log(`a kör éppen fut (agent-busy), később újra: ${String(sessionId)}`);
-        continue;
-      }
-      log(`a folytatás nem sikerült (${String(sessionId)}): ${message}`);
+      log(`a folytatás nem sikerült (${String(sessionId)}): ${String(error?.message ?? error)}`);
     }
   }
 }

@@ -606,17 +606,27 @@ Section 10.6 continues **processes**; an interrupted **conversation turn** is re
 - **Off switch:** the `state\no-auto-continue` marker or `DSH_NO_AUTO_CONTINUE=1`. Log: `state\auto-continue.log`.
 - **Install:** `pwsh -NoProfile -File plugins\dsh-session-auto-continue\install.ps1` (`-Check`, `-Remove`); the host composition loads at boot, so a **restart** is required.
 
-**MEASURED STATE (2026-11-14 06:07) — the continuation does NOT work; the plugin is switched off:**
+**MEASURED STATE (2026-11-14 06:45) — the continuation WORKS over the host HTTP RPC:**
 
-The decision logic is ready and proven (4/4 unit tests: interrupted turn, completed turn, open turn, marker), the session is also found on disk (`listRecentSessionFiles` + `lastBoundaryFromDisk`, 11 ms for a 6 MB, 3 408-frame log), and the `resume()` + `prompt()` order is correct. The **actual prompt submission fails inside the core**, however:
+The in-process route is a **dead end** (and it is measured): calling `sessionController.prompt()` directly throws `Cannot read properties of undefined (reading 'throwIfAborted')` because the typert layer supplies a `signal` (cancellation) for the call, and `sessionController` has **no `resume()`** — so no agent can be obtained either.
 
-```
-a folytatás nem sikerült (session-37adb470-…): Cannot read properties of undefined (reading 'throwIfAborted')
-```
+The **working route is the browser's HTTP channel**, used by `promptViaHttp()` (measured, 2026-11-14 06:45 — `{"ok":true,"value":{"accepted":true}}`):
 
-The reason: the direct **in-process** call of `SessionCommandController.prompt()` does not receive the RPC execution context (abort signal) that the typert layer supplies for the browser's call. The `state\no-auto-continue` marker therefore **disables** the plugin so it stops trying on every boot. The correct route for the continuation (if anyone carries it forward) is the browser's **RPC/HTTP path** with the token from `state\harness.url`, not a direct service call.
+1. `GET <state\harness.url>` (the token is in the URL) → a `dsh-auth-…` cookie;
+2. `POST <origin>/api/session/prompt`, `content-type: application/json`, with the cookie and this envelope:
+   ```json
+   { "type": "client-request", "rpcId": "<uuid>", "method": "session/prompt",
+     "payload": { "args": { "request": {
+       "sessionId": "<id>", "requestId": "<uuid>", "mode": "queue",
+       "content": [{ "type": "text", "text": "Automatikus folytatás: …" }] } } } }
+   ```
+3. the response is `{ "result": { "ok": true, "value": { "accepted": true } } }`.
 
-**Consequence for the user:** *terminal* runs still continue automatically (10.6), while the *conversation* currently needs a manual "continue".
+**Envelope traps (all measured error messages):** `payload` must hold exactly one `args` field, the parameter inside `args` is named `request` (not flattened), `mode` is **mandatory** (`queue` | `steer`), and `content` may only be `[{type:"text",text}]` / `image` / `file`. The endpoint is `<namespace>/<method>` (here `session/prompt`), not dot-separated — the `session.list` form returns 404.
+
+The unit tests therefore start a **local fake RPC server** and exercise the real code path: 4/4 green (interrupted turn → one call, completed turn → no call, open turn → call, marker → no duplicate).
+
+**Consequence:** both *terminal* runs (10.6) and the *conversation* continue automatically after a restart; the continuation appears in `state\auto-continue.log` as `folytatás elküldve (HTTP RPC)`.
 
 
 

@@ -747,17 +747,27 @@ A 10.6 a **folyamatokat** folytatja; a megszakadt **beszélgetés-kört** a `plu
 - **Kikapcsolás:** `state\no-auto-continue` jelölő vagy `DSH_NO_AUTO_CONTINUE=1`. Napló: `state\auto-continue.log`.
 - **Telepítés:** `pwsh -NoProfile -File plugins\dsh-session-auto-continue\install.ps1` (`-Check`, `-Remove`); a host-kompozíció boot-időben töltődik, tehát **újraindítás** kell hozzá.
 
-**MÉRT ÁLLAPOT (2026-11-14 06:07) — a folytatás NEM működik, a plugin kikapcsolva:**
+**MÉRT ÁLLAPOT (2026-11-14 06:45) — a folytatás a HOST HTTP RPC-n MŰKÖDIK:**
 
-A döntési logika kész és bizonyított (4/4 egységteszt: megszakadt kör, befejezett kör, nyitott turn, jelölő), a sessiont a lemezről is megtalálja (`listRecentSessionFiles` + `lastBoundaryFromDisk`, 11 ms egy 6 MB-os, 3 408 frame-es naplón), és a `resume()` + `prompt()` sorrend is helyes. A **tényleges prompt-beadás viszont elbukik** a magon belül:
+A folyamaton belüli út **zsákutca** (és ezt meg is mértük): a `sessionController.prompt()` közvetlen hívása `Cannot read properties of undefined (reading 'throwIfAborted')` hibát ad, mert a typert réteg a híváshoz `signal`-t (cancellation) ad, a `sessionController`-en pedig **nincs `resume()`** — így ágenst sem lehet szerezni.
 
-```
-a folytatás nem sikerült (session-37adb470-…): Cannot read properties of undefined (reading 'throwIfAborted')
-```
+A **működő út a böngésző HTTP-csatornája**, amit a `promptViaHttp()` használ (mért, 2026-11-14 06:45 — `{"ok":true,"value":{"accepted":true}}`):
 
-Az ok: a `SessionCommandController.prompt()` közvetlen, **folyamaton belüli** hívása nem kapja meg azt az RPC-végrehajtási kontextust (abort-jel), amit a böngésző hívásához a typert réteg ad. Emiatt a `state\no-auto-continue` jelölő **kikapcsolja** a plugint, hogy ne próbálkozzon minden bootnál. A folytatás helyes útja (ha valaki továbbviszi) a böngésző **RPC/HTTP útvonala** a `state\harness.url` tokenjével, nem a szolgáltatás közvetlen hívása.
+1. `GET <state\harness.url>` (a token az URL-ben) → `dsh-auth-…` süti;
+2. `POST <origin>/api/session/prompt`, `content-type: application/json`, a sütivel, ezzel a borítékkal:
+   ```json
+   { "type": "client-request", "rpcId": "<uuid>", "method": "session/prompt",
+     "payload": { "args": { "request": {
+       "sessionId": "<id>", "requestId": "<uuid>", "mode": "queue",
+       "content": [{ "type": "text", "text": "Automatikus folytatás: …" }] } } } }
+   ```
+3. a válasz `{ "result": { "ok": true, "value": { "accepted": true } } }`.
 
-**Következmény a felhasználónak:** a *terminál*-futások továbbra is automatikusan folytatódnak (10.6), a *beszélgetés* viszont egyelőre kézi „folytasd"-ot igényel.
+**A boríték buktatói (mind mért hibaüzenet):** a `payload`-nak pontosan egy `args` mezője lehet, az `args`-ban a paraméter neve `request` (nem laposítva), a `mode` **kötelező** (`queue` | `steer`), és a `content` csak `[{type:"text",text}]` / `image` / `file` alakú lehet. Az endpoint `<namespace>/<method>` (itt `session/prompt`), nem ponttal elválasztva — a `session.list` alak 404.
+
+Az egységtesztek ezért egy **helyi fake RPC-szervert** indítanak, és a valódi kódutat futtatják: 4/4 zöld (megszakadt kör → egy hívás, befejezett kör → nincs hívás, nyitott turn → hívás, jelölő → nincs dupla).
+
+**Következmény:** a *terminál*-futások (10.6) és a *beszélgetés* is automatikusan folytatódik restart után; a folytatás a `state\auto-continue.log`-ban `folytatás elküldve (HTTP RPC)` sorral jelenik meg.
 
 
 
