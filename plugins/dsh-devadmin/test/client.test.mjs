@@ -15,6 +15,9 @@ import { join } from "node:path";
 
 const CLIENT_PATH = join(process.cwd(), "plugins", "dsh-devadmin", "lib", "client.js");
 
+/** A felso menusor rekesze, ahova az ikonnak kerulnie kell. */
+const HEADER_SLOT = "conversation.session.header.utilities";
+
 /** Minimalis React: csak azt adja, amit a bundle a betolteskor hasznal. */
 const fakeReact = {
   createElement: (type, props, ...children) => ({ type, props, children }),
@@ -60,11 +63,12 @@ test("a factory a szukseges exportokat adja vissza", async () => {
     assert.ok(exported.inject.includes(service), `hianyzik az inject: ${service}`);
   }
   assert.equal(exported.TAB_KIND, "devadmin");
+  assert.equal(exported.HEADER_SLOT, HEADER_SLOT);
   assert.equal(typeof exported.DevAdminPanel, "function");
-  assert.equal(typeof exported.AdminChip, "function");
+  assert.equal(typeof exported.AdminHeaderButton, "function");
 });
 
-test("az apply regisztralja a tab tipust, a tab testet es a dokk-chipet", async () => {
+test("az apply regisztralja a tab tipust, a tab testet es a fejlec-ikont", async () => {
   const definition = await loadFactory();
   const exported = definition.factory(fakeRequire);
 
@@ -106,17 +110,32 @@ test("az apply regisztralja a tab tipust, a tab testet es a dokk-chipet", async 
   assert.equal(tabTypes[0].tab.priority, "extension");
 
   const bodies = registered.filter((entry) => !entry.tab);
-  assert.equal(bodies.length, 2, "tab test + dokk-chip");
+  assert.equal(bodies.length, 2, "tab test + fejlec-ikon");
   assert.ok(bodies.some((entry) => entry.key === "dsh-devadmin/admin"), "a tab test kulcsa az id");
-  assert.ok(bodies.some((entry) => entry.id === "devadmin-admin"), "a dokk-chip id-ja");
-  assert.deepEqual(injections.sort(), ["conversation.input.dock", "sidebar.right.pane.tab"]);
+
+  const header = bodies.find((entry) => entry.id === "devadmin-header");
+  assert.ok(header, "a fejlec-ikon regisztralva van");
+  assert.equal(header.name, HEADER_SLOT, "az ikon a felso menusor rekeszebe kerul");
+  assert.ok(
+    !bodies.some((entry) => entry.name === "conversation.input.dock" || entry.name === "conversation.composer.dock"),
+    "a cset felett NEM jelenik meg semmi",
+  );
+
+  assert.deepEqual(injections.sort(), [HEADER_SLOT, "sidebar.right.pane.tab"].sort());
   assert.equal(opened.length, 0, "az apply magatol nem nyit tabot");
 
-  // a chip megnyitja a tabot, ha rakerul a kliens
-  const chip = bodies.find((entry) => entry.id === "devadmin-admin");
-  const rendered = chip.component({});
-  assert.equal(rendered.type, exported.AdminChip, "a chip a sajat komponenset rajzolja");
-  assert.equal(typeof rendered.props.openTab, "function", "a chip megkapja a tab-nyitot");
-  rendered.props.openTab();
+  // az ikon megnyitja a tabot
+  const rendered = header.component({ openTab: () => opened.push("devadmin") });
+  assert.equal(rendered.type, "button");
+  assert.equal(rendered.props["aria-label"], "PHP admin");
+  rendered.props.onClick();
   assert.deepEqual(opened, ["devadmin"]);
+
+  // es van benne ikon (svg) + PHP felirat
+  const kids = (rendered.children || []).filter(Boolean);
+  assert.ok(kids.some((child) => child && child.type === "svg"), "van SVG ikon");
+  assert.ok(
+    kids.some((child) => child && child.type === "span" && (child.children || [])[0] === "PHP"),
+    "van PHP felirat",
+  );
 });

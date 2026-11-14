@@ -31,7 +31,7 @@
  * path and the measured, working behaviour cannot drift between CLI and UI.
  */
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, appendFileSync } from "node:fs";
 import { connect } from "node:net";
 import { request as httpsRequest } from "node:https";
 import { request as httpRequest } from "node:http";
@@ -440,6 +440,19 @@ function handleLogs(url, res) {
   return json(res, 200, body);
 }
 
+/** A route-regisztracio bizonyiteka (a boot-hiba kulonben nem lathato). */
+function logRoute(path, result) {
+  try {
+    appendFileSync(
+      join(STATE_DIR, "devadmin.log"),
+      `${new Date().toISOString()} route ${path}: ${result}\n`,
+      "utf8",
+    );
+  } catch {
+    /* a naplo hibaja nem allithatja meg a plugint */
+  }
+}
+
 function apply(ctx) {
   if (ctx.webServer === undefined) return;
   const pagePath = join(PACKAGE_ROOT, "web", "index.html");
@@ -472,17 +485,29 @@ function apply(ctx) {
     ],
   ];
   for (const [path, handler] of routes) {
-    ctx.effect(() =>
-      ctx.webServer.register({
-        kind: "exact",
-        path,
-        handler: (req, res) => {
-          Promise.resolve(handler(req, res)).catch((error) => {
-            json(res, 500, { ok: false, error: `devadmin: ${error?.message ?? error}` });
-          });
-        },
-      }),
-    );
+    ctx.effect(() => {
+      try {
+        // FONTOS (mert viselkedes): a web szerver route-tablaja KET rekesz -
+        // `exact` (pontos egyezes) es prefix (minden mas `kind`). A korabbi
+        // valtozat `kind: "exact"`-tal regisztralt, es a szerver a
+        // `/devadmin/state`-re 404-et adott ("not yet claimed"), mikozben a
+        // `/devadmin/` oldal ment. Ezert - a ui-extras mintajara - KIND NELKUL
+        // regisztralunk (prefix rekesz), es a leghosszabb prefix nyer.
+        const dispose = ctx.webServer.register({
+          path,
+          handler: (req, res) => {
+            Promise.resolve(handler(req, res)).catch((error) => {
+              json(res, 500, { ok: false, error: `devadmin: ${error?.message ?? error}` });
+            });
+          },
+        });
+        logRoute(path, "ok");
+        return dispose;
+      } catch (error) {
+        logRoute(path, `hiba: ${error?.message ?? error}`);
+        return () => {};
+      }
+    }, `devadmin: ${path}`);
   }
 }
 

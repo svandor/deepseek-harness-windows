@@ -24,7 +24,8 @@ window.__ModuleLoader__.load({
     /** A tab azonositoja es tipusa (a jobb oldalsavban jelenik meg). */
     const TAB_ID = "dsh-devadmin/admin";
     const TAB_KIND = "devadmin";
-    const DOCK_SLOT = "conversation.input.dock";
+    /** A FELSO MENUSOR rekesze, ahova az ikon kerul (a ui-extras is ezt hasznalja). */
+    const HEADER_SLOT = "conversation.session.header.utilities";
     const BODY_SLOT = "sidebar.right.pane.tab";
     const POLL_MS = 5000;
 
@@ -52,6 +53,26 @@ window.__ModuleLoader__.load({
       wordBreak: "break-all",
     };
     const DIM = { opacity: 0.65 };
+    /** A fejlec-ikon gomb: a menüsor magassagahoz illik, nem hivja fel magara a figyelmet. */
+    const HEADER_BTN = {
+      display: "inline-flex",
+      alignItems: "center",
+      gap: "4px",
+      font: "inherit",
+      fontSize: "12px",
+      lineHeight: "18px",
+      height: "26px",
+      padding: "0 8px",
+      borderRadius: "6px",
+      border: "1px solid transparent",
+      background: "transparent",
+      color: "var(--dsw-alias-label-secondary, inherit)",
+      cursor: "pointer",
+    };
+    const HEADER_BTN_HOVER = {
+      borderColor: "var(--dsw-alias-border-secondary, rgba(127,127,127,.5))",
+      color: "var(--dsw-alias-label-primary, inherit)",
+    };
     const BTN = {
       font: "inherit",
       fontSize: "12px",
@@ -325,23 +346,63 @@ window.__ModuleLoader__.load({
       );
     }
 
-    // ── dokk-gomb, ami megnyitja a tabot ─────────────────────────────────
+    // ── ikon a felso menusorban ─────────────────────────────────────────
     /**
-     * Kis chip a composer felett: a jobb oldalsav admin tabjat nyitja meg.
-     * @param props - slot-props; `ctx`-et az apply zarta be, itt nem kell.
+     * A PHP-admin ikon a beszelgetes fejleceben (felso menusor).
+     *
+     * Miért nem a composer dokkban: a felhasznalo kerese szerint ez a
+     * fejlec-ikon a helye. Egyetlen gomb: megnyitja a jobb oldalsav
+     * `devadmin` fujet, ahol a teljes panel van.
+     *
+     * @param props - a slot `inject`-je adja az `openTab` hivatkozast.
      */
-    function AdminChip(props) {
+    function AdminHeaderButton(props) {
       const open = props && typeof props.openTab === "function" ? props.openTab : null;
+      const [hover, setHover] = react.useState(false);
       return h(
         "button",
         {
-          style: { ...BTN, fontSize: "11px", padding: "1px 8px" },
-          title: "Fejlesztoi kornyezet admin felulete",
+          type: "button",
+          title: "PHP admin — fejlesztoi kornyezet (Caddy, php-cgi, PHP-verziok, naplok)",
+          "aria-label": "PHP admin",
+          style: {
+            ...HEADER_BTN,
+            ...(hover ? HEADER_BTN_HOVER : null),
+          },
+          onMouseEnter: () => setHover(true),
+          onMouseLeave: () => setHover(false),
           onClick: () => {
             if (open) open();
           },
         },
-        "Admin",
+        // PHP-jellegu ikon: kapcsos zarojelek + pont (kod/fejlesztes)
+        h(
+          "svg",
+          {
+            width: 16,
+            height: 16,
+            viewBox: "0 0 16 16",
+            fill: "none",
+            "aria-hidden": "true",
+            style: { flex: "none" },
+          },
+          h("path", {
+            d: "M5.6 3.2 2.2 8l3.4 4.8",
+            stroke: "currentColor",
+            strokeWidth: 1.6,
+            strokeLinecap: "round",
+            strokeLinejoin: "round",
+          }),
+          h("path", {
+            d: "M10.4 3.2 13.8 8l-3.4 4.8",
+            stroke: "currentColor",
+            strokeWidth: 1.6,
+            strokeLinecap: "round",
+            strokeLinejoin: "round",
+          }),
+          h("circle", { cx: 8, cy: 8, r: 1.3, fill: "currentColor" }),
+        ),
+        h("span", { style: { letterSpacing: ".02em" } }, "PHP"),
       );
     }
 
@@ -379,26 +440,33 @@ window.__ModuleLoader__.load({
         );
       }
 
-      // 3) chip a composer dokkban, ami megnyitja
+      // 3) ikon a FELSO MENUSORBAN (a beszelgetes fejlece), nem a cset felett
       const openTab = () => {
         try {
           if (ctx.sidebarRight && typeof ctx.sidebarRight.openTab === "function") ctx.sidebarRight.openTab(TAB_KIND);
         } catch (error) {
-          /* a chip ilyenkor sem tesz semmit: nem nyit uj ablakot */
+          /* az ikon ilyenkor sem tesz semmit: nem nyit uj ablakot */
         }
       };
-      ctx.slots.inject(DOCK_SLOT, () =>
-        ctx.slots.register({ name: DOCK_SLOT, id: "devadmin-admin", order: 30 }, function ChipBody() {
-          return h(AdminChip, { openTab });
-        }),
+      ctx.slots.inject(HEADER_SLOT, () =>
+        ctx.slots.register(
+          {
+            name: HEADER_SLOT,
+            id: "devadmin-header",
+            order: 60,
+            inject: () => ({ openTab }),
+          },
+          AdminHeaderButton,
+        ),
       );
     }
 
     exports.DevAdminPanel = DevAdminPanel;
-    exports.AdminChip = AdminChip;
+    exports.AdminHeaderButton = AdminHeaderButton;
     exports.apply = apply;
     exports.inject = inject;
     exports.TAB_KIND = TAB_KIND;
+    exports.HEADER_SLOT = HEADER_SLOT;
     return module.exports;
   },
 });
