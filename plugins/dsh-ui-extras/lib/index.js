@@ -2714,6 +2714,9 @@ async function handleCmd(req, res, url) {
           length: discovered.output.length,
           recovered: true,
           external: true,
+          // A külső folyamat él (épp most találta meg a szkennelés): e nélkül a
+          // kliens a munkaterület-szűrőn eldobta, és nem lehetett átváltani rá.
+          alive: true,
           output: discovered.output
         });
       }
