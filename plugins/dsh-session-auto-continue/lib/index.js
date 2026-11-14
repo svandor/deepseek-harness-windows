@@ -60,8 +60,11 @@ const MAX_SESSIONS = 2;
 /** Ennél régebbi megszakadást nem folytatunk (6 óra). */
 const MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
-/** Boot utáni várakozás: a webes felület előbb reconnectáljon. */
-const DELAY_MS = 8000;
+/** Boot utáni próbák (ms): a sessionök csak akkor kerülnek a store-ba, amikor a felület megnyitja őket. */
+const DELAYS_MS = [8000, 20000, 45000];
+
+/** Ebben a bootban már küldtünk-e folytatást (a további próbák kilépnek). */
+let sentOnce = false;
 
 /** A beadott üzenet — szándékosan elővigyázatos. */
 const CONTINUE_TEXT = "Automatikus folytatás: a harness újraindult, miközben a kör futott. "
@@ -111,7 +114,12 @@ function disabled() {
 }
 
 /**
- * A megszakadt kör keresése: az utolsó kör-határ egy `interrupted` `turn/end`.
+ * A megszakadt kör keresése. KÉT jel számít:
+ *  (a) az utolsó kör-határ egy `interrupted` `turn/end` — ezt a mag
+ *      crash-javítása fűzi be (`interruptedTurnClosers`), de MÉRÉS szerint
+ *      (2026-11-14) NEM fut automatikusan bootkor, csak restore/resume útvonalon;
+ *  (b) NYITOTT kör: az utolsó kör-határ `turn/start` `turn/end` nélkül — ez a
+ *      nyers crash-állapot, amit a javítás még nem zárt le.
  * @param session
  * @returns {object|null} a jelölt (session, key, seq, lastAt) vagy null.
  */
@@ -131,12 +139,13 @@ function interruptedCandidate(session) {
       break;
     }
   }
-  if (boundary?.type !== "turn/end") return null;
-  if (boundary.data?.reason?.kind !== "interrupted") return null;
+  if (boundary === null) return null;
+  const open = boundary.type === "turn/start";
+  if (open !== true && boundary.data?.reason?.kind !== "interrupted") return null;
   const lastAt = Number(boundary.time ?? Number.NaN);
   if (Number.isFinite(lastAt) !== true) return null;
-  const key = `${String(session.id)}:${String(boundary.seq)}`;
-  return { session, key, seq: boundary.seq, lastAt };
+  const key = `${String(session.id)}:${String(boundary.seq)}:${open ? "open" : "interrupted"}`;
+  return { session, key, seq: boundary.seq, lastAt, open };
 }
 
 /**
@@ -201,17 +210,33 @@ async function runOnce(ctx) {
   const chosen = candidates.slice(0, MAX_SESSIONS);
   for (const candidate of chosen) {
     const requestId = `auto-continue-${randomUUID()}`;
+    const sessionId = candidate.session.id;
     try {
+      // A kontroller resume() a session-attach útvonala: ha van, előbb ezt
+      // hívjuk, hogy a crash-javítás (interruptedTurnClosers) lefusson, és az
+      // agent élő legyen a prompt előtt.
+      for (const holder of [ctx.sessionController, ctx.sessions]) {
+        if (holder !== null && holder !== undefined && typeof holder.resume === "function") {
+          try {
+            await holder.resume(sessionId);
+            log(`resume: ${String(sessionId)}`);
+          } catch (error) {
+            log(`resume hiba (${String(sessionId)}): ${String(error?.message ?? error)}`);
+          }
+          break;
+        }
+      }
       await entry.prompt({
-        sessionId: candidate.session.id,
+        sessionId,
         content: [{ type: "text", text: CONTINUE_TEXT }],
         requestId
       });
       markers[candidate.key] = true;
       writeMarkers(markers);
-      log(`folytatás elküldve (${entry.via}): ${String(candidate.session.id)} (seq ${String(candidate.seq)}, requestId ${requestId})`);
+      sentOnce = true;
+      log(`folytatás elküldve (${entry.via}): ${String(sessionId)} (seq ${String(candidate.seq)}, open=${String(candidate.open === true)}, requestId ${requestId})`);
     } catch (error) {
-      log(`a folytatás nem sikerült (${String(candidate.session.id)}): ${String(error?.message ?? error)}`);
+      log(`a folytatás nem sikerült (${String(sessionId)}): ${String(error?.message ?? error)}`);
     }
   }
 }
@@ -221,11 +246,18 @@ async function runOnce(ctx) {
  */
 export function apply(ctx) {
   try {
-    const timer = setTimeout(() => {
-      void runOnce(ctx).catch((error) => log(`hiba: ${String(error?.message ?? error)}`));
-    }, DELAY_MS);
-    timer.unref?.();
-    log(`boot: folytatás-figyelő indul (${DELAY_MS} ms múlva)`);
+    // HÁROM PRÓBA. A sessionök a memóriabeli store-ban élnek, és csak akkor
+    // kerülnek bele, amikor a felület megnyitja őket — a boot utáni első
+    // pillanatban tehát `0 session` a normális. Ezért 8 s / 20 s / 45 s-mal is
+    // ránézünk; a jelölő és a `sentOnce` zárja ki az ismétlést.
+    for (const [index, delay] of DELAYS_MS.entries()) {
+      const timer = setTimeout(() => {
+        if (sentOnce === true) return;
+        void runOnce(ctx, index === DELAYS_MS.length - 1).catch((error) => log(`hiba: ${String(error?.message ?? error)}`));
+      }, delay);
+      timer.unref?.();
+    }
+    log(`boot: folytatás-figyelő indul (${DELAYS_MS.join("/")} ms)`);
   } catch (error) {
     log(`apply hiba: ${String(error?.message ?? error)}`);
   }
