@@ -237,6 +237,39 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-14` — **Herd-kiváltás, 1. szakasz: a fejlesztői környezet már Herd
+  nélkül is kiszolgálja a projekteket.** (1) Saját PHP: `D:\Tools\php\8.4.27`
+  (a Herd 8.4.27-tel azonos verzió, saját `php.ini`-val), `D:\Tools\php\current`
+  junction, választó: `tools\php-version.ps1` (`-List` / `-Use`); Composer a
+  `D:\Tools\php\composer\composer.phar` (2.11.2), hívó: `bin\composer.cmd` —
+  a Herd `bin` könyvtára nélkül is van `php` és `composer`. (2) Saját kiszolgáló:
+  `D:\Tools\caddy\caddy.exe` (2.11.9) + `php-cgi` FastCGI munkások (9101–9199),
+  HTTPS a Caddy saját CA-jával. (3) `tools\dev.ps1` (`list|status|start|stop|
+  restart|logs`) újraírva: minden indulásnál újragenerálja a
+  `state\dev\Caddyfile`-t a projektprofilokból (`.dsh\dev.yaml`:
+  `domain/docroot/php/aliases`), a `state\dev\state.json` a pideket és a
+  portokat tartalmazza, a naplók a `state\dev\logs`-ban. (4) Új
+  `tools\dev-hidden.vbs`: a szervert `wscript` + `WshShell.Run(cmd,0,False)`
+  indítja, mert a DSH-eszközből indított folyamat a harness job-objektumában
+  marad, és a hívás a gyerekek lezárásáig (időtúllépésig) vár — a rejtett
+  indító 220 ms alatt visszatér, a szerver tovább él. **Mért eredmény:** a két
+  Herd-telepítésű projekt (`termeszetgyogyaszoktatas-L12`, `jelentkezes-redirect`)
+  a saját láncon is kiszolgálódik, és a válaszok **paritásban** vannak a Herd
+  (nginx, 443) kimenetével: `/` → 200, `/jelentkezes` → 200,
+  `jelentkezes-redirect.test/` → 301 (ugyanoda). **Mért buktatók:** a
+  `caddy trust` a Windows-on certutil-t indít, és **megakadt** (90 s után sem
+  tért vissza) — helyette a `certutil -addstore -user Root` megy (UAC nélkül);
+  a `Get-NetTCPConnection` portonkénti hívása 799 hívást jelentett (~30 s),
+  ezért egyetlen lekérdezés kell a tartományra; a `Caddyfile` útvonalában van
+  szóköz, ezért a `Start-Process -ArgumentList` tömb helyett **idézőjelezett
+  argumentumsor** kell. A Herd még fut (a 443/80-at fogja), ezért most 8443 a
+  HTTPS port; a Herd leállítása és a 443/80 átvétele a következő szakasz.
+  Új eszköz: `tools\check-autostart-duplicates.ps1` — autostart (Run/RunOnce +
+  Startup) duplikátumok, idegen nem-`.lnk` fájlok a Startup mappában,
+  launcher-szkript dupla példányai és a **két külön bridge telepítés**
+  (`LocalAIBridge` + `RaiderBridge`) kimutatása, valamint a Herd, nginx,
+  php-cgi, mysqld jelenléte.
+
 - `2026-11-14` — **a megszakadt BESZÉLGETÉS is folytatódik boot után** (a
   felhasználó pontosítása: a kérés nem csak a terminálra vonatkozott). Új
   HOST-síkos plugin: `plugins\dsh-session-auto-continue` (junction + `- insert:`

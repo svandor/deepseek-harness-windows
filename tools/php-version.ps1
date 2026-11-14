@@ -35,7 +35,7 @@ $ErrorActionPreference = 'Stop'
 
 function Get-Versions {
     if (-not (Test-Path $Root)) { return @() }
-    return @(Get-ChildItem $Root -Directory | Where-Object { $_.Name -ne 'current' } | Sort-Object Name)
+    return @(Get-ChildItem $Root -Directory | Where-Object { $_.Name -match '^\d+\.\d+' } | Sort-Object Name)
 }
 
 function Get-CurrentTarget {
@@ -77,7 +77,7 @@ if ($Use) {
         }
     }
     New-Item -ItemType Junction -Path $currentPath -Target $match.FullName | Out-Null
-    $version = (& $phpExe -r 'echo PHP_VERSION;' 2>$null)
+    $version = ((& $phpExe -r 'echo PHP_VERSION;' 2>$null) -join '').Trim()
     Write-Host ("beállítva: {0} -> {1}  (php {2})" -f $currentPath, $match.FullName, $version)
     Write-Host "A PATH-ban a D:\Tools\php\current legyen elöl, hogy a 'php' ezt lássa."
     exit 0
