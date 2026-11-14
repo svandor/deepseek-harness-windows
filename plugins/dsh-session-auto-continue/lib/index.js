@@ -149,25 +149,56 @@ function interruptedCandidate(session) {
 }
 
 /**
+ * Szolgáltatás olvasása DEFENZÍVEN.
+ *
+ * MIÉRT: a cordis nem engedi olvasni a nem-injektált szolgáltatást —
+ * `cannot get property "sessionController" without inject` (mért hiba
+ * 2026-11-14 04:05). Mivel a prompt-belépő helye verziófüggő, a `sessions` az
+ * egyetlen deklarált szolgáltatás, a többit csak MEGNÉZZÜK, hibatűrően.
+ * @param {object} ctx
+ * @param {string} name
+ * @returns {any|null}
+ */
+function serviceOrNull(ctx, name) {
+  try {
+    return ctx[name] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * A prompt-belépő feloldása. A magban a `SessionCommandController.prompt`
  * (`dsh-api-session-controller/lib/index.js:736`) a megvalósítás, amely a
- * host-síkon `sessionController` néven regisztrálódik (`:2726`), de a
- * szolgáltatás neve verziófüggő lehet — ezért több helyen is megnézzük, és a
+ * host-síkon `sessionController` néven regisztrálódik (`:2726`) — de a
+ * szolgáltatás neve verziófüggő lehet, ezért több helyen is megnézzük, és a
  * napló kimondja, melyiket használtuk.
  * @param {object} ctx
  * @returns {{prompt: Function, via: string}|null}
  */
 function resolvePrompt(ctx) {
   for (const [via, holder] of [
-    ["sessionController", ctx.sessionController],
-    ["sessionCommands", ctx.sessionCommands],
-    ["sessions", ctx.sessions]
+    ["sessionController", serviceOrNull(ctx, "sessionController")],
+    ["sessionCommands", serviceOrNull(ctx, "sessionCommands")],
+    ["sessions", serviceOrNull(ctx, "sessions")]
   ]) {
     if (holder !== null && holder !== undefined && typeof holder.prompt === "function") {
       return { prompt: holder.prompt.bind(holder), via };
     }
   }
   return null;
+}
+
+/** A naplóba írt diagnosztika arról, mi érhető el (egy sor, bootonként egyszer). */
+function describeSurface(ctx) {
+  const surface = (holder) => {
+    if (holder === null || holder === undefined) return "nincs";
+    return ["prompt", "resume", "list", "get"]
+      .map((name) => `${name}:${typeof holder[name] === "function" ? "igen" : "nem"}`)
+      .join(",");
+  };
+  return `sessions[${surface(serviceOrNull(ctx, "sessions"))}] `
+    + `sessionController[${surface(serviceOrNull(ctx, "sessionController"))}]`;
 }
 
 /**
@@ -181,7 +212,7 @@ async function runOnce(ctx) {
   }
   const entry = resolvePrompt(ctx);
   if (entry === null) {
-    log("nincs prompt-belépő (sessionController/sessionCommands/sessions.prompt) — a folytatás nem indítható");
+    log(`nincs prompt-belépő — ${describeSurface(ctx)}`);
     return;
   }
   const markers = readMarkers();
@@ -215,7 +246,7 @@ async function runOnce(ctx) {
       // A kontroller resume() a session-attach útvonala: ha van, előbb ezt
       // hívjuk, hogy a crash-javítás (interruptedTurnClosers) lefusson, és az
       // agent élő legyen a prompt előtt.
-      for (const holder of [ctx.sessionController, ctx.sessions]) {
+      for (const holder of [serviceOrNull(ctx, "sessionController"), serviceOrNull(ctx, "sessions")]) {
         if (holder !== null && holder !== undefined && typeof holder.resume === "function") {
           try {
             await holder.resume(sessionId);
