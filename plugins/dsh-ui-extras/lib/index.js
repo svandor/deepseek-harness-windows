@@ -1593,7 +1593,7 @@ function runsFilePath() {
  * (`survivors`): különben a visszatöltés utáni első kiírás elfelejtené őket, és
  * a KÖVETKEZŐ restartnál megint láthatatlan árvák lennének.
  */
-function persistRuns() {
+function persistRuns(kept = []) {
   try {
     const rows = [];
     for (const run of RUNS.values()) {
@@ -1611,6 +1611,18 @@ function persistRuns() {
       const row = { id: run.id, workspace: canonicalWorkspace(run.workspace), label: run.label, pid, startedAt: run.startedAt };
       if (command.length > 0) row.command = command;
       if (survivors.length > 0) row.survivors = survivors;
+      rows.push(row);
+    }
+    // A MEGŐRZÖTT rekordok: azok a sorok, amelyeket a boot nem tudott
+    // visszatölteni, de van parancsuk — ezeket az `autoResumeRuns()` indítja
+    // újra néhány másodperccel később. Ha itt kihagynánk őket, a fájl minden
+    // bootnál FOGYNA, és a folytatás forrása elveszne (mért eset 2026-11-14:
+    // a `runs.json` egyetlen sorra zsugorodott, a két dev szerver rekordja
+    // pedig eltűnt, ezért nem indultak újra).
+    const seen = new Set(rows.map((row) => row.id));
+    for (const row of kept) {
+      if (typeof row?.id !== "string" || seen.has(row.id)) continue;
+      seen.add(row.id);
       rows.push(row);
     }
     writeFileSync(runsFilePath(), JSON.stringify(rows, null, 2), "utf8");
@@ -1949,7 +1961,9 @@ function restoreRuns() {
   });
   const autoResumed = autoResumeRuns(resumeCandidates);
   diagLine(`runs: ${restored} korábbi futás visszatöltve (${rows.length} rekord, ebből ${orphanRows.length} héj nélküli)${autoResumed > 0 ? `, ${autoResumed} automatikus folytatás` : ""}`);
-  persistRuns();
+  // A még el nem indított, de parancsos rekordokat MEGŐRIZZÜK: ezekből lesz a
+  // következő booton az automatikus folytatás (lásd `persistRuns(kept)`).
+  persistRuns(resumeCandidates);
   return restored;
 }
 
