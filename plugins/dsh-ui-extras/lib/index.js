@@ -1702,15 +1702,73 @@ function workspaceNeedles(workspace) {
 }
 
 /**
+ * A panel által KÍVÜL indított, de a munkaterületen futó folyamatok.
+ *
+ * MIÉRT KELL: a felhasználó elvárása egyszerű — „ha fut egy dev szerver, akkor
+ * látnom kell a DSH-ban". Eddig csak a panel SAJÁT futásait látta (memóriabeli
+ * `RUNS` + a `state\runs.json` rekordjai), így egy másik ablakban/terminálban
+ * indított `npm run dev` LÁTHATATLAN maradt, és minden restart után újra el
+ * kellett indítani. Ez a függvény a munkaterület-útvonalra illesztve
+ * (ugyanazokkal a tűkkel, mint a túlélő-keresés) megtalálja a FUTÓ
+ * folyamatokat, és „külső folyamat" néven a panel listájába teszi őket.
+ *
+ * Költség: 5 s-os gyorsítótár, mert a panel ~1-2 s-onként kérdezi a listát, a
+ * CIM-hívás pedig ~100 ms.
+ * @type {{at: number, runs: object[]}}
+ */
+let externalDiscovery = { at: 0, runs: [] };
+
+/**
+ * @param {string[]} workspaces
+ * @returns {object[]} pszeudo-futások (`external: true`, `survivors: [pid]`).
+ */
+function discoverExternalRuns(workspaces) {
+  const now = Date.now();
+  if (now - externalDiscovery.at < 5000) return externalDiscovery.runs;
+  const wanted = [...new Set(workspaces.filter((value) => typeof value === "string" && value.length > 3))].slice(0, 8);
+  if (wanted.length === 0) {
+    externalDiscovery = { at: now, runs: [] };
+    return externalDiscovery.runs;
+  }
+  const scan = survivorPidsByWorkspace(wanted.map((workspace) => ({ workspace, notBefore: null })));
+  /** @type {Set<number>} */
+  const known = new Set();
+  for (const run of RUNS.values()) {
+    const pid = typeof run.pid === "number" ? run.pid : (typeof run.child?.pid === "number" ? run.child.pid : null);
+    if (pid !== null) known.add(pid);
+    for (const survivor of Array.isArray(run.survivors) ? run.survivors : []) known.add(survivor);
+  }
+  /** @type {object[]} */
+  const runs = [];
+  for (const [workspace, pids] of scan) {
+    for (const pid of pids) {
+      if (known.has(pid)) continue;
+      runs.push({
+        id: `ext-${pid}`,
+        workspace,
+        command: "",
+        label: `külső folyamat (pid ${pid})`,
+        startedAt: new Date().toISOString(),
+        output: "(ez a folyamat NEM a panel indította: a munkaterületen fut, és a folyamatlistából derült ki. A kimenete nem olvasható, de innen leállítható.)\r\n",
+        done: false,
+        code: null,
+        detached: false,
+        promptAt: 0,
+        pid: null,
+        survivors: [pid],
+        recovered: true,
+        external: true,
+        child: null
+      });
+    }
+  }
+  externalDiscovery = { at: now, runs };
+  return runs;
+}
+
+/**
  * Túlélő folyamatok keresése munkaterület szerint, EGYETLEN CIM-hívással.
  *
- * MIÉRT KELL: a panel-héj (`powershell -NoExit -Command -`) a szülő halálakor
- * EOF-ot kap a stdin-en és KILÉP, a gyerekei (`npm`, `vite`) viszont tovább
- * élnek — a pid-jüket senki nem mentette el. Ezért bootkor a parancssor
- * munkaterület-útvonalára illesztünk: a `vite` parancssora hordozza a projekt
- * útvonalát (`…\node_modules\.bin\..\vite\bin\vite.js`). Mért eset
- * (2026-11-13): két `vite` (5173/5174) élte túl a restartot, a panelben egyik
- * sem látszott.
  * @param targets - `{workspace, notBefore}` rekordok (a `notBefore` a futás indulása, ms).
  * @returns {Map<string, number[]>} munkaterület -> élő pid-ek.
  */
@@ -1744,7 +1802,7 @@ function survivorPidsByWorkspace(targets) {
       // Mért eset (2026-11-14 04:58): a `DshWindow.exe` (36392) és a
       // `DshTray.exe` (37368) került be „túlélőként” egy teszt-rekordhoz.
       "  if ($_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe' -or $_.Name -eq 'conhost.exe' -or $_.Name -eq 'WindowsTerminal.exe' -or $_.Name -eq 'explorer.exe' -or $_.Name -eq 'DshWindow.exe' -or $_.Name -eq 'DshTray.exe' -or $_.Name -eq 'DshLauncher.exe') { return }",
-      "  for ($k = 0; $k -lt $ndl.Count; $k++) { if ($cl.IndexOf($ndl[$k], [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { Write-Output ('{0}|{1}|{2}|{3}' -f $idx[$k], $_.ProcessId, $_.ParentProcessId, $(if ($null -eq $_.CreationDate) { '' } else { $_.CreationDate.ToUniversalTime().ToString('o') })); break } }",
+      "  for ($k = 0; $k -lt $ndl.Count; $k++) { if ($cl.IndexOf($ndl[$k], [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { Write-Output ('{0}|{1}|{2}|{3}|{4}' -f $idx[$k], $_.ProcessId, $_.ParentProcessId, $(if ($null -eq $_.CreationDate) { '' } else { $_.CreationDate.ToUniversalTime().ToString('o') }), $cl); break } }",
       "}"
     ].join("\n");
     const probe = spawnSync("powershell.exe", [
@@ -1772,7 +1830,12 @@ function survivorPidsByWorkspace(targets) {
       if (Number.isFinite(createdAt) && createdAt > harnessStart + 2000) continue;
       // (c) a túlélő nem születhetett a futás indulása ELŐTT (5 s tűréssel).
       if (entry.notBefore !== null && Number.isFinite(createdAt) && createdAt < entry.notBefore - 5000) continue;
-      matched.push({ workspace: entry.workspace, pid, parentPid });
+      // A parancssor az 5. mezőtől (a `|` karakterek miatt összefűzve).
+      const commandLine = parts.slice(4).join("|");
+      // A DSH SAJÁT segédfolyamatai nem „külső munkafolyamatok” — kizárjuk.
+      if (/\\Deepseek Harness\\(bot|providers|tools|bin)\\/iu.test(commandLine)) continue;
+      if (/npm-cache\\_npx\\/iu.test(commandLine)) continue;
+      matched.push({ workspace: entry.workspace, pid, parentPid, commandLine });
     }
     // Csak a GYÖKEREKET adjuk vissza: ha egy jelölt szülője is jelölt, akkor a
     // gyereket a szülő `taskkill /T`-je amúgy is elviszi, és így nem lövünk rá
@@ -2539,7 +2602,33 @@ async function handleCmd(req, res, url) {
           // A korábbi bootból visszatöltött futás: a panel innen tudhatja, hogy
           // a bemenet nem irányítható, csak leállítható.
           recovered: run.recovered === true,
+          external: run.external === true,
           output: run.output
+        });
+      }
+      // KÍVÜL indított, de FUTÓ folyamatok is megjelennek: „ha fut egy dev
+      // szerver, akkor látszania kell a DSH-ban” — függetlenül attól, hogy a
+      // panel indította-e, és hány restart történt azóta.
+      const knownPids = new Set(runs.flatMap((run) => [Number(run.id?.replace(/^ext-/u, "")) || -1]));
+      const workspaces = [...new Set([...RUNS.values()].map((run) => run.workspace).filter((value) => typeof value === "string" && value.length > 0))];
+      for (const layoutKey of Object.keys(readLayout())) workspaces.push(layoutKey);
+      for (const discovered of discoverExternalRuns(workspaces)) {
+        const pid = discovered.survivors[0];
+        if (knownPids.has(pid)) continue;
+        runs.push({
+          id: discovered.id,
+          workspace: discovered.workspace,
+          command: discovered.command,
+          label: discovered.label,
+          startedAt: discovered.startedAt,
+          done: false,
+          code: null,
+          promptAt: 0,
+          echoAt: null,
+          length: discovered.output.length,
+          recovered: true,
+          external: true,
+          output: discovered.output
         });
       }
       sendJson(res, { ok: true, runs });
@@ -2613,7 +2702,15 @@ async function handleCmd(req, res, url) {
       const id = url.searchParams.get("id") ?? "";
       const run = RUNS.get(id);
       if (run === undefined) {
-        sendJson(res, { ok: false, error: "ismeretlen futas: " + id });
+        // Kívül indított (felfedezett) folyamat: `ext-<pid>` alakú azonosító.
+        const external = externalDiscovery.runs.find((entry) => entry.id === id);
+        if (external === undefined) {
+          sendJson(res, { ok: false, error: "ismeretlen futas: " + id });
+          return;
+        }
+        const externalFailure = killRecoveredRun(external);
+        if (externalFailure === null) externalDiscovery = { at: 0, runs: [] };
+        sendJson(res, externalFailure === null ? { ok: true, tree: true } : { ok: false, error: externalFailure });
         return;
       }
       const killFailure = killRun(run);
