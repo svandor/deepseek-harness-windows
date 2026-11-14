@@ -288,13 +288,15 @@
     var box = el("php-installable");
     if (!box) return;
     getJson("/devadmin/php?action=available").then(function (payload) {
-      var free = (payload.versions || []).filter(function (entry) { return !entry.installed; });
-      if (!free.length) {
-        box.innerHTML = '<span class="muted">Minden elérhető verzió telepítve van.</span>';
+      var all = payload.versions || [];
+      if (!all.length) {
+        box.innerHTML = '<span class="muted">a lista üres</span>';
         return;
       }
-      box.innerHTML = '<div class="row">' + free.map(function (entry) {
-        return '<button data-install-php="' + esc(entry.version) + '">' + esc(entry.version) + " telepítése</button>";
+      box.innerHTML = '<div class="row">' + all.map(function (entry) {
+        return entry.installed
+          ? '<span class="mono" style="color:var(--ok)">' + esc(entry.version) + " ✓</span>"
+          : '<button data-install-php="' + esc(entry.version) + '">' + esc(entry.version) + " telepítése</button>";
       }).join("") + "</div>";
     }).catch(function (error) {
       box.innerHTML = '<span class="warn">a lista nem érhető el: ' + esc(error.message) + "</span>";

@@ -499,7 +499,9 @@ async function availablePhpVersions() {
   const rows = [];
   for (const key of Object.keys(releases)) {
     if (!/^\d+\.\d+/u.test(key)) continue;
-    const node = releases[key]["nts-vs17-x64"];
+    // A 8.4+ kiadasok vs17, a regebbi agak (8.3, 8.2, ...) vs16 alatt vannak:
+    // mindkettot elfogadjuk, kulonben a lista csak a ket legujabbat mutatja.
+    const node = releases[key]["nts-vs17-x64"] || releases[key]["nts-vs16-x64"];
     if (!node || !node.zip) continue;
     const zip = String(node.zip.path ?? "");
     const patch = /php-(\d+\.\d+\.\d+)-/u.exec(zip);

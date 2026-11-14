@@ -141,7 +141,8 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = react.useState("");
       const [logSite, setLogSite] = react.useState("");
       const [logs, setLogs] = react.useState("");
-      const [installable, setInstallable] = react.useState([]);
+      /** A windows.php.net teljes listája (a telepítettek is, jelölve). */
+      const [releaseList, setReleaseList] = react.useState([]);
       /** Szerkesztett projekt (domain) + a beírt értékek; null = nincs nyitva. */
       const [editing, setEditing] = react.useState(null);
 
@@ -151,10 +152,10 @@ window.__ModuleLoader__.load({
         getJson("/devadmin/php?action=available")
           .then((payload) => {
             if (!alive) return;
-            setInstallable((payload.versions || []).filter((entry) => !entry.installed));
+            setReleaseList(payload.versions || []);
           })
           .catch(() => {
-            if (alive) setInstallable([]);
+            if (alive) setReleaseList([]);
           });
         return () => {
           alive = false;
@@ -445,25 +446,47 @@ window.__ModuleLoader__.load({
             ),
           ),
           h("div", { style: { ...MONO, ...DIM } }, data.php.root),
-          installable.length > 0
-            ? h(
-                "div",
-                { style: { ...ROW, marginTop: "4px" } },
-                h("span", { style: { ...MONO, ...DIM } }, "Telepíthető:"),
-                installable.map((entry) =>
-                  h(
+          // A telepito resz MINDIG latszik (a felhasznalo jelezte: „én még nem
+          // látok php telepítőt" — mert minden elerheto verzio telepítve volt,
+          // és a szuro elrejtette a blokkot). Most a teljes lista latszik, a
+          // telepítettek jelolve.
+          h("div", { style: { ...ROW, marginTop: "6px", flexWrap: "wrap" } },
+            h("span", { style: { ...MONO, ...DIM } }, "PHP telepítés:"),
+            h(
+              "button",
+              {
+                style: BTN,
+                disabled: busy !== "",
+                onClick: () => {
+                  getJson("/devadmin/php?action=available")
+                    .then((payload) => setReleaseList(payload.versions || []))
+                    .catch((failure) => setError(failure?.message ?? String(failure)));
+                },
+              },
+              "Lista frissítése",
+            ),
+            releaseList.length === 0
+              ? h("span", { style: { ...MONO, ...DIM } }, "(nincs betöltött lista)")
+              : null,
+          ),
+          releaseList.map((entry) =>
+            h(
+              "div",
+              { key: `php-${entry.version}`, style: { ...ROW, marginTop: "2px" } },
+              h("span", { style: { ...MONO, minWidth: "64px" } }, entry.version),
+              entry.installed
+                ? h("span", { style: { ...MONO, ...OK } }, "telepítve")
+                : h(
                     "button",
                     {
-                      key: entry.version,
                       style: BTN,
                       disabled: busy !== "",
                       onClick: () => act("php-install", `version=${encodeURIComponent(entry.version)}`),
                     },
-                    `${entry.version} telepítése`,
+                    "telepítés",
                   ),
-                ),
-              )
-            : null,
+            ),
+          ),
         ),
 
         // szolgaltatasok: mindegyik kulon indithato/leallithato/ujraindithato
