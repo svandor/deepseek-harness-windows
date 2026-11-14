@@ -6882,12 +6882,13 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                 // A terminal the user closed stays closed: the host keeps the
                 // finished record for a while, which would bring it back here.
                 if (closedRef.current[run.id] === true) return;
-                // ONLY this workspace's terminals. `action=runs` answers with every
-                // run the host knows, and the panel used to draw them all — so the
-                // other project's dev server showed up here as if it were running
-                // in this directory. Switching workspaces is switching projects;
-                // the other one's output is not this panel's business.
-                if (workspaceKey(run.workspace) !== workspaceKey(workspaceDir)) return;
+                // MINDEN ÉLŐ terminál látszik, függetlenül a kiválasztott
+                // repótól (a felhasználó célja: „1 pane, de 4-5 munkafolyamat
+                // fusson, és lehessen köztük váltani"). A MÁS munkaterületről
+                // csak a HALOTT (befejezett) terminál marad ki — annak a
+                // kimenete nem ebbe a panelbe tartozik, viszont egy futó
+                // folyamatot látni kell, bármelyik repó van kiválasztva.
+                if (workspaceKey(run.workspace) !== workspaceKey(workspaceDir) && run.alive !== true) return;
                 var previousEntry = previous[run.id];
                 var known = previousEntry ? previousEntry.received : 0;
                 // The prompt prefix is stripped per line, but a chunk can arrive
@@ -6914,6 +6915,9 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                   startedAt: run.startedAt,
                   done: run.done === true,
                   code: run.code,
+                  // Él-e a folyamat: ebből dől el, hogy a MÁS munkaterületről
+                  // átvett terminál itt maradhat-e (fut) vagy kikerül (halott).
+                  alive: run.alive === true,
                   lines: keptLines,
                   carry: ingested.carry,
                   received: run.length
@@ -6923,9 +6927,9 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
               body.runs.forEach(function (run) { present[run.id] = true; });
               Object.keys(next).forEach(function (id) {
                 if (closedRef.current[id] === true) { delete next[id]; return; }
-                // A terminal of another workspace is dropped outright, even while it
-                // runs: this panel shows one project.
-                if (workspaceKey(next[id].workspace) !== workspaceKey(workspaceDir)) { delete next[id]; return; }
+                // A más munkaterületről átvett terminál addig marad, amíg FUT;
+                // ha leállt, kikerül (a kimenete nem ebbe a panelbe tartozik).
+                if (workspaceKey(next[id].workspace) !== workspaceKey(workspaceDir) && next[id].alive !== true) { delete next[id]; return; }
                 if (!present[id] && next[id].done === true) delete next[id];
               });
               return next;
