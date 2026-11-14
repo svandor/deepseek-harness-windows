@@ -1782,6 +1782,49 @@ function survivorPidsByWorkspace(targets) {
 }
 
 /**
+ * Halott terminál-csempék törlése a `state\panel-layout.json`-ból.
+ *
+ * A layout munkaterületenként `height:run-N` és `active: run-N` kulcsokat őriz,
+ * és a panel MINDEGYIKHEZ külön csempét rajzol. Minden boot új `run-N`
+ * azonosítókat oszt, a meghalt futások rekordjai pedig eltűnnek — a csempék
+ * tehát GYŰLNEK, és a felhasználó „szaporodó üres terminálablakokat" lát (mért
+ * eset 2026-11-14: hét kulcs egy munkaterületre, egyetlen élő futás mellett).
+ * Csak azt tartjuk meg, amihez él futás van; a többi kulcs (search, zoom, repo,
+ * terminalWanted, commitLang, …) ÉRINTETLEN.
+ * @returns {{height: number, active: number}} a törölt kulcsok száma.
+ */
+function pruneLayoutRuns() {
+  const result = { height: 0, active: 0 };
+  const layout = readLayout();
+  let changed = false;
+  for (const entry of Object.values(layout)) {
+    if (entry === null || typeof entry !== "object") continue;
+    for (const key of Object.keys(entry)) {
+      const match = /^height:(run-\d+)$/u.exec(key);
+      if (match === null) continue;
+      if (RUNS.has(match[1])) continue;
+      delete entry[key];
+      result.height += 1;
+      changed = true;
+    }
+    const active = entry.active;
+    if (typeof active === "string" && /^run-\d+$/u.test(active) && RUNS.has(active) !== true) {
+      delete entry.active;
+      result.active += 1;
+      changed = true;
+    }
+  }
+  if (changed) {
+    try {
+      writeFileSync(layoutPath(), JSON.stringify(layout, null, 2), "utf8");
+    } catch {
+      /* a mentés hibája nem hathat a bootra */
+    }
+  }
+  return result;
+}
+
+/**
  * A korábbi boot panel-futásainak visszatöltése olvasható rekordként.
  *
  * Két eset van: (1) a HÉJ él — ilyenkor a pid-je elég; (2) a héj kilépett
@@ -4761,6 +4804,19 @@ function apply(ctx) {
     }
   } catch (error) {
     diagLine(`workspace-kulcsok kanonizalasa hibara futott: ${String(error?.message ?? error)}`);
+  }
+  // Halott terminál-csempék törlése a layoutból: minden boot új `run-N`-eket
+  // oszt, a régi `height:run-*` kulcsok pedig megmaradnak, és a panel
+  // MINDEGYIKHEZ külön (üres) csempét rajzol. Mért eset (2026-11-14): hét
+  // `height:run-*` kulcs egy munkaterületre, miközben egy futás élt — a
+  // felhasználó ezt „szaporodó üres terminálablakként" látja.
+  try {
+    const pruned = pruneLayoutRuns();
+    if (pruned.height + pruned.active > 0) {
+      diagLine(`layout: ${pruned.height} halott csempe-kulcs es ${pruned.active} active torolve`);
+    }
+  } catch (error) {
+    diagLine(`layout tisztitas hiba: ${String(error?.message ?? error)}`);
   }
   ctx.effect(() => startTerminalMailbox(), "ui-extras: terminal mailbox");
   diagLine("apply: terminal mailbox elindult");
