@@ -101,6 +101,34 @@ test("nyitott turn (nyers crash-állapot): folytatás megkísérelve", async () 
   assert.equal(sent.length, 1, "a nyitott kört is folytatni próbálja");
 });
 
+test("agent.followup út: az ágens kapja az üzenetet, a prompt() nem hívódik", async () => {
+  const plugin = await loadPlugin("followup");
+  const now = Date.now();
+  const followed = [];
+  const prompted = [];
+  const agent = { followup: (message) => followed.push(message) };
+  const sessions = [fakeSession("session-5", [turnStart(1, now - 1000), turnEnd(2, now - 500, "interrupted")])];
+  const ctx = {
+    sessions: {
+      list: () => sessions,
+      prompt: async (request) => {
+        prompted.push(request);
+        return { accepted: true };
+      }
+    },
+    // A kontroller resume()-ja az ágenst adja vissza (resumeObserved → .agent).
+    sessionController: { resume: async () => agent }
+  };
+  plugin.apply(ctx);
+  await new Promise((resolve) => setTimeout(resolve, WAIT_MS));
+  assert.equal(followed.length, 1, "a followup egyszer hívódik");
+  assert.equal(prompted.length, 0, "a prompt() tartalék nem hívódik, ha van ágens");
+  assert.equal(followed[0].role, "user", "user-szerepű üzenet");
+  assert.equal(followed[0].source.kind, "user", "user-forrás");
+  assert.match(followed[0].content[0].text, /Automatikus folytatás/u);
+  assert.ok(Object.isFrozen(followed[0]), "az üzenet fagyasztott (a mag mintája)");
+});
+
 test("jelölő: ugyanaz a kör nem küldődik kétszer", async () => {
   const now = Date.now();
   const sessions = [fakeSession("session-4", [turnStart(1, now - 1000), turnEnd(2, now - 500, "interrupted")])];
