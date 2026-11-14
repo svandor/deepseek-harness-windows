@@ -51,7 +51,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('status', 'start', 'stop', 'restart', 'logs', 'list', 'service', 'php-install', 'php-available', 'php-ini')]
+    [ValidateSet('status', 'start', 'stop', 'restart', 'logs', 'list', 'service', 'php-install', 'php-available', 'php-ini', 'site-save')]
     [string]$Action = 'status',
     [string]$Project = '',
     [string]$SitesRoot = 'D:\Herd',
@@ -65,7 +65,13 @@ param(
     # php-install: a telepítendo verzio (pl. 8.4.27 vagy 8.4 = a legfrissebb 8.4.x)
     [string]$PhpVersion = '',
     # php-install: a 'current' junction is erre alljon at
-    [switch]$MakeCurrent
+    [switch]$MakeCurrent,
+    # site-save: a projekt es a beirt profil-ertekei (a felulet ment ide)
+    [string]$SiteProject = '',
+    [string]$SiteDomain = '',
+    [string]$SiteDocroot = '',
+    [string]$SitePhp = '',
+    [string]$SiteAliases = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -803,6 +809,47 @@ function Invoke-PhpAvailable {
     $rows | ConvertTo-Json -Depth 3
 }
 
+<#
+    Projektprofil (.dsh\dev.yaml) irasa a felueltol. Ez a "teljes PHP kornyezet
+    beallitasa a feluleten" lenyeg: domain, docroot, php-verzio, aliasok —
+    szerkesztes nelkul. A meglevo fajl mentes (.bak) mellett irodik ujra.
+#>
+function Invoke-SiteSave {
+    param([string]$Root, [string]$Domain, [string]$Docroot, [string]$Php, [string]$Aliases)
+
+    if ([string]::IsNullOrWhiteSpace($Root) -or -not (Test-Path $Root)) { throw ("nincs ilyen projekt: {0}" -f $Root) }
+    if ([string]::IsNullOrWhiteSpace($Domain)) { throw 'a domain kell' }
+    if ($Domain -notmatch '^[a-z0-9][a-z0-9.-]*$') { throw ("ervenytelen domain: {0}" -f $Domain) }
+    if ([string]::IsNullOrWhiteSpace($Docroot)) { $Docroot = '.' }
+    if ([string]::IsNullOrWhiteSpace($Php)) { $Php = 'current' }
+
+    $docPath = Join-Path $Root $Docroot
+    if (-not (Test-Path $docPath)) { throw ("a docroot nem letezik: {0}" -f $docPath) }
+    if (-not (Test-Path (Join-Path $docPath 'index.php'))) { Write-Host ("FIGYELEM: nincs index.php itt: {0}" -f $docPath) }
+
+    # a php-verzio legyen telepitve (kulonben a projekt nem indul)
+    Resolve-PhpDir -Wanted $Php | Out-Null
+
+    $dir = Join-Path $Root '.dsh'
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $path = Join-Path $dir 'dev.yaml'
+    if (Test-Path $path) {
+        $backup = "$path.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+        Copy-Item $path $backup
+        Write-Host ("mentes: {0}" -f $backup)
+    }
+    $lines = @(
+        '# DSH dev-profil (Herd kivaltas) - ezt a tools\dev.ps1 olvassa',
+        ("domain  : {0}" -f $Domain),
+        ("docroot : {0}" -f $Docroot),
+        ("php     : {0}" -f $Php)
+    )
+    if (-not [string]::IsNullOrWhiteSpace($Aliases)) { $lines += ("aliases : {0}" -f $Aliases) }
+    [IO.File]::WriteAllLines($path, $lines, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host ("profil megirva: {0}" -f $path)
+    Write-Host ("  domain={0} docroot={1} php={2}" -f $Domain, $Docroot, $Php)
+}
+
 switch ($Action) {
     'list' { Invoke-List }
     'status' { Invoke-Status }
@@ -814,5 +861,6 @@ switch ($Action) {
     'php-available' { Invoke-PhpAvailable }
     'php-ini' { New-PhpIni -PhpDir (Resolve-PhpDir -Wanted $PhpVersion) | ForEach-Object { Write-Host $_ } }
     'php-install' { Invoke-PhpInstall -Version $PhpVersion -MakeCurrent:$MakeCurrent }
+    'site-save' { Invoke-SiteSave -Root $SiteProject -Domain $SiteDomain -Docroot $SiteDocroot -Php $SitePhp -Aliases $SiteAliases }
 }
 

@@ -166,6 +166,9 @@
 
   var state = null;
   var selectedSite = "";
+  /** Szerkesztés közben nem frissítünk, különben a beírt érték elveszne. */
+  var editing = null;
+  var paused = false;
 
   function el(id) { return document.getElementById(id); }
 
@@ -303,7 +306,8 @@
       el("sites-body").innerHTML = '<p class="muted">Nincs felismert projekt a ' + esc(data.paths.sitesRoot) + " alatt (kell index.php és/vagy .dsh/dev.yaml).</p>";
       return;
     }
-    var body = ['<table><thead><tr><th>Domain</th><th>PHP</th><th>php-cgi</th><th>HTTP</th><th>Adatbázis</th></tr></thead><tbody>'];
+    var body = ['<table><thead><tr><th>Domain</th><th>PHP</th><th>php-cgi</th><th>HTTP</th><th>Adatbázis</th><th></th></tr></thead><tbody>'];
+    var versions = (data.php && data.php.versions) || [];
     data.sites.forEach(function (site) {
       var probe = site.probe || {};
       var httpText = probe.status ? "HTTP " + probe.status + (probe.location ? " → " + probe.location : "") : (probe.error || "–");
@@ -318,7 +322,29 @@
         "<td>" + pill(site.phpCgiAlive, "pid " + (site.phpCgiPid || "?"), "áll") + ' <span class="mono muted">:' + esc(site.phpCgiPort || "–") + "</span></td>" +
         "<td>" + pill(httpOk, httpText, httpText) + "</td>" +
         "<td class=\"mono\">" + dbText + "</td>" +
+        "<td><button data-edit-site=\"" + esc(site.domain) + "\">Beállítás</button></td>" +
         "</tr>");
+      // Nyitott szerkesztő: a sor alatt, a draft értékekkel.
+      if (editing && editing.domain === site.domain) {
+        body.push("<tr><td colspan=\"6\">" +
+          '<div class="row" style="gap:10px;margin:4px 0">' +
+          '<label class="muted">Domain <input data-field="domain" value="' + esc(editing.domain) + '" size="34"></label>' +
+          '<label class="muted">Docroot <input data-field="docroot" value="' + esc(editing.docroot) + '" size="16"></label>' +
+          '<label class="muted">PHP <select data-field="php">' +
+          versions.map(function (version) {
+            return '<option value="' + esc(version) + '"' + (version === editing.php || (editing.php.indexOf(version + ".") === 0) ? " selected" : "") + ">" + esc(version) + "</option>";
+          }).join("") + "</select></label>" +
+          "</div>" +
+          '<div class="row" style="gap:10px;margin:4px 0">' +
+          '<label class="muted" style="flex:1">Aliasok <input data-field="aliases" value="' + esc(editing.aliases) + '" size="60" style="width:70%"></label>' +
+          "</div>" +
+          '<div class="row" style="margin:6px 0">' +
+          '<button class="primary" data-save-site="1">Mentés</button>' +
+          '<button data-save-site="restart">Mentés + újraindítás</button>' +
+          '<button data-cancel-site="1">Mégse</button>' +
+          '<span class="muted mono">' + esc(site.project) + "</span>" +
+          "</div></td></tr>");
+      }
     });
     body.push("</tbody></table>");
     el("sites-body").innerHTML = body.join("");
@@ -374,6 +400,7 @@
   }
 
   function refresh() {
+    if (paused) return Promise.resolve();
     return getJson("/devadmin/state").then(function (data) {
       state = data;
       renderServer(data);
@@ -445,6 +472,64 @@
     var service = event.target.getAttribute && event.target.getAttribute("data-service");
     var verb = event.target.getAttribute && event.target.getAttribute("data-verb");
     if (service && verb) serviceAction(service, verb);
+  });
+
+  // ── projekt-beállítások (domain / docroot / php / aliasok) ──────────────
+  el("sites-body").addEventListener("click", function (event) {
+    var target = event.target;
+    var edit = target.getAttribute && target.getAttribute("data-edit-site");
+    if (edit) {
+      var site = (state.sites || []).filter(function (entry) { return entry.domain === edit; })[0];
+      if (!site) return;
+      var relative = site.docroot.indexOf(site.project) === 0
+        ? (site.docroot.slice(site.project.length).replace(/^[\\/]/, "") || ".")
+        : site.docroot;
+      editing = {
+        project: site.project,
+        domain: site.domain,
+        docroot: relative,
+        php: site.php,
+        aliases: site.aliases || "",
+      };
+      paused = true;
+      refresh();
+      return;
+    }
+    if (target.getAttribute && target.getAttribute("data-cancel-site")) {
+      editing = null;
+      paused = false;
+      refresh();
+      return;
+    }
+    var save = target.getAttribute && target.getAttribute("data-save-site");
+    if (save && editing) {
+      var restart = save === "restart" ? "&restart=1" : "";
+      var url = "/devadmin/site?action=save" +
+        "&project=" + encodeURIComponent(editing.project) +
+        "&domain=" + encodeURIComponent(editing.domain) +
+        "&docroot=" + encodeURIComponent(editing.docroot) +
+        "&php=" + encodeURIComponent(editing.php) +
+        "&aliases=" + encodeURIComponent(editing.aliases) + restart;
+      getJson(url).then(function (result) {
+        if (!result.ok) throw new Error(result.output || result.error || "nem sikerült");
+        toast("mentve: " + editing.domain);
+        editing = null;
+        paused = false;
+        return new Promise(function (resolve) { window.setTimeout(resolve, 2500); });
+      }).then(function () { return refresh(); }).catch(function (error) {
+        toast("hiba: " + error.message);
+      });
+    }
+  });
+  el("sites-body").addEventListener("input", function (event) {
+    if (!editing) return;
+    var field = event.target.getAttribute && event.target.getAttribute("data-field");
+    if (field) editing[field] = event.target.value;
+  });
+  el("sites-body").addEventListener("change", function (event) {
+    if (!editing) return;
+    var field = event.target.getAttribute && event.target.getAttribute("data-field");
+    if (field) editing[field] = event.target.value;
   });
 
   refresh().then(function () { loadLogs(); });

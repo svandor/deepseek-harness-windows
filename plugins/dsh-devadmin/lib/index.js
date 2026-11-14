@@ -572,6 +572,60 @@ async function handlePhp(url, res) {
   return json(res, 400, { ok: false, error: `ismeretlen php action: ${action}` });
 }
 
+/**
+ * `/devadmin/site?action=save&project=..&domain=..&docroot=..&php=..&aliases=..[&restart=1]`
+ *
+ * A projekt `.dsh\dev.yaml`-ját írja (a felület szerkesztője). Ez a
+ * "teljes PHP környezet a felületen" lényege: nem kell kézzel fájlt írni.
+ * A projekt csak a sites root alatti lehet (biztonsági korlát), és a
+ * `restart=1` a projekt saját php-cgi munkását is újraindítja.
+ */
+async function handleSite(url, res) {
+  const action = url.searchParams.get("action") ?? "save";
+  if (action !== "save") return json(res, 400, { ok: false, error: `ismeretlen site action: ${action}` });
+
+  const project = (url.searchParams.get("project") ?? "").trim();
+  const domain = (url.searchParams.get("domain") ?? "").trim().toLowerCase();
+  const docroot = (url.searchParams.get("docroot") ?? ".").trim() || ".";
+  const php = (url.searchParams.get("php") ?? "current").trim() || "current";
+  const aliases = (url.searchParams.get("aliases") ?? "").trim();
+  const restart = url.searchParams.get("restart") === "1";
+
+  const root = SITES_ROOT.toLowerCase();
+  if (!project || !project.toLowerCase().startsWith(root)) {
+    return json(res, 400, { ok: false, error: `a projekt a ${SITES_ROOT} alatt lehet: ${project}` });
+  }
+  if (!/^[a-z0-9][a-z0-9.-]*$/u.test(domain)) return json(res, 400, { ok: false, error: "ervenytelen domain" });
+
+  const result = await runFile(
+    "pwsh",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      DEV_PS1,
+      "-Action",
+      "site-save",
+      "-SiteProject",
+      project,
+      "-SiteDomain",
+      domain,
+      "-SiteDocroot",
+      docroot,
+      "-SitePhp",
+      php,
+      "-SiteAliases",
+      aliases,
+    ],
+    60000,
+  );
+  const body = { ok: result.ok, output: (result.stdout || result.stderr || result.error).trim() };
+  if (result.ok && restart) {
+    body.restart = await launchService(`php:${domain}`, "restart");
+  }
+  return json(res, result.ok ? 200 : 500, body);
+}
+
 async function handleAction(url, res) {
   const action = url.searchParams.get("action") ?? "";
   if (action === "start" || action === "stop" || action === "restart") {
@@ -666,6 +720,11 @@ function apply(ctx) {
       return launchService(id, verb).then((result) => json(res, result.ok ? 200 : 400, result));
     }],
     ["/devadmin/logs", (req, res) => handleLogs(new URL(req.url ?? "/", "http://dsh.invalid"), res)],
+    ["/devadmin/site", (req, res) => {
+      handleSite(new URL(req.url ?? "/", "http://dsh.invalid"), res).catch((error) => {
+        json(res, 500, { ok: false, error: `devadmin/site: ${error?.message ?? error}` });
+      });
+    }],
     ["/devadmin/php", (req, res) => {
       handlePhp(new URL(req.url ?? "/", "http://dsh.invalid"), res).catch((error) => {
         json(res, 500, { ok: false, error: `devadmin/php: ${error?.message ?? error}` });
@@ -727,3 +786,4 @@ export { discoverSites, phpVersions, testTcp, tailFile, probeUrl, DEV_PS1, DEV_H
 export { handleState, handleAction, handleLogs, databaseStatus, hostsEntries, autostartEntries };
 export { buildServices, launchService };
 export { handlePhp, availablePhpVersions };
+export { handleSite };

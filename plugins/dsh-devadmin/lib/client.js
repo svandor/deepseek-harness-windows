@@ -76,6 +76,18 @@ window.__ModuleLoader__.load({
       borderColor: "var(--dsw-alias-border-primary, rgba(127,127,127,.7))",
       color: "var(--dsw-alias-label-primary, inherit)",
     };
+    /** Kis bemenet a projekt-szerkesztőhöz. */
+    const INPUT = {
+      font: "inherit",
+      fontSize: "12px",
+      padding: "2px 6px",
+      borderRadius: "6px",
+      border: "1px solid var(--dsw-alias-border-secondary, rgba(127,127,127,.5))",
+      background: "transparent",
+      color: "inherit",
+      minWidth: "120px",
+    };
+    const INPUT_LABEL = (props) => h("span", { style: { ...DIM, fontSize: "11px" } }, props.text);
     const BTN = {
       font: "inherit",
       fontSize: "12px",
@@ -130,6 +142,8 @@ window.__ModuleLoader__.load({
       const [logSite, setLogSite] = react.useState("");
       const [logs, setLogs] = react.useState("");
       const [installable, setInstallable] = react.useState([]);
+      /** Szerkesztett projekt (domain) + a beírt értékek; null = nincs nyitva. */
+      const [editing, setEditing] = react.useState(null);
 
       // Telepíthető PHP-verziók: egyszer töltjük, a lista ritkán változik.
       react.useEffect(() => {
@@ -202,6 +216,38 @@ window.__ModuleLoader__.load({
             const url = `/devadmin/service?id=${encodeURIComponent(serviceId)}&verb=${encodeURIComponent(verb)}`;
             const result = await getJson(url);
             if (!result.ok) throw new Error(result.error || "nem sikerult");
+            await new Promise((resolve) => setTimeout(resolve, 2500));
+            await refresh();
+          } catch (failure) {
+            setError(failure && failure.message ? failure.message : String(failure));
+          } finally {
+            setBusy("");
+          }
+        },
+        [refresh],
+      );
+
+      /**
+       * A projekt `.dsh\dev.yaml`-jának mentése a felületről. A host a
+       * `dev.ps1 -Action site-save`-ot hívja, tehát a CLI és a UI ugyanazt a
+       * kódutat használja; `restart` esetén a projekt php-cgi munkása is
+       * újraindul (a módosított php-verzió azonnal él).
+       */
+      const saveSite = react.useCallback(
+        async (draft, restart) => {
+          setBusy("site-save");
+          try {
+            const url =
+              "/devadmin/site?action=save" +
+              `&project=${encodeURIComponent(draft.project)}` +
+              `&domain=${encodeURIComponent(draft.domain)}` +
+              `&docroot=${encodeURIComponent(draft.docroot)}` +
+              `&php=${encodeURIComponent(draft.php)}` +
+              `&aliases=${encodeURIComponent(draft.aliases || "")}` +
+              (restart ? "&restart=1" : "");
+            const result = await getJson(url);
+            if (!result.ok) throw new Error(result.output || result.error || "nem sikerult");
+            setEditing(null);
             await new Promise((resolve) => setTimeout(resolve, 2500));
             await refresh();
           } catch (failure) {
@@ -301,6 +347,77 @@ window.__ModuleLoader__.load({
                       )
                     : h("div", { style: { ...MONO, ...DIM } }, "db nincs (.env)"),
                   site.inHosts ? null : h("div", { style: { ...MONO, ...WARN } }, "Hianyzik a hosts fajlbol!"),
+                  h(
+                    "div",
+                    { style: ROW },
+                    h(
+                      "button",
+                      {
+                        style: BTN,
+                        onClick: () =>
+                          setEditing({
+                            project: site.project,
+                            domain: site.domain,
+                            docroot:
+                              site.docroot.indexOf(site.project) === 0
+                                ? site.docroot.slice(site.project.length).replace(/^[\\/]/u, "") || "."
+                                : site.docroot,
+                            php: site.php,
+                            aliases: site.aliases || "",
+                          }),
+                      },
+                      "Beallitas",
+                    ),
+                  ),
+                  editing && editing.project === site.project
+                    ? h(
+                        "div",
+                        { style: { display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" } },
+                        h(
+                          "div",
+                          { style: ROW },
+                          h(INPUT_LABEL, { text: "Domain" }),
+                          h("input", {
+                            style: INPUT,
+                            value: editing.domain,
+                            onChange: (event) => setEditing({ ...editing, domain: event.target.value }),
+                          }),
+                          h(INPUT_LABEL, { text: "Docroot" }),
+                          h("input", {
+                            style: INPUT,
+                            value: editing.docroot,
+                            onChange: (event) => setEditing({ ...editing, docroot: event.target.value }),
+                          }),
+                        ),
+                        h(
+                          "div",
+                          { style: ROW },
+                          h(INPUT_LABEL, { text: "PHP" }),
+                          h(
+                            "select",
+                            {
+                              style: INPUT,
+                              value: editing.php,
+                              onChange: (event) => setEditing({ ...editing, php: event.target.value }),
+                            },
+                            data.php.versions.map((version) => h("option", { key: version, value: version }, version)),
+                          ),
+                          h(INPUT_LABEL, { text: "Aliasok" }),
+                          h("input", {
+                            style: { ...INPUT, minWidth: "200px" },
+                            value: editing.aliases,
+                            onChange: (event) => setEditing({ ...editing, aliases: event.target.value }),
+                          }),
+                        ),
+                        h(
+                          "div",
+                          { style: ROW },
+                          h("button", { style: BTN_PRIMARY, disabled: busy !== "", onClick: () => saveSite(editing, false) }, "Mentes"),
+                          h("button", { style: BTN, disabled: busy !== "", onClick: () => saveSite(editing, true) }, "Mentes + ujrainditas"),
+                          h("button", { style: BTN, onClick: () => setEditing(null) }, "Megse"),
+                        ),
+                      )
+                    : null,
                 ),
               ),
         ),
