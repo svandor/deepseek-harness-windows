@@ -606,6 +606,18 @@ Section 10.6 continues **processes**; an interrupted **conversation turn** is re
 - **Off switch:** the `state\no-auto-continue` marker or `DSH_NO_AUTO_CONTINUE=1`. Log: `state\auto-continue.log`.
 - **Install:** `pwsh -NoProfile -File plugins\dsh-session-auto-continue\install.ps1` (`-Check`, `-Remove`); the host composition loads at boot, so a **restart** is required.
 
+**MEASURED STATE (2026-11-14 06:07) — the continuation does NOT work; the plugin is switched off:**
+
+The decision logic is ready and proven (4/4 unit tests: interrupted turn, completed turn, open turn, marker), the session is also found on disk (`listRecentSessionFiles` + `lastBoundaryFromDisk`, 11 ms for a 6 MB, 3 408-frame log), and the `resume()` + `prompt()` order is correct. The **actual prompt submission fails inside the core**, however:
+
+```
+a folytatás nem sikerült (session-37adb470-…): Cannot read properties of undefined (reading 'throwIfAborted')
+```
+
+The reason: the direct **in-process** call of `SessionCommandController.prompt()` does not receive the RPC execution context (abort signal) that the typert layer supplies for the browser's call. The `state\no-auto-continue` marker therefore **disables** the plugin so it stops trying on every boot. The correct route for the continuation (if anyone carries it forward) is the browser's **RPC/HTTP path** with the token from `state\harness.url`, not a direct service call.
+
+**Consequence for the user:** *terminal* runs still continue automatically (10.6), while the *conversation* currently needs a manual "continue".
+
 
 
 

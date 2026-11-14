@@ -747,6 +747,18 @@ A 10.6 a **folyamatokat** folytatja; a megszakadt **beszélgetés-kört** a `plu
 - **Kikapcsolás:** `state\no-auto-continue` jelölő vagy `DSH_NO_AUTO_CONTINUE=1`. Napló: `state\auto-continue.log`.
 - **Telepítés:** `pwsh -NoProfile -File plugins\dsh-session-auto-continue\install.ps1` (`-Check`, `-Remove`); a host-kompozíció boot-időben töltődik, tehát **újraindítás** kell hozzá.
 
+**MÉRT ÁLLAPOT (2026-11-14 06:07) — a folytatás NEM működik, a plugin kikapcsolva:**
+
+A döntési logika kész és bizonyított (4/4 egységteszt: megszakadt kör, befejezett kör, nyitott turn, jelölő), a sessiont a lemezről is megtalálja (`listRecentSessionFiles` + `lastBoundaryFromDisk`, 11 ms egy 6 MB-os, 3 408 frame-es naplón), és a `resume()` + `prompt()` sorrend is helyes. A **tényleges prompt-beadás viszont elbukik** a magon belül:
+
+```
+a folytatás nem sikerült (session-37adb470-…): Cannot read properties of undefined (reading 'throwIfAborted')
+```
+
+Az ok: a `SessionCommandController.prompt()` közvetlen, **folyamaton belüli** hívása nem kapja meg azt az RPC-végrehajtási kontextust (abort-jel), amit a böngésző hívásához a typert réteg ad. Emiatt a `state\no-auto-continue` jelölő **kikapcsolja** a plugint, hogy ne próbálkozzon minden bootnál. A folytatás helyes útja (ha valaki továbbviszi) a böngésző **RPC/HTTP útvonala** a `state\harness.url` tokenjével, nem a szolgáltatás közvetlen hívása.
+
+**Következmény a felhasználónak:** a *terminál*-futások továbbra is automatikusan folytatódnak (10.6), a *beszélgetés* viszont egyelőre kézi „folytasd"-ot igényel.
+
 
 
 
