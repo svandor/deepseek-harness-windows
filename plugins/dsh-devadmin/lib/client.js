@@ -153,12 +153,35 @@ window.__ModuleLoader__.load({
       }, [refresh]);
 
       const act = react.useCallback(
-        async (action, extra) => {
-          setBusy(action);
+        async (action, extra) => {          setBusy(action);
           try {
             const url = `/devadmin/action?action=${encodeURIComponent(action)}${extra ? `&${extra}` : ""}`;
             const result = await getJson(url);
             if (!result.ok) throw new Error(result.error || result.output || "nem sikerult");
+            await new Promise((resolve) => setTimeout(resolve, 2500));
+            await refresh();
+          } catch (failure) {
+            setError(failure && failure.message ? failure.message : String(failure));
+          } finally {
+            setBusy("");
+          }
+        },
+        [refresh],
+      );
+
+      /**
+       * Egyetlen szolgaltatas muvelete. A host a hatterben inditja (a php-cgi
+       * hosszu eletu), ezert nem varunk ra: 2,5 s mulva frissitunk.
+       * @param serviceId - `caddy` | `php:<domain>` | `all`.
+       * @param verb - `start` | `stop` | `restart`.
+       */
+      const actService = react.useCallback(
+        async (serviceId, verb) => {
+          setBusy(`${serviceId}:${verb}`);
+          try {
+            const url = `/devadmin/service?id=${encodeURIComponent(serviceId)}&verb=${encodeURIComponent(verb)}`;
+            const result = await getJson(url);
+            if (!result.ok) throw new Error(result.error || "nem sikerult");
             await new Promise((resolve) => setTimeout(resolve, 2500));
             await refresh();
           } catch (failure) {
@@ -287,6 +310,61 @@ window.__ModuleLoader__.load({
           h("div", { style: { ...MONO, ...DIM } }, data.php.root),
         ),
 
+        // szolgaltatasok: mindegyik kulon indithato/leallithato/ujraindithato
+        h(
+          "div",
+          { style: CARD },
+          h("div", { style: TITLE }, `Szolgaltatasok (${(data.services || []).length})`),
+          (data.services || []).length === 0
+            ? h("div", { style: DIM }, "A dev szerver nem fut — inditsd el a tetejen.")
+            : data.services.map((service) =>
+                h(
+                  "div",
+                  { key: service.id, style: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" } },
+                  h("span", { style: { ...MONO, minWidth: "170px" } }, service.name),
+                  badge(service.running, service.pid ? `pid ${service.pid}` : "fut", "all"),
+                  h("span", { style: { ...MONO, ...DIM } }, service.detail),
+                  h(
+                    "button",
+                    { style: BTN, disabled: service.running || busy !== "", onClick: () => actService(service.id, "start") },
+                    "Indit",
+                  ),
+                  h("button", { style: BTN, disabled: busy !== "", onClick: () => actService(service.id, "restart") }, "Ujra"),
+                  h(
+                    "button",
+                    { style: BTN_DANGER, disabled: !service.running || busy !== "", onClick: () => actService(service.id, "stop") },
+                    "Leallit",
+                  ),
+                ),
+              ),
+        ),
+
+        // adatbazis: a mysqld a DBngin (emelt) folyamata, ezert csak allapot
+        h(
+          "div",
+          { style: CARD },
+          h("div", { style: TITLE }, "Adatbazis"),
+          h(
+            "div",
+            { style: ROW },
+            badge(data.database && data.database.running, "fut", "all"),
+            h("span", { style: { ...MONO, ...DIM } },
+              data.database && data.database.pid
+                ? `port ${data.database.port} · ${data.database.owner} (${data.database.pid})`
+                : `port ${data.database ? data.database.port : 3306}`),
+          ),
+          h("div", { style: { ...MONO, ...DIM } }, (data.database && data.database.note) || ""),
+          data.sites
+            .filter((site) => site.db)
+            .map((site) =>
+              h(
+                "div",
+                { key: `db-${site.domain}`, style: { ...MONO, ...(site.db.connection === "sqlite" || site.db.reachable ? OK : BAD) } },
+                `${site.domain}: ${site.db.connection} ${site.db.host}:${site.db.port}/${site.db.database}`,
+              ),
+            ),
+        ),
+
         // portok
         h(
           "div",
@@ -402,7 +480,8 @@ window.__ModuleLoader__.load({
           }),
           h("circle", { cx: 8, cy: 8, r: 1.3, fill: "currentColor" }),
         ),
-        h("span", { style: { letterSpacing: ".02em" } }, "PHP"),
+        // Nincs felirat: a felso menusor gombjai ikonok, a nev a tooltipben van
+        // (a felhasznalo kerese: „a php ikonhoz nem kell a php felirat").
       );
     }
 

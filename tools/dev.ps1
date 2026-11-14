@@ -51,13 +51,17 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('status', 'start', 'stop', 'restart', 'logs', 'list')]
+    [ValidateSet('status', 'start', 'stop', 'restart', 'logs', 'list', 'service')]
     [string]$Action = 'status',
     [string]$Project = '',
     [string]$SitesRoot = 'D:\Herd',
     [int]$HttpsPort = 0,
     [int]$Tail = 25,
-    [switch]$NoTrust
+    [switch]$NoTrust,
+    # service muvelet: melyik szolgaltatas (caddy | php:<domain> | all)
+    [string]$Service = '',
+    [ValidateSet('start', 'stop', 'restart', 'status')]
+    [string]$ServiceAction = 'status'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -553,6 +557,96 @@ function Invoke-Logs {
     }
 }
 
+<#
+    EGYETLEN szolgaltatas inditasa/leallitasa/ujrainditasa a mar futo
+    allapot alapjan. Igy a felulet (admin) nem indithat dupla processzt: a
+    portok es a pidek a `state.json`-bol jonnek, es a muvelet utan oda irjuk
+    vissza az uj pidet.
+#>
+function Invoke-Service {
+    param([string]$Name, [string]$Verb)
+
+    $state = Read-State
+    if (-not $state) { throw 'a dev szerver nem fut (nincs state\dev\state.json) - elobb start kell' }
+
+    $caddyOut = Join-Path $LogDir 'caddy.log'
+    $caddyErr = Join-Path $LogDir 'caddy.err.log'
+
+    function Start-CaddyNow {
+        $argLine = 'run --config "{0}" --adapter caddyfile' -f $CaddyFile
+        $proc = Start-Process -FilePath $CaddyExe -ArgumentList $argLine -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput $caddyOut -RedirectStandardError $caddyErr
+        Start-Sleep -Seconds 2
+        if ($proc.HasExited) { throw ('a Caddy azonnal kilepett: ' + (Get-Content $caddyErr -Raw -ErrorAction SilentlyContinue)) }
+        return $proc.Id
+    }
+
+    function Start-PhpCgiNow {
+        param($Site)
+        $phpExe = Join-Path $Site.phpDir 'php-cgi.exe'
+        if (-not (Test-Path $phpExe)) { throw "nincs php-cgi: $phpExe" }
+        $ini = Join-Path $Site.phpDir 'php.ini'
+        $args = @('-b', "127.0.0.1:$($Site.phpCgiPort)")
+        if (Test-Path $ini) { $args += @('-c', $ini) }
+        $env:PHP_FCGI_CHILDREN = '6'
+        $env:PHP_FCGI_MAX_REQUESTS = '500'
+        $out = Join-Path $LogDir ("php-" + $Site.domain + ".log")
+        $err = Join-Path $LogDir ("php-" + $Site.domain + ".err.log")
+        $proc = Start-Process -FilePath $phpExe -ArgumentList $args -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput $out -RedirectStandardError $err
+        Remove-Item Env:\PHP_FCGI_CHILDREN, Env:\PHP_FCGI_MAX_REQUESTS -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 400
+        if ($proc.HasExited) { throw ("a php-cgi azonnal kilepett ({0}): {1}" -f $Site.domain, (Get-Content $err -Raw -ErrorAction SilentlyContinue)) }
+        return $proc.Id
+    }
+
+    $names = if ($Name -eq 'all') { @('caddy') + @($state.sites | ForEach-Object { "php:$($_.domain)" }) } else { @($Name) }
+    $done = @()
+
+    foreach ($target in $names) {
+        if ($target -eq 'caddy') {
+            if ($Verb -in @('stop', 'restart')) {
+                $pidNow = $state.caddy.pid
+                $proc = if ($pidNow) { Get-Process -Id $pidNow -ErrorAction SilentlyContinue } else { $null }
+                if ($proc -and $proc.ProcessName -eq 'caddy') { & taskkill /PID $pidNow /T /F 2>&1 | Out-Null }
+                for ($i = 0; $i -lt 20; $i++) { if (Test-PortBindable -Port ([int]$state.caddy.httpsPort)) { break }; Start-Sleep -Milliseconds 200 }
+                $state.caddy.pid = 0
+                $done += 'caddy: leallitva'
+            }
+            if ($Verb -in @('start', 'restart')) {
+                $state.caddy.pid = Start-CaddyNow
+                $done += ("caddy: fut (pid {0})" -f $state.caddy.pid)
+            }
+            if ($Verb -eq 'status') { $done += ("caddy: pid {0}" -f $state.caddy.pid) }
+            continue
+        }
+
+        if ($target -like 'php:*') {
+            $domain = $target -replace '^php:', ''
+            $site = $state.sites | Where-Object { $_.domain -eq $domain } | Select-Object -First 1
+            if (-not $site) { throw "nincs ilyen site a futasban: $domain" }
+            if ($Verb -in @('stop', 'restart')) {
+                $proc = if ($site.phpCgiPid) { Get-Process -Id $site.phpCgiPid -ErrorAction SilentlyContinue } else { $null }
+                if ($proc -and $proc.ProcessName -eq 'php-cgi') { & taskkill /PID $site.phpCgiPid /T /F 2>&1 | Out-Null }
+                for ($i = 0; $i -lt 20; $i++) { if (Test-PortBindable -Port ([int]$site.phpCgiPort)) { break }; Start-Sleep -Milliseconds 200 }
+                $site.phpCgiPid = 0
+                $done += ("{0}: leallitva" -f $domain)
+            }
+            if ($Verb -in @('start', 'restart')) {
+                $site.phpCgiPid = Start-PhpCgiNow -Site $site
+                $done += ("{0}: fut (pid {1}, port {2})" -f $domain, $site.phpCgiPid, $site.phpCgiPort)
+            }
+            if ($Verb -eq 'status') { $done += ("{0}: pid {1}, port {2}" -f $domain, $site.phpCgiPid, $site.phpCgiPort) }
+            continue
+        }
+
+        throw "ismeretlen szolgaltatas: $target (caddy | php:<domain> | all)"
+    }
+
+    Save-State $state
+    foreach ($line in $done) { Write-Host $line }
+}
+
 switch ($Action) {
     'list' { Invoke-List }
     'status' { Invoke-Status }
@@ -560,4 +654,6 @@ switch ($Action) {
     'stop' { Invoke-Stop }
     'restart' { Invoke-Stop; Start-Sleep -Milliseconds 500; Invoke-Start }
     'logs' { Invoke-Logs }
+    'service' { Invoke-Service -Name $Service -Verb $ServiceAction }
 }
+

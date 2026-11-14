@@ -20,6 +20,8 @@ import {
   tailFile,
   handleState,
   handleLogs,
+  buildServices,
+  launchService,
 } from "../lib/index.js";
 
 function fakeResponse() {
@@ -110,4 +112,33 @@ test("a /devadmin/logs a kert site naplojat adja", () => {
     assert.ok(key in body, `hianyzik: ${key}`);
   }
   assert.equal(typeof body.php, "string");
+});
+
+test("a szolgaltatas-lista a futasi allapotbol epul (caddy + minden php-cgi)", () => {
+  const state = {
+    caddy: { pid: 0, httpsPort: 443, httpPort: 80 },
+    sites: [
+      { domain: "a.test", php: "8.4", phpCgiPid: 0, phpCgiPort: 9101 },
+      { domain: "b.test", php: "8.4", phpCgiPid: 0, phpCgiPort: 9102 },
+    ],
+  };
+  const services = buildServices(state);
+  assert.equal(services.length, 3, "caddy + 2 php-cgi");
+  assert.deepEqual(services.map((service) => service.id), ["caddy", "php:a.test", "php:b.test"]);
+  for (const service of services) {
+    assert.equal(typeof service.running, "boolean");
+    assert.equal(service.manageable, true);
+    assert.ok(service.detail.length > 0, "van reszletezes");
+  }
+  // allapot nelkul is ad caddy-rekordot (a felulet ne omoljon ossze)
+  assert.equal(buildServices(null).length, 1);
+});
+
+test("a launchService elutasiti az ervenytelen bemenetet, spawn nelkul", async () => {
+  const badId = await launchService("rm -rf /", "start");
+  assert.equal(badId.ok, false);
+  assert.match(badId.error, /ervenytelen szolgaltatas/u);
+  const badVerb = await launchService("caddy", "delete");
+  assert.equal(badVerb.ok, false);
+  assert.match(badVerb.error, /ervenytelen muvelet/u);
 });

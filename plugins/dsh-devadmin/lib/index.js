@@ -134,6 +134,72 @@ function tailFile(path, lines) {
   return all.slice(-Math.max(1, Math.min(500, lines))).join("\n");
 }
 
+/**
+ * EGYETLEN szolgaltatas muvelete (start/stop/restart) a rejtett inditon at.
+ *
+ * Miert igy: a `php-cgi` munkasok hosszu eletuek, ezert egy szinkron hivas
+ * (execFile) a kimeneti csovek miatt a hivo lezarasaig (idotullepesig) varna —
+ * MERVE: 180 s. A `wscript` + `WshShell.Run(cmd, 0, False)` azonnal visszater,
+ * a muvelet a hatterben fut, az eredmenyt a felulet a kovetkezo
+ * allapotlekerdezessel latja (a `dev.ps1` a `state.json`-ba irja az uj pidet).
+ * @param serviceId - `caddy` | `php:<domain>` | `all`.
+ * @param verb - `start` | `stop` | `restart`.
+ */
+function launchService(serviceId, verb) {
+  return new Promise((resolve) => {
+    if (!/^(caddy|all|php:[A-Za-z0-9._-]+)$/u.test(serviceId)) {
+      resolve({ ok: false, error: `ervenytelen szolgaltatas: ${serviceId}` });
+      return;
+    }
+    if (!["start", "stop", "restart"].includes(verb)) {
+      resolve({ ok: false, error: `ervenytelen muvelet: ${verb}` });
+      return;
+    }
+    const child = spawn("cscript", ["//nologo", DEV_HIDDEN_VBS, "service", serviceId, verb], {
+      windowsHide: true,
+      detached: true,
+      stdio: "ignore",
+    });
+    child.on("error", (error) => resolve({ ok: false, error: error.message }));
+    child.on("spawn", () => {
+      child.unref();
+      resolve({ ok: true, service: serviceId, verb, queued: true });
+    });
+  });
+}
+
+/**
+ * A szolgaltatasok listaja a futasi allapotbol — a felulet ezt rajzolja ki
+ * start/stop/restart gombokkal.
+ * @param state - a `state\dev\state.json` tartalma (vagy null).
+ * @returns {object[]} szolgaltatas-rekordok.
+ */
+function buildServices(state) {
+  const services = [];
+  const caddyPid = state?.caddy?.pid ?? null;
+  services.push({
+    id: "caddy",
+    name: "Caddy (HTTPS)",
+    kind: "proxy",
+    running: pidAlive(caddyPid),
+    pid: caddyPid || null,
+    detail: state ? `https ${state.caddy.httpsPort} / http ${state.caddy.httpPort}` : "nincs allapot",
+    manageable: true,
+  });
+  for (const site of state?.sites ?? []) {
+    services.push({
+      id: `php:${site.domain}`,
+      name: `php-cgi — ${site.domain}`,
+      kind: "php",
+      running: pidAlive(site.phpCgiPid),
+      pid: site.phpCgiPid || null,
+      detail: `php ${site.php} · FastCGI :${site.phpCgiPort}`,
+      manageable: true,
+    });
+  }
+  return services;
+}
+
 function portOwner(port) {
   return new Promise((resolve) => {
     execFile("netstat", ["-ano"], { windowsHide: true }, (error, stdout) => {
@@ -379,6 +445,19 @@ async function handleState(_req, res) {
     ports.push({ port, pid, name: pid ? await pidName(pid) : "" });
   }
 
+  // Az adatbazis NEM a mi folyamatunk: a DBngin (emelt) kezeli, ezert a
+  // felulet csak ALLAPOTOT mutat ra, inditani/leallitani nem tudja — ezt
+  // kimondjuk, nem tapsoljuk el (a "ne legyen ket igazsag" szabaly).
+  const dbPort = ports.find((entry) => entry.port === 3306);
+  const database = {
+    port: 3306,
+    running: dbPort ? dbPort.pid !== null : false,
+    pid: dbPort?.pid ?? null,
+    owner: dbPort?.name ?? "",
+    manageable: false,
+    note: "A MySQL-t a DBngin kezeli (emelt folyamat); inditas/leallitas a DBnginbol megy.",
+  };
+
   json(res, 200, {
     devServer: {
       running: caddyAlive,
@@ -390,6 +469,8 @@ async function handleState(_req, res) {
       logDir: LOG_DIR,
       stateMissing: state === null,
     },
+    services: buildServices(state),
+    database,
     sites,
     php: phpVersions(),
     ports,
@@ -419,6 +500,14 @@ async function handleAction(url, res) {
     const hosts = hostsEntries();
     const missing = discoverSites().filter((site) => !hosts.has(site.domain)).map((site) => site.domain);
     return json(res, 200, { ok: true, missing, hostsFile: HOSTS_FILE });
+  }
+  if (action === "service" || url.searchParams.get("service")) {
+    // /devadmin/action?action=service&id=caddy&verb=restart  VAGY
+    // /devadmin/service?id=...&action=restart  (a route a rövidebb formát adja)
+    const id = url.searchParams.get("id") ?? "";
+    const verb = url.searchParams.get("verb") ?? url.searchParams.get("serviceAction") ?? "";
+    const result = await launchService(id, verb);
+    return json(res, result.ok ? 200 : 400, result);
   }
   return json(res, 400, { ok: false, error: `ismeretlen action: ${action}` });
 }
@@ -459,6 +548,13 @@ function apply(ctx) {
   const routes = [
     ["/devadmin/state", (req, res) => handleState(req, res)],
     ["/devadmin/action", (req, res) => handleAction(new URL(req.url ?? "/", "http://dsh.invalid"), res)],
+    ["/devadmin/service", (req, res) => {
+      // /devadmin/service?id=caddy&verb=restart
+      const url = new URL(req.url ?? "/", "http://dsh.invalid");
+      const id = url.searchParams.get("id") ?? "";
+      const verb = url.searchParams.get("verb") ?? url.searchParams.get("action") ?? "";
+      return launchService(id, verb).then((result) => json(res, result.ok ? 200 : 400, result));
+    }],
     ["/devadmin/logs", (req, res) => handleLogs(new URL(req.url ?? "/", "http://dsh.invalid"), res)],
     [
       "/devadmin/",
@@ -514,3 +610,4 @@ function apply(ctx) {
 export { apply, inject };
 export { discoverSites, phpVersions, testTcp, tailFile, probeUrl, DEV_PS1, DEV_HIDDEN_VBS };
 export { handleState, handleAction, handleLogs, databaseStatus, hostsEntries, autostartEntries };
+export { buildServices, launchService };

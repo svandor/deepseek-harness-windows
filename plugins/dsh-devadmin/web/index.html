@@ -123,6 +123,16 @@
     <div id="php-body" class="muted">betöltés…</div>
   </section>
 
+  <section class="card" id="card-services">
+    <h2>Szolgáltatások</h2>
+    <div id="services-body" class="muted">betöltés…</div>
+  </section>
+
+  <section class="card" id="card-db">
+    <h2>Adatbázis</h2>
+    <div id="db-body" class="muted">betöltés…</div>
+  </section>
+
   <section class="card" id="card-sites">
     <h2>Projektek</h2>
     <div id="sites-body" class="muted">betöltés…</div>
@@ -200,6 +210,52 @@
     }
     el("server-body").innerHTML = lines.join("");
     el("server-body").classList.remove("muted");
+  }
+
+  /** Szolgáltatások: mindegyiknél indítás / leállítás / újraindítás. */
+  function renderServices(data) {
+    if (!data.services || !data.services.length) {
+      el("services-body").innerHTML = '<p class="muted">Nincs szolgáltatás (a dev szerver nem fut — indítsd el a fenti gombbal).</p>';
+      return;
+    }
+    var rows = ['<table><thead><tr><th>Szolgáltatás</th><th>Állapot</th><th>Művelet</th></tr></thead><tbody>'];
+    data.services.forEach(function (service) {
+      var id = esc(service.id);
+      rows.push("<tr><td><strong>" + esc(service.name) + "</strong><br><span class=\"muted mono\">" + esc(service.detail) + "</span></td>" +
+        "<td>" + pill(service.running, "fut" + (service.pid ? " (pid " + service.pid + ")" : ""), "áll") + "</td>" +
+        "<td><div class=\"row\">" +
+        '<button data-service="' + id + '" data-verb="start"' + (service.running ? " disabled" : "") + ">Indítás</button>" +
+        '<button data-service="' + id + '" data-verb="restart">Újraindítás</button>' +
+        '<button class="danger" data-service="' + id + '" data-verb="stop"' + (service.running ? "" : " disabled") + ">Leállítás</button>" +
+        "</div></td></tr>");
+    });
+    rows.push("</tbody></table>");
+    el("services-body").innerHTML = rows.join("");
+    el("services-body").classList.remove("muted");
+  }
+
+  /** Adatbázis: állapot + mely projektek melyik DB-t használják. */
+  function renderDb(data) {
+    var db = data.database || {};
+    var rows = [];
+    rows.push('<div class="row" style="margin-bottom:8px">' + pill(db.running, "fut", "áll") +
+      ' <span class="mono muted">port ' + esc(db.port) + (db.pid ? " · " + esc(db.owner) + " (" + esc(db.pid) + ")" : "") + "</span></div>");
+    if (db.note) rows.push('<p class="muted" style="margin:0 0 8px">' + esc(db.note) + "</p>");
+    rows.push("<table><thead><tr><th>Projekt</th><th>Kapcsolat</th><th>Állapot</th></tr></thead><tbody>");
+    var any = false;
+    data.sites.forEach(function (site) {
+      if (!site.db) return;
+      any = true;
+      var info = site.db.connection === "sqlite"
+        ? "sqlite · " + site.db.database
+        : site.db.connection + " · " + site.db.host + ":" + site.db.port + "/" + site.db.database;
+      rows.push("<tr><td class=\"mono\">" + esc(site.domain) + "</td><td class=\"mono\">" + esc(info) + "</td><td>" +
+        pill(site.db.connection === "sqlite" || site.db.reachable, "elérhető", "NEM elérhető") + "</td></tr>");
+    });
+    if (!any) rows.push('<tr><td colspan="3" class="muted">Egyik projektnek sincs .env adatbázis-beállítása.</td></tr>');
+    rows.push("</tbody></table>");
+    el("db-body").innerHTML = rows.join("");
+    el("db-body").classList.remove("muted");
   }
 
   function renderPhp(data) {
@@ -299,6 +355,8 @@
     return getJson("/devadmin/state").then(function (data) {
       state = data;
       renderServer(data);
+      renderServices(data);
+      renderDb(data);
       renderPhp(data);
       renderSites(data);
       renderPorts(data);
@@ -326,6 +384,23 @@
     });
   }
 
+  /**
+   * Egyetlen szolgáltatás művelete. A host a hátérben indítja (a php-cgi
+   * hosszú életű, ezért szinkron hívás nem lehet), így 2,5 s múlva frissítünk.
+   */
+  function serviceAction(service, verb) {
+    var url = "/devadmin/service?id=" + encodeURIComponent(service) + "&verb=" + encodeURIComponent(verb);
+    getJson(url).then(function (result) {
+      if (!result.ok) throw new Error(result.error || "nem sikerült");
+      toast(service + ": " + verb + " kiadva");
+      return new Promise(function (resolve) { window.setTimeout(resolve, 2500); });
+    }).then(function () {
+      return refresh();
+    }).catch(function (error) {
+      toast("hiba: " + error.message);
+    });
+  }
+
   el("btn-start").addEventListener("click", function () { action("start"); });
   el("btn-stop").addEventListener("click", function () { action("stop"); });
   el("btn-restart").addEventListener("click", function () { action("restart"); });
@@ -334,6 +409,11 @@
   el("php-body").addEventListener("click", function (event) {
     var version = event.target.getAttribute && event.target.getAttribute("data-php");
     if (version) action("php-use", "version=" + encodeURIComponent(version));
+  });
+  el("services-body").addEventListener("click", function (event) {
+    var service = event.target.getAttribute && event.target.getAttribute("data-service");
+    var verb = event.target.getAttribute && event.target.getAttribute("data-verb");
+    if (service && verb) serviceAction(service, verb);
   });
 
   refresh().then(function () { loadLogs(); });

@@ -131,11 +131,9 @@ test("az apply regisztralja a tab tipust, a tab testet es a fejlec-ikont", async
   rendered.props.onClick();
   assert.deepEqual(opened, ["devadmin"]);
 
-  // es van benne ikon (svg) + PHP felirat
+  // es van benne ikon (svg), de NINCS felirat — a menüsor gombjai ikonok
   const kids = (rendered.children || []).filter(Boolean);
   assert.ok(kids.some((child) => child && child.type === "svg"), "van SVG ikon");
-  assert.ok(
-    kids.some((child) => child && child.type === "span" && (child.children || [])[0] === "PHP"),
-    "van PHP felirat",
-  );
+  assert.equal(kids.length, 1, "csak az ikon: nincs PHP felirat, a nev a tooltipben van");
+  assert.match(rendered.props.title, /PHP admin/u, "a tooltip nevezi meg a gombot");
 });

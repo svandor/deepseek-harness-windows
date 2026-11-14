@@ -1611,6 +1611,9 @@ function persistRuns(kept = []) {
       const row = { id: run.id, workspace: canonicalWorkspace(run.workspace), label: run.label, pid, startedAt: run.startedAt };
       if (command.length > 0) row.command = command;
       if (survivors.length > 0) row.survivors = survivors;
+      // A kimenet lemezes naplója: ebből tölti vissza a következő boot a
+      // terminál TARTALMÁT, nem csak a folyamatot.
+      if (typeof run.logFile === "string" && run.logFile.length > 0) row.logFile = run.logFile;
       rows.push(row);
     }
     // A MEGŐRZÖTT rekordok: azok a sorok, amelyeket a boot nem tudott
@@ -1966,8 +1969,13 @@ function restoreRuns() {
     if (pid === null && pidList.length === 0) return false;
     for (const value of pidList) claimedPids.add(value);
     const note = pid === null
-      ? `(a héj, ami ezt indította, a harness újraindulásakor kilépett — a folyamat viszont ÉL: ${pidList.join(", ")}. A kimenet már nem érhető el és a bemenet nem irányítható, de innen leállítható.)\r\n`
-      : "(ez a futás egy KORÁBBI bootból maradt folyamat. A kimenet már nem érhető el és a bemenet nem irányítható, de a folyamat él — innen leállítható.)\r\n";
+      ? `(a héj, ami ezt indította, a harness újraindulásakor kilépett — a folyamat viszont ÉL: ${pidList.join(", ")}. A kimenet innen olvasható, a bemenet nem irányítható, de a folyamat leállítható.)\r\n`
+      : "(ez a futás egy KORÁBBI bootból maradt folyamat. A kimenet innen olvasható, a bemenet nem irányítható, de a folyamat él — innen leállítható.)\r\n";
+    // A KORÁBBI kimenet visszatöltése a lemezes naplóból: enélkül a terminál
+    // tartalma elveszne (a felhasználó jelezte 2026-11-14: „az npm run dev
+    // terminált bár újra megnyitotta, de a tartalmát elejtette").
+    const logFile = typeof row.logFile === "string" ? row.logFile : "";
+    const history = tailRunLog(logFile);
     RUNS.set(id, {
       id,
       workspace: typeof row.workspace === "string" ? row.workspace : "",
@@ -1976,7 +1984,8 @@ function restoreRuns() {
       command: typeof row.command === "string" ? row.command : "",
       label: typeof row.label === "string" ? row.label : "shell",
       startedAt: typeof row.startedAt === "string" ? row.startedAt : new Date().toISOString(),
-      output: note,
+      output: history + (history.length > 0 ? "\r\n" : "") + note,
+      logFile,
       done: false,
       code: null,
       detached: false,
@@ -2032,8 +2041,51 @@ function restoreRuns() {
 
 /** Append one chunk to a run's bounded output buffer. */
 function appendOutput(run, chunk) {
-  run.output += chunk;
+  appendToRunOutput(run, chunk);
+}
+
+/**
+ * A panel-futás kimenetének fájlia (a memóriabeli puffer tükre).
+ *
+ * MIÉRT KELL: a restart után visszatöltött futás kimenete eddig elveszett — a
+ * felhasználó jelezte („az npm run dev terminált bár újra megnyitotta, de a
+ * tartalmát elejtette, ez baj"). A memóriabeli puffer a folyamattal együtt
+ * hal meg, ezért minden darabot a lemezre is írunk, és a visszatöltés a
+ * fájlból tölti fel a terminált.
+ * @param id - a futás azonosítója (`run-<n>`).
+ * @param startedAt - ISO időbélyeg; a névbe kerül, hogy két boot azonos
+ *   `run-<n>` id-je ne írja felül egymás naplóját.
+ * @returns a naplófájl abszolút útja.
+ */
+function runLogPath(id, startedAt) {
+  const stamp = String(startedAt ?? new Date().toISOString()).replace(/[^0-9]/gu, "").slice(0, 14);
+  return join(PACKAGE_ROOT, "..", "..", "state", "runs", `${id}-${stamp}.log`);
+}
+
+/** A kimenet hozzáfűzése a memóriabeli pufferhez ÉS a lemezes naplóhoz. */
+function appendToRunOutput(run, text) {
+  run.output += text;
   if (run.output.length > 200000) run.output = run.output.slice(-200000);
+  if (typeof run.logFile !== "string" || run.logFile.length === 0) return;
+  try {
+    const dir = join(PACKAGE_ROOT, "..", "..", "state", "runs");
+    if (existsSync(dir) !== true) mkdirSync(dir, { recursive: true });
+    appendFileSync(run.logFile, text, "utf8");
+  } catch {
+    // A napló írása soha nem állíthatja meg a terminált.
+  }
+}
+
+/** A lemezes napló utolsó `limit` karaktere (a visszatöltött kimenethez). */
+function tailRunLog(path, limit = 150000) {
+  if (typeof path !== "string" || path.length === 0) return "";
+  try {
+    if (existsSync(path) !== true) return "";
+    const text = readFileSync(path, "utf8");
+    return text.length > limit ? text.slice(-limit) : text;
+  } catch {
+    return "";
+  }
 }
 
 /** The workspace-level run-command configuration path. */
@@ -2249,6 +2301,9 @@ function startRun(workspace, command) {
     label: command && command.length > 0 ? command : "shell",
     startedAt: new Date().toISOString(),
     output: "",
+    // A kimenet lemezes tükre: ebből töltődik vissza a tartalom a következő
+    // booton (lásd `runLogPath`).
+    logFile: runLogPath(id, new Date().toISOString()),
     done: false,
     code: null,
     // Whether the child owns its process group (POSIX only); `killRun` needs it.
@@ -2323,6 +2378,15 @@ function writeToRun(run, text) {
   // (ugyanúgy, ahogy egy terminál tenne), a kimenet pedig utána jön.
   run.output += "\r\n> " + payload.replace(/\n$/u, "") + "\r\n";
   if (run.output.length > 200000) run.output = run.output.slice(-200000);
+  // A beírt sor is a lemezes naplóba kerül, különben a visszatöltött terminál
+  // kimenetéből hiányozna, hogy MIT futtatott a felhasználó.
+  if (typeof run.logFile === "string" && run.logFile.length > 0) {
+    try {
+      appendFileSync(run.logFile, "\r\n> " + payload.replace(/\n$/u, "") + "\r\n", "utf8");
+    } catch {
+      /* nem állíthatja meg a beírást */
+    }
+  }
   run.promptAt = run.output.length;
   run.echoAt = null;
   run.child.stdin.write(payload);
