@@ -296,7 +296,7 @@ namespace DshTray
             // ── panelbeállítások (HELYREÁLLÍTVA, 2026-11-13) ────────────────
             // A PS-tálcában voltak, a natív tálcára váltáskor elvesztek.
             var split = new ToolStripMenuItem("Ablak felosztása");
-            for (int count = 1; count <= 3; count++)
+            for (int count = 1; count <= 6; count++)
             {
                 int value = count;
                 var entry = new ToolStripMenuItem(value + " panel");
@@ -821,7 +821,7 @@ namespace DshTray
         /// <summary>Felosztás beállítása, mentés és az ablak újranyitása.</summary>
         private void SetPanes(int panes)
         {
-            int clamped = Math.Max(1, Math.Min(3, panes));
+            int clamped = Math.Max(1, Math.Min(6, panes));
             if (_cfg.Panes == clamped) return;
             _cfg.Panes = clamped;
             SaveLayoutConfig();

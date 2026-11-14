@@ -45,7 +45,7 @@ namespace DshWindow
         /// (its own WebView2 profile, cookies, storage and workspace selection),
         /// so the bound is about screen room and memory, not about correctness.
         /// </summary>
-        internal const int MaxPanes = 4;
+        internal const int MaxPanes = 6;
 
         /// <summary>Width of the draggable divider between two panes (WPF units).</summary>
         internal const double SplitterWidth = 7;
