@@ -30,9 +30,11 @@
  * NAPLÓ: `state\auto-continue.log` (minden döntés és hiba oda megy).
  */
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import zlib from "node:zlib";
 
 /** A plugin neve a boot gráfban. */
 export const name = "dsh-session-auto-continue";
@@ -53,6 +55,14 @@ const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
 /** A repó `state\` mappája. */
 const STATE_DIR = join(PACKAGE_ROOT, "..", "..", "state");
 const MARKER_PATH = join(STATE_DIR, "auto-continue.json");
+
+/** A DSH home és a session-tároló gyökere (`<home>\sessions\<projekt>\<id>\session.v3.jsonl.zstd`). */
+const DSH_HOME = typeof process.env.DSH_HOME === "string" && process.env.DSH_HOME.length > 0
+  ? process.env.DSH_HOME
+  : join(homedir(), ".dsh");
+const SESSIONS_ROOT = join(DSH_HOME, "sessions");
+const SESSION_LOG_NAME = "session.v3.jsonl.zstd";
+const SESSION_LOG_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
 const LOG_PATH = join(STATE_DIR, "auto-continue.log");
 const OFF_PATH = join(STATE_DIR, "no-auto-continue");
 
@@ -167,6 +177,110 @@ function interruptedCandidate(session) {
 }
 
 /**
+ * A legfrissebb session-naplók a lemezen (session-attach nélkül).
+ *
+ * MIÉRT KELL: a `ctx.sessions` store csak a MEGNYITOTT sessionöket tartalmazza,
+ * a boot után tehát üres lehet — mért eset (2026-11-14 04:58): 18 próba alatt
+ * mindig `nincs megszakadt kör (3 session)`, pedig ennek a beszélgetésnek a
+ * naplója nyitott `turn/start#5972`-vel végződött, mert a WebView2 ablak nem
+ * csatlakozott. A napló viszont ott van a lemezen:
+ * `<DSH_HOME>\sessions\<projekt>\<id>\session.v3.jsonl.zstd`.
+ * @param {number} limit
+ * @returns {{id: string, file: string, mtime: number}[]} a legfrissebbek elöl.
+ */
+function listRecentSessionFiles(limit) {
+  const found = [];
+  let projects = [];
+  try {
+    projects = readdirSync(SESSIONS_ROOT);
+  } catch {
+    return found;
+  }
+  for (const project of projects) {
+    const projectPath = join(SESSIONS_ROOT, project);
+    let ids = [];
+    try {
+      ids = readdirSync(projectPath);
+    } catch {
+      continue;
+    }
+    for (const id of ids) {
+      const file = join(projectPath, id, SESSION_LOG_NAME);
+      if (existsSync(file) !== true) continue;
+      try {
+        found.push({ id, file, mtime: statSync(file).mtimeMs });
+      } catch {
+        /* a fájl eltűnt: kihagyjuk */
+      }
+    }
+  }
+  found.sort((left, right) => right.mtime - left.mtime);
+  return found.slice(0, limit);
+}
+
+/**
+ * A naplófájl UTOLSÓ kör-határa.
+ *
+ * A fájl egymás után fűzött zstd-frame-ekből áll; a `zstdDecompressSync` csak az
+ * ELSŐ frame-et adja vissza (mért viselkedés, 2026-11-14: 1 esemény 5999
+ * helyett), ezért a frame-varázsszámnál (`28 B5 2F FD`) vágunk, és az utolsó
+ * néhány frame-et bontjuk ki — a kör-határ mindig a farokban van.
+ * @param {string} file
+ * @returns {{type: string, seq: number, time: number, reason: string}|null}
+ */
+function lastBoundaryFromDisk(file) {
+  let buffer;
+  try {
+    buffer = readFileSync(file);
+  } catch {
+    return null;
+  }
+  const offsets = [];
+  let index = buffer.indexOf(SESSION_LOG_MAGIC, 0);
+  while (index >= 0) {
+    offsets.push(index);
+    index = buffer.indexOf(SESSION_LOG_MAGIC, index + 4);
+  }
+  if (offsets.length === 0) return null;
+  // HÁTULRÓL, frame-enként: a naplóban frame-enként ~1 esemény van (mért:
+  // 3408 frame / 5999 esemény), ezért az utolsó 6 frame NEM tartalmazza a
+  // kör-határt (mért eredmény: `null`, miközben a valódi határ `turn/start#6048`).
+  // A hátulról induló keresés az első talált határnál megáll — az a legfrissebb.
+  const stopAt = Math.max(0, offsets.length - 600);
+  for (let position = offsets.length - 1; position >= stopAt; position -= 1) {
+    const start = offsets[position];
+    const end = position + 1 < offsets.length ? offsets[position + 1] : buffer.length;
+    let text;
+    try {
+      text = zlib.zstdDecompressSync(buffer.subarray(start, end)).toString("utf8");
+    } catch {
+      continue;
+    }
+    let local = null;
+    for (const line of text.split(/\r?\n/u)) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) continue;
+      let event;
+      try {
+        event = JSON.parse(trimmed);
+      } catch {
+        continue;
+      }
+      const type = event?.type;
+      if (type !== "turn/start" && type !== "turn/end") continue;
+      local = {
+        type,
+        seq: Number(event.seq ?? -1),
+        time: Number(event.time ?? 0),
+        reason: String(event?.data?.reason?.kind ?? "")
+      };
+    }
+    if (local !== null) return local;
+  }
+  return null;
+}
+
+/**
  * Szolgáltatás olvasása DEFENZÍVEN.
  *
  * MIÉRT: a cordis nem engedi olvasni a nem-injektált szolgáltatást —
@@ -254,40 +368,69 @@ async function runOnce(ctx) {
   }
   const markers = readMarkers();
   const now = Date.now();
-  /** @type {object[]} */
+  /** @type {{sessionId: string, key: string, seq: number, lastAt: number, open: boolean, fromDisk: boolean}[]} */
   const candidates = [];
   let sessions = [];
   try {
     sessions = ctx.sessions.list();
   } catch (error) {
     log(`a session-lista nem olvasható: ${String(error?.message ?? error)}`);
-    return;
+    sessions = [];
   }
+  /** @type {Set<string>} */
+  const attached = new Set();
   for (const session of sessions) {
     const candidate = interruptedCandidate(session);
     if (candidate === null) continue;
+    attached.add(String(session.id));
     if (now - candidate.lastAt > MAX_AGE_MS) continue;
     if (markers[candidate.key] === true) continue;
-    candidates.push(candidate);
+    candidates.push({
+      sessionId: String(session.id),
+      key: candidate.key,
+      seq: candidate.seq,
+      lastAt: candidate.lastAt,
+      open: candidate.open === true,
+      fromDisk: false
+    });
+  }
+  // A store csak a MEGNYITOTT sessionöket tartalmazza. Ha ott nincs jelölt,
+  // a legfrissebb naplókat MAGUNK olvassuk ki a lemezről, és `resume()`-szal
+  // csatoljuk őket — enélkül a boot utáni folytatás a felületre várna.
+  if (candidates.length === 0) {
+    for (const recent of listRecentSessionFiles(3)) {
+      if (attached.has(recent.id)) continue;
+      const boundary = lastBoundaryFromDisk(recent.file);
+      if (boundary === null) continue;
+      const open = boundary.type === "turn/start";
+      if (open !== true && boundary.reason !== "interrupted") continue;
+      if (Number.isFinite(boundary.time) !== true || now - boundary.time > MAX_AGE_MS) continue;
+      const key = `${recent.id}:${boundary.seq}:${open ? "open" : "interrupted"}`;
+      if (markers[key] === true) continue;
+      candidates.push({ sessionId: recent.id, key, seq: boundary.seq, lastAt: boundary.time, open, fromDisk: true });
+    }
+    if (candidates.length > 0) {
+      log(`lemezről talált megszakadt kör: ${candidates.map((candidate) => `${candidate.sessionId}@${candidate.seq}${candidate.open ? "(open)" : "(interrupted)"}`).join(", ")}`);
+    }
   }
   if (candidates.length === 0) {
-    log(`nincs megszakadt kör (${sessions.length} session vizsgálva)`);
+    log(`nincs megszakadt kör (${sessions.length} session a store-ban, ${listRecentSessionFiles(3).length} friss napló a lemezen)`);
     return;
   }
   candidates.sort((left, right) => right.lastAt - left.lastAt);
   const chosen = candidates.slice(0, MAX_SESSIONS);
   for (const candidate of chosen) {
     const requestId = `auto-continue-${randomUUID()}`;
-    const sessionId = candidate.session.id;
+    const sessionId = candidate.sessionId;
     try {
-      // A kontroller resume() a session-attach útvonala: ha van, előbb ezt
-      // hívjuk, hogy a crash-javítás (interruptedTurnClosers) lefusson, és az
-      // agent élő legyen a prompt előtt.
+      // A kontroller resume() a session-attach útvonala: lemezről tölti be a
+      // sessiont (sessionQuery.observeSession → agents.resume), és lefuttatja a
+      // crash-javítást. Csak akkor kell, ha a store még nem tartalmazza.
       for (const holder of [serviceOrNull(ctx, "sessionController"), serviceOrNull(ctx, "sessions")]) {
         if (holder !== null && holder !== undefined && typeof holder.resume === "function") {
           try {
             await holder.resume(sessionId);
-            log(`resume: ${String(sessionId)}`);
+            log(`resume: ${String(sessionId)}${candidate.fromDisk ? " (lemezről)" : ""}`);
           } catch (error) {
             log(`resume hiba (${String(sessionId)}): ${String(error?.message ?? error)}`);
           }
@@ -302,7 +445,7 @@ async function runOnce(ctx) {
       markers[candidate.key] = true;
       writeMarkers(markers);
       sentOnce = true;
-      log(`folytatás elküldve (${entry.via}): ${String(sessionId)} (seq ${String(candidate.seq)}, open=${String(candidate.open === true)}, requestId ${requestId})`);
+      log(`folytatás elküldve (${entry.via}): ${String(sessionId)} (seq ${String(candidate.seq)}, open=${String(candidate.open)}, lemez=${String(candidate.fromDisk)}, requestId ${requestId})`);
     } catch (error) {
       const message = String(error?.message ?? error);
       // Ha a kör ÉPPEN fut, ez nem hiba, hanem „majd később": a jelölőt ilyenkor
