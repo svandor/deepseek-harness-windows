@@ -237,6 +237,34 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-14` — **Herd-kiváltás, 2. szakasz: admin felület a DSH-ban, és a Herd
+  ki van kapcsolva.** (1) **A Herd leállt és kikerült az autostartból**: a
+  `HKCU\...\Run\de.beyondco.herd` érték törölve (mentés:
+  `D:\Szerver\DSH-backup\herd-autostart-<időbélyeg>\herd-autostart.reg`, a
+  Startup mappában nem volt Herd-hivatkozás); a `Herd`, `HerdHelper`, `nginx`
+  (25 példány) és a Herd `php-cgi` (5) folyamatok leálltak, a 80/443
+  felszabadult, és a Caddy azóta a **443/80-on** szolgál (kanonikus URL,
+  `https://<domain>/` port nélkül). A `HerdHelper` egy emelt szolgáltatás
+  (`hozzáférés megtagadva` `taskkill`-nél) — portot nem fog, emelt
+  PowerShell-ből állítható le. (2) **`plugins\dsh-devadmin` — admin felület**
+  (host + kliens): `GET /devadmin/` önálló HTML, `/devadmin/state` JSON,
+  `/devadmin/action` (`start|stop|restart|php-use|check-hosts`),
+  `/devadmin/logs`; a kliens oldalon `devadmin` tab a jobb oldalsávban +
+  `Admin` chip a composer dokkban. A host **nem implementálja újra** a dev
+  szervert: a `tools\dev.ps1`-et hívja, tehát a CLI és a UI egy kódúton megy
+  (ez a „ne legyen két igazság" szabály alkalmazása). Telepítés:
+  `plugins\dsh-devadmin\install.ps1` (`-Check`, `-Remove`). **9/9 teszt**
+  (`node --test`): 6 host-oldali (projektfelismerés, PHP-lista, TCP,
+  `tailFile`, `/devadmin/state` JSON-alak, `/devadmin/logs`) + 3 kliens-oldali
+  (bundle id, exportok, apply-regisztrációk). (3) **`tools\dev-hosts.ps1`** — a
+  hosts fájl kezelése nyilvántartással: minden hozzáadott sor bekerül a projekt
+  `.dsh\hosts-added.json`-jába, és az eltávolítás CSAK a nyilvántartott sorokat
+  törli; emelt hatalom nélkül kimondja a futtatandó parancsot, de nem nyit
+  felugró ablakot. (4) `dev.ps1` pontosítások: a **443/80 foglaltságát bind-tal**
+  dönti el (a listener-alapú vizsgálat a lecsengő socket miatt 8443-on ragadt),
+  a DBngin/MySQL állapot a `list`/`status`/`start` kimenetében (`.env`
+  `DB_*` + TCP), és a `Get-EffectiveHttpsPort` a szabad 443-at részesíti előnyben.
+
 - `2026-11-14` — **Herd-kiváltás, 1. szakasz: a fejlesztői környezet már Herd
   nélkül is kiszolgálja a projekteket.** (1) Saját PHP: `D:\Tools\php\8.4.27`
   (a Herd 8.4.27-tel azonos verzió, saját `php.ini`-val), `D:\Tools\php\current`

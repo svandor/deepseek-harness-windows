@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DSH admin — fejlesztői környezet</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --text: #16181d;
+    --muted: #5b6470;
+    --line: #dfe3e8;
+    --ok: #157a3c;
+    --bad: #b3261e;
+    --warn: #8a5a00;
+    --accent: #1a56c4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --card: #1c1f25;
+      --text: #e8eaee;
+      --muted: #9aa4b2;
+      --line: #2c3138;
+      --ok: #4ade80;
+      --bad: #f87171;
+      --warn: #fbbf24;
+      --accent: #6ea8fe;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  tr:last-child td { border-bottom: none; }
+  code, .mono { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); }
+  .on { color: var(--ok); border-color: currentColor; }
+  .off { color: var(--bad); border-color: currentColor; }
+  .warn { color: var(--warn); }
+  button {
+    font: inherit;
+    padding: 6px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--card);
+    color: var(--text);
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--bad); }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  pre {
+    margin: 0;
+    padding: 10px;
+    background: rgba(127,127,127,.10);
+    border-radius: 8px;
+    max-height: 240px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 12px;
+  }
+  .muted { color: var(--muted); }
+  #toast {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    padding: 10px 16px;
+    border-radius: 8px;
+    background: #222;
+    color: #fff;
+    opacity: 0;
+    transition: opacity .2s;
+    pointer-events: none;
+    max-width: 60ch;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<h1>DSH admin — fejlesztői környezet</h1>
+<p class="sub">Caddy + php-cgi, PHP-verziók, portok, autostart, naplók. Minden adat a host oldalról jön (<code>/devadmin/*</code>), a böngésző csak megjelenít.</p>
+
+<div class="toolbar">
+  <button class="primary" id="btn-start">Indítás</button>
+  <button id="btn-restart">Újraindítás</button>
+  <button class="danger" id="btn-stop">Leállítás</button>
+  <span class="muted" id="stamp"></span>
+</div>
+
+<div class="grid">
+  <section class="card" id="card-server">
+    <h2>Dev szerver</h2>
+    <div id="server-body" class="muted">betöltés…</div>
+  </section>
+
+  <section class="card" id="card-php">
+    <h2>PHP</h2>
+    <div id="php-body" class="muted">betöltés…</div>
+  </section>
+
+  <section class="card" id="card-sites">
+    <h2>Projektek</h2>
+    <div id="sites-body" class="muted">betöltés…</div>
+  </section>
+
+  <section class="card" id="card-ports">
+    <h2>Portok</h2>
+    <div id="ports-body" class="muted">betöltés…</div>
+  </section>
+
+  <section class="card" id="card-autostart">
+    <h2>Autostart</h2>
+    <div id="autostart-body" class="muted">betöltés…</div>
+  </section>
+
+  <section class="card" id="card-logs">
+    <h2>Naplók <span class="muted" id="logs-title"></span></h2>
+    <div class="row" style="margin-bottom:8px">
+      <select id="log-site"></select>
+      <button id="btn-logs">Betöltés</button>
+    </div>
+    <pre id="logs-body">—</pre>
+  </section>
+</div>
+
+<div id="toast"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  var state = null;
+  var selectedSite = "";
+
+  function el(id) { return document.getElementById(id); }
+
+  function toast(message) {
+    var node = el("toast");
+    node.textContent = message;
+    node.classList.add("show");
+    window.clearTimeout(toast._timer);
+    toast._timer = window.setTimeout(function () { node.classList.remove("show"); }, 4000);
+  }
+
+  function esc(value) {
+    return String(value === null || value === undefined ? "" : value)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function pill(ok, onText, offText) {
+    return '<span class="pill ' + (ok ? "on" : "off") + '">' + esc(ok ? onText : offText) + "</span>";
+  }
+
+  function getJson(url) {
+    return fetch(url, { credentials: "same-origin", cache: "no-store" }).then(function (response) {
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return response.json();
+    });
+  }
+
+  function renderServer(data) {
+    var server = data.devServer;
+    var lines = [];
+    lines.push('<div class="row" style="margin-bottom:8px">' + pill(server.running, "FUT", "ÁLL") +
+      " <span class=\"mono\">caddy pid " + esc(server.caddyPid || "–") + "</span></div>");
+    lines.push("<table><tbody>" +
+      "<tr><th>HTTPS</th><td class=\"mono\">" + esc(server.httpsPort) + (server.httpsPort === 443 ? " (kanonikus)" : "") + "</td></tr>" +
+      "<tr><th>HTTP</th><td class=\"mono\">" + esc(server.httpPort) + " → HTTPS</td></tr>" +
+      "<tr><th>Caddyfile</th><td class=\"mono\">" + esc(server.configFile) + "</td></tr>" +
+      "<tr><th>Naplók</th><td class=\"mono\">" + esc(server.logDir) + "</td></tr>" +
+      "</tbody></table>");
+    if (server.stateMissing) {
+      lines.push('<p class="warn" style="margin:10px 0 0">Nincs állapotfájl — a dev szerver még nem indult, vagy leállították.</p>');
+    }
+    el("server-body").innerHTML = lines.join("");
+    el("server-body").classList.remove("muted");
+  }
+
+  function renderPhp(data) {
+    var php = data.php;
+    var rows = ['<p>Aktuális: <strong class="mono">' + esc(php.current || "nincs") + "</strong> <span class=\"muted mono\">(" + esc(php.root) + ")</span></p>"];
+    if (!php.versions.length) {
+      rows.push('<p class="off">Nincs telepített PHP a ' + esc(php.root) + " alatt.</p>");
+    } else {
+      rows.push("<table><thead><tr><th>Verzió</th><th>Állapot</th><th></th></tr></thead><tbody>");
+      php.versions.forEach(function (version) {
+        var isCurrent = php.current === version;
+        rows.push("<tr><td class=\"mono\">" + esc(version) + "</td><td>" + (isCurrent ? pill(true, "kiválasztva", "") : '<span class="muted">–</span>') +
+          "</td><td>" + (isCurrent ? "" : '<button data-php="' + esc(version) + '">Használat</button>') + "</td></tr>");
+      });
+      rows.push("</tbody></table>");
+    }
+    el("php-body").innerHTML = rows.join("");
+    el("php-body").classList.remove("muted");
+  }
+
+  function renderSites(data) {
+    if (!data.sites.length) {
+      el("sites-body").innerHTML = '<p class="muted">Nincs felismert projekt a ' + esc(data.paths.sitesRoot) + " alatt (kell index.php és/vagy .dsh/dev.yaml).</p>";
+      return;
+    }
+    var body = ['<table><thead><tr><th>Domain</th><th>PHP</th><th>php-cgi</th><th>HTTP</th><th>Adatbázis</th></tr></thead><tbody>'];
+    data.sites.forEach(function (site) {
+      var probe = site.probe || {};
+      var httpText = probe.status ? "HTTP " + probe.status + (probe.location ? " → " + probe.location : "") : (probe.error || "–");
+      var httpOk = probe.status >= 200 && probe.status < 400;
+      var dbText = site.db
+        ? (site.db.connection === "sqlite" ? "sqlite" : site.db.connection + " " + site.db.host + ":" + site.db.port + "/" + site.db.database + " " + (site.db.reachable ? "✓" : "✗"))
+        : '<span class="muted">nincs .env</span>';
+      body.push("<tr>" +
+        "<td><a href=\"" + esc(site.url) + "\" target=\"_blank\" rel=\"noopener\" class=\"mono\">" + esc(site.domain) + "</a>" +
+        (site.inHosts ? "" : ' <span class="warn" title="hiányzik a hosts fájlból">hosts?</span>') + "</td>" +
+        "<td class=\"mono\">" + esc(site.php) + "</td>" +
+        "<td>" + pill(site.phpCgiAlive, "pid " + (site.phpCgiPid || "?"), "áll") + ' <span class="mono muted">:' + esc(site.phpCgiPort || "–") + "</span></td>" +
+        "<td>" + pill(httpOk, httpText, httpText) + "</td>" +
+        "<td class=\"mono\">" + dbText + "</td>" +
+        "</tr>");
+    });
+    body.push("</tbody></table>");
+    el("sites-body").innerHTML = body.join("");
+    el("sites-body").classList.remove("muted");
+
+    var select = el("log-site");
+    var wanted = selectedSite || (data.sites[0] && data.sites[0].domain) || "";
+    select.innerHTML = data.sites.map(function (site) {
+      return '<option value="' + esc(site.domain) + '"' + (site.domain === wanted ? " selected" : "") + ">" + esc(site.domain) + "</option>";
+    }).join("");
+    selectedSite = wanted;
+  }
+
+  function renderPorts(data) {
+    var body = ["<table><thead><tr><th>Port</th><th>Foglalja</th></tr></thead><tbody>"];
+    data.ports.forEach(function (entry) {
+      body.push("<tr><td class=\"mono\">" + esc(entry.port) + "</td><td>" +
+        (entry.pid ? '<span class="mono">' + esc(entry.name || "?") + " (" + esc(entry.pid) + ")</span>" : '<span class="muted">szabad</span>') +
+        "</td></tr>");
+    });
+    body.push("</tbody></table>");
+    el("ports-body").innerHTML = body.join("");
+    el("ports-body").classList.remove("muted");
+  }
+
+  function renderAutostart(data) {
+    var body = ["<table><thead><tr><th>Forrás</th><th>Név</th><th>Parancs</th></tr></thead><tbody>"];
+    data.autostart.forEach(function (entry) {
+      var isDev = /dev-hidden\.vbs/i.test(entry.command);
+      body.push("<tr><td class=\"mono\">" + esc(entry.source) + "</td><td>" +
+        (isDev ? "<strong>" : "") + esc(entry.name) + (isDev ? "</strong>" : "") + "</td>" +
+        "<td class=\"mono muted\" style=\"word-break:break-all\">" + esc(entry.command) + "</td></tr>");
+    });
+    body.push("</tbody></table>");
+    el("autostart-body").innerHTML = body.join("");
+    el("autostart-body").classList.remove("muted");
+  }
+
+  function loadLogs() {
+    var site = el("log-site").value || selectedSite;
+    if (!site) return;
+    el("logs-title").textContent = "(" + site + ")";
+    getJson("/devadmin/logs?site=" + encodeURIComponent(site) + "&tail=80").then(function (data) {
+      var parts = [];
+      if (data.phpError) parts.push("--- php-cgi stderr ---\n" + data.phpError);
+      if (data.php) parts.push("--- php-cgi stdout ---\n" + data.php);
+      if (data.access) parts.push("--- access ---\n" + data.access);
+      if (data.caddyError) parts.push("--- caddy ---\n" + data.caddyError);
+      el("logs-body").textContent = parts.length ? parts.join("\n\n") : "— nincs naplóbejegyzés —";
+    }).catch(function (error) {
+      el("logs-body").textContent = "hiba: " + error.message;
+    });
+  }
+
+  function refresh() {
+    return getJson("/devadmin/state").then(function (data) {
+      state = data;
+      renderServer(data);
+      renderPhp(data);
+      renderSites(data);
+      renderPorts(data);
+      renderAutostart(data);
+      el("stamp").textContent = "frissítve: " + new Date(data.checkedAt).toLocaleTimeString("hu-HU");
+    }).catch(function (error) {
+      el("stamp").textContent = "hiba: " + error.message;
+    });
+  }
+
+  function action(name, extra) {
+    var url = "/devadmin/action?action=" + encodeURIComponent(name) + (extra ? "&" + extra : "");
+    var buttons = document.querySelectorAll("button");
+    for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
+    getJson(url).then(function (result) {
+      if (!result.ok) throw new Error(result.error || result.output || "nem sikerült");
+      toast(name + " kiadva" + (result.output ? ": " + result.output : ""));
+      return new Promise(function (resolve) { window.setTimeout(resolve, 2500); });
+    }).then(function () {
+      return refresh();
+    }).catch(function (error) {
+      toast("hiba: " + error.message);
+    }).then(function () {
+      for (var j = 0; j < buttons.length; j++) buttons[j].disabled = false;
+    });
+  }
+
+  el("btn-start").addEventListener("click", function () { action("start"); });
+  el("btn-stop").addEventListener("click", function () { action("stop"); });
+  el("btn-restart").addEventListener("click", function () { action("restart"); });
+  el("btn-logs").addEventListener("click", loadLogs);
+  el("log-site").addEventListener("change", function () { selectedSite = el("log-site").value; loadLogs(); });
+  el("php-body").addEventListener("click", function (event) {
+    var version = event.target.getAttribute && event.target.getAttribute("data-php");
+    if (version) action("php-use", "version=" + encodeURIComponent(version));
+  });
+
+  refresh().then(function () { loadLogs(); });
+  window.setInterval(refresh, 5000);
+})();
+</script>
+</body>
+</html>

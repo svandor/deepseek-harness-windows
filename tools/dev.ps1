@@ -139,6 +139,31 @@ function Test-PortFree {
     return (-not $conn)
 }
 
+# Hiteles valasz arra, hogy MI tudunk-e bindolni a portra (a "foglalt-e"
+# kerdesnel pontosabb: a lecsengo socket nem akadaly, a tenyleges bind igen).
+function Test-PortBindable {
+    param([int]$Port)
+    $listener = $null
+    try {
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $Port)
+        $listener.Start()
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if ($listener) { $listener.Stop() }
+    }
+}
+
+function Wait-PortBindable {
+    param([int]$Port, [int]$Tries = 16, [int]$DelayMs = 250)
+    for ($i = 0; $i -lt $Tries; $i++) {
+        if (Test-PortBindable -Port $Port) { return $true }
+        Start-Sleep -Milliseconds $DelayMs
+    }
+    return $false
+}
+
 function Get-PortOwner {
     param([int]$Port)
     $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -175,6 +200,59 @@ function Get-DevSites {
     return $sites
 }
 
+function Test-TcpPort {
+    param([string]$HostName, [int]$Port, [int]$TimeoutMs = 800)
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $task = $client.ConnectAsync($HostName, $Port)
+        if (-not $task.Wait($TimeoutMs)) { return $false }
+        return $client.Connected
+    } catch { return $false } finally { $client.Dispose() }
+}
+
+# DBngin (es minden mas helyi MySQL) ellenorzese: a Laravel .env DB_HOST /
+# DB_PORT / DB_DATABASE sorait olvassuk, es TCP-vel megnezzuk, elerheto-e.
+# Nem irunk semmit: ha nem elerheto, kimondjuk a teendot (dev_start -FixEnv
+# kesobbi szakasz).
+function Get-DatabaseStatus {
+    param([string]$Root)
+    $envFile = Join-Path $Root '.env'
+    if (-not (Test-Path $envFile)) { return $null }
+    $cfg = @{}
+    foreach ($line in Get-Content $envFile) {
+        if ($line -match '^\s*(DB_CONNECTION|DB_HOST|DB_PORT|DB_DATABASE)\s*=\s*(.*)$') {
+            $cfg[$Matches[1]] = $Matches[2].Trim().Trim('"')
+        }
+    }
+    if (-not $cfg.ContainsKey('DB_CONNECTION')) { return $null }
+    $conn = $cfg['DB_CONNECTION']
+    $dbHost = if ($cfg.ContainsKey('DB_HOST')) { $cfg['DB_HOST'] } else { '127.0.0.1' }
+    $dbPort = if ($cfg.ContainsKey('DB_PORT')) { [int]$cfg['DB_PORT'] } else { 3306 }
+    $reachable = $false
+    if ($conn -eq 'sqlite') { $reachable = $true } else { $reachable = Test-TcpPort -HostName $dbHost -Port $dbPort }
+    return [pscustomobject]@{
+        connection = $conn
+        host       = $dbHost
+        port       = $dbPort
+        database   = $(if ($cfg.ContainsKey('DB_DATABASE')) { $cfg['DB_DATABASE'] } else { '' })
+        reachable  = $reachable
+    }
+}
+
+function Write-DatabaseStatus {
+    param($Db, [string]$Indent = '      ')
+    if (-not $Db) { return }
+    if ($Db.connection -eq 'sqlite') {
+        Write-Host ("{0}db     : sqlite ({1})" -f $Indent, $Db.database)
+        return
+    }
+    $state = if ($Db.reachable) { 'ELERHETO' } else { 'NEM ELERHETO' }
+    Write-Host ("{0}db     : {1} {2}:{3}/{4}  -> {5}" -f $Indent, $Db.connection, $Db.host, $Db.port, $Db.database, $state)
+    if (-not $Db.reachable) {
+        Write-Host ("{0}         Inditsd el a DBngint (vagy a mysqld-t), illetve ellenorizd a .env DB_HOST/DB_PORT sorait." -f $Indent)
+    }
+}
+
 function Read-State {
     if (Test-Path $StateFile) {
         try { return (Get-Content $StateFile -Raw | ConvertFrom-Json) } catch { return $null }
@@ -190,8 +268,14 @@ function Save-State {
 function Get-EffectiveHttpsPort {
     param($State)
     if ($HttpsPort -gt 0) { return $HttpsPort }
-    if ($State -and $State.caddy -and $State.caddy.httpsPort) { return [int]$State.caddy.httpsPort }
+    # A kanonikus URL a 443 (Herd nelkul ez a termeszetes). Ezert ha a 443
+    # szabad, mindig azt vesszuk - meg akkor is, ha a korabbi allapot 8443-at
+    # jegyzett (Herd meg futott). Csak foglalt 443 eseten esunk vissza.
     if (Test-PortFree -Port 443) { return 443 }
+    if ($State -and $State.caddy -and $State.caddy.httpsPort) {
+        $recorded = [int]$State.caddy.httpsPort
+        if ($recorded -ne 443) { return $recorded }
+    }
     return 8443
 }
 
@@ -206,6 +290,7 @@ function Invoke-List {
         Write-Host ("  {0,-40} {1}" -f $site.domain, $site.project)
         Write-Host ("      docroot: {0}" -f $site.docroot)
         Write-Host ("      php    : {0}  ->  {1}" -f $site.php, $(if ($phpDir) { $phpDir } else { 'HIANYZIK' }))
+        Write-DatabaseStatus -Db (Get-DatabaseStatus -Root $site.project) -Indent '      '
         Write-Host ("      forras : {0}" -f $site.source)
     }
 }
@@ -225,6 +310,7 @@ function Invoke-Status {
         foreach ($site in $state.sites) {
             $alive = [bool](Get-Process -Id $site.phpCgiPid -ErrorAction SilentlyContinue)
             Write-Host ("  {0,-40} php-cgi {1}  port {2}  pid {3}" -f $site.domain, $(if ($alive) { 'FUT' } else { 'ALL' }), $site.phpCgiPort, $site.phpCgiPid)
+            Write-DatabaseStatus -Db (Get-DatabaseStatus -Root $site.project) -Indent '      '
         }
     }
     Write-Host ''
@@ -262,9 +348,18 @@ function Invoke-Start {
     if ($sites.Count -eq 0) { throw 'Nincs indithato projekt (index.php nelkul nincs ertelme).' }
 
     $state = Read-State
-    $httpsPort = Get-EffectiveHttpsPort -State $state
-    $httpPort = 8080
-    if (Test-PortFree -Port 80) { $httpPort = 80 }
+    # A taskkill utan a regi processz socketje par ms-ig meg el, ezert a
+    # 443/80-at a TENYLEGES bind-dal probaljuk (nem a "van-e listener" késsel).
+    # Merve: a listener-alapu vizsgalat 443-at foglaltnak latta, es a start a
+    # 8443-on maradt, illetve a HTTP port 8080 lett a 80 helyett.
+    $httpsReady = Wait-PortBindable -Port 443
+    $httpReady = Wait-PortBindable -Port 80
+    $httpsPort = if ($httpsReady) { 443 } else { Get-EffectiveHttpsPort -State $state }
+    if ($HttpsPort -gt 0) { $httpsPort = $HttpsPort }
+    $httpPort = if ($httpReady) { 80 } else { 8080 }
+    if (-not $httpReady) {
+        Write-Host 'FIGYELEM: a 80-as port nem szabadult fel; a HTTP atiranyitas a 8080-on megy.'
+    }
 
     # 1) meglevo munkasok lezarasa (a start idempotens: nem halmoz)
     Invoke-Stop -Quiet
@@ -305,6 +400,10 @@ function Invoke-Start {
             phpLog      = $errLog
         }
         Write-Host ("php-cgi  {0,-38} port {1}  pid {2}" -f $site.domain, $cgiPort, $proc.Id)
+        $db = Get-DatabaseStatus -Root $site.project
+        if ($db -and -not $db.reachable) {
+            Write-Host ("  FIGYELEM: {0} adatbazisa nem elerheto ({1}:{2}). Inditsd el a DBngint!" -f $site.domain, $db.host, $db.port)
+        }
     }
 
     # 3) Caddyfile ujrairasa a teljes listabol
