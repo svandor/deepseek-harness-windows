@@ -1802,11 +1802,21 @@ function restoreRuns() {
   };
 
   for (const row of liveRows) restore(row, row.pid, []);
+  // KÉT FÁZIS. Két rekord UGYANARRA a munkaterületre a kereséssel nem
+  // különböztethető meg (a tűk mindkettőre ugyanazokat a pid-eket adják), ezért
+  // előbb a rekord SAJÁT, mentett túlélőit vesszük vissza — mért eset
+  // (2026-11-14 04:35): emiatt a `run-3` mindkét `vite`-ot elorozta, és a
+  // `run-7` egyáltalán nem töltődött vissza. Csak aztán jönnek a keresés
+  // maradékai azoknak, akiknek nincs mentett (vagy már foglalt) túlélőjük.
+  const pending = [];
   for (const row of orphanRows) {
     const recorded = Array.isArray(row.survivors) ? row.survivors : [];
-    const found = survivorsByWorkspace.get(row.workspace) ?? [];
-    const survivors = [...new Set([...recorded, ...found])].filter((pid) => isAlive(pid) === true);
-    restore(row, null, survivors);
+    const survivors = recorded.filter((pid) => isAlive(pid) === true);
+    if (restore(row, null, survivors)) continue;
+    pending.push(row);
+  }
+  for (const row of pending) {
+    restore(row, null, survivorsByWorkspace.get(row.workspace) ?? []);
   }
   diagLine(`runs: ${restored} korábbi futás visszatöltve (${rows.length} rekord, ebből ${orphanRows.length} héj nélküli)`);
   persistRuns();
