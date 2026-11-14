@@ -460,6 +460,33 @@ while ((Get-Date) -lt $deadline) {
 $actual = @(Get-ListenerPids -CheckPort $Port) -join ', '
 Write-Host "Harness fut a ${Port}-on (pid $actual)"
 
+# --- 3b) pid-fájl írása AZONNAL --------------------------------------------
+# MIÉRT ITT ÉS NEM a token-ágban: a korábbi sorrend miatt a pid-fájl elavultan
+# maradt, ha a token nem volt meg időben — és a listener-lista ELSŐ elemét írta,
+# ami a még bontás alatt álló RÉGI folyamat is lehet. Mért eset (2026-11-13
+# 23:33): a restart után a `state\harness.pid` a korábbi harness pid-jét
+# (40860) tartalmazta, miközben az új a 38480 volt; az elavult fájl miatt a
+# tálca indítója halottnak hiheti a futó harness-t. Ezért: a LEGFRISSEBB
+# indulású listenert választjuk, és a fájlt a token-re való várakozás ELŐTT
+# kiírjuk.
+$candidate = $null
+foreach ($candidatePid in @(Get-ListenerPids -CheckPort $Port)) {
+  try {
+    $proc = Get-Process -Id $candidatePid -ErrorAction Stop
+    if ($null -eq $candidate -or $proc.StartTime -gt $candidate.StartTime) {
+      $candidate = [pscustomobject]@{ Id = $proc.Id; StartTime = $proc.StartTime }
+    }
+  } catch {
+    continue
+  }
+}
+if ($null -ne $candidate) {
+  Set-Content -Path $pidFile -Value $candidate.Id -Encoding ASCII
+  Write-Host "pid-fajl: $($candidate.Id) (indult: $($candidate.StartTime))"
+} else {
+  Write-Host 'FIGYELEM: a pid-fajl nem irodott ki (nincs olvashato listener)'
+}
+
 # --- 4) token URL mentese (atomikusan) ---------------------------------------
 $url = $null
 $deadline = (Get-Date).AddSeconds(45)
@@ -472,7 +499,6 @@ while ((Get-Date) -lt $deadline) {
 }
 if ($url) {
   Write-HarnessToken -Url $url
-  Set-Content -Path $pidFile -Value ($actual -split ', ')[0] -Encoding ASCII
   Write-Host "Token elmentve: $urlFile"
   Write-Host ''
   Write-Host 'Uj belepesi URL:'

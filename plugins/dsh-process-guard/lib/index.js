@@ -27,7 +27,12 @@
  */
 import { appendRecord, canonicalWorkspace, compactAll, ledgerFileFor, ledgerRoot, readAllLedgers, readUntracked } from './ledger.js';
 import { matchUntracked, processIdentity, processSnapshot, terminateVerified } from './identity.js';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** A plugin gyökere (a repó `plugins\dsh-process-guard` mappája). */
+const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /** A plugin neve a boot gráfban. */
 const name = 'dsh-process-guard';
@@ -75,6 +80,27 @@ function logLine(ctx, level, message) {
  */
 function diag(kind, data) {
   appendRecord(join(ledgerRoot(), '_diag.jsonl'), { at: new Date().toISOString(), pid: process.pid, kind, data });
+}
+
+/**
+ * A `state\harness.pid` frissítése a SAJÁT pid-del, bootkor.
+ *
+ * MIÉRT ITT: a `tools\restart-harness.ps1` a pid-fájlt csak a token-URL
+ * megtalálása UTÁN írja, és a listener-pid listából az ELSŐT veszi. Mért eset
+ * (2026-11-13 23:33): a restart után a `state\harness.pid` a KORÁBBI harness
+ * pid-jét (40860) tartalmazta, miközben az új a 38480 volt — az elavult fájl
+ * miatt a tálca indítója halottnak hiheti a futó harness-t. A harness viszont
+ * a saját pid-jét biztosan tudja, ezért bootkor maga írja ki (a külső szkript
+ * írása megmarad tartaléknak).
+ * @returns {boolean} sikerült-e kiírni.
+ */
+function writeHarnessPid() {
+  try {
+    writeFileSync(join(PACKAGE_ROOT, '..', '..', 'state', 'harness.pid'), String(process.pid), 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -561,12 +587,15 @@ function apply(ctx, config = {}) {
     const timer = setTimeout(runOnce, config.reconcileDelayMs ?? 2500);
     timer.unref?.();
 
+    const pidWritten = writeHarnessPid();
     diag('boot', {
       version: '0.1.0',
       spawnInstrumented,
       terminalInstrumented,
       cwd: process.cwd(),
       ledger: ledgerFileFor(canonicalWorkspace(process.cwd())),
+      harnessPid: process.pid,
+      harnessPidWritten: pidWritten,
       uptimeMs: Math.round(process.uptime() * 1000),
     });
     // Belső memória-mintavételezés a boot első percében (lásd startBootMemoryWatch).

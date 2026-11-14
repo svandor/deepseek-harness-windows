@@ -237,6 +237,24 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-14` — **két hiba a 2026-11-13-i panel-javítások után** (a 23:33-as
+  restart mérése). (1) **A `state\harness.pid` elavultan maradt:** a
+  `tools\restart-harness.ps1` a pid-fájlt csak a token-URL megtalálása UTÁN
+  írta, és a listener-listából az ELSŐ pidet vette; mért eset: a fájl a korábbi
+  harness pid-jét (`40860`) tartalmazta, miközben az új a `38480` volt. Ezért a
+  szkript most a tokenre várás ELŐTT ír, és a **legfrissebb indulású** listenert
+  választja, a `dsh-process-guard` pedig bootkor a saját pid-jével írja ki a
+  fájlt (a harness biztosan tudja) — a boot-diag `harnessPidWritten` mezője
+  kimondja, sikerült-e. (2) **A túlélő-kereső kihagyta a junctionos útvonalú
+  folyamatot:** a `C:` alakkal indult `vite` (`41572`) láthatatlan maradt a
+  `D:` kulcsú rekord mellett, és a két rekord UGYANAZOKAT a pid-eket követelte
+  (`run-3`/`run-7` → `[46676, 7112]`). Javítás: `workspaceNeedles()` a
+  kanonikus útvonal mellé a `\<mappanév>\` szegmenst is keresi, a boot pedig
+  `claimedPids` halmazzal biztosítja, hogy egy folyamat csak egy rekordhoz
+  tartozzon (a leállítás ellenőrzése ugyanezekkel a tűkkel megy). Mért próba:
+  a tűk megtalálják a `C:` és a `D:` alakú `vite`-ot is (`46676`, `41572`), az
+  `esbuild` segédeket a gyökér-szűrés kiveszi. Mindkettő a **következő**
+  harness-újraindításnál lép életbe.
 - `2026-11-13` — **a panel munkaterület-kulcsai kanonikusak** (junction-javítás a
   panel állapotában). A `C:\Szerver` junction a `D:\Szerver`-re mutat, ezért
   ugyanaz a projekt KÉT kulccsal élt a `state\panel-layout.json`-ban: mért

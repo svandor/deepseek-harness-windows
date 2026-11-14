@@ -1628,14 +1628,55 @@ function persistRuns() {
  * @param workspaces - a vizsgálandó munkaterület-útvonalak.
  * @returns {Map<string, number[]>} munkaterület -> élő pid-ek.
  */
+/**
+ * Egy munkaterülethez tartozó kereső-tűk.
+ *
+ * A KANONIKUS útvonal mellé a `\<mappanév>\` szegmens is kell: a folyamat a
+ * MEGINDÍTÁSKORI útvonalat hordozza, az pedig a junctionos alak lehet
+ * (`C:\Herd\…`), miközben a rekord kulcsa a valódi (`D:\Herd\…`). Mért eset
+ * (2026-11-13 23:33): a `C:` alakkal indult `vite` (41572) láthatatlan maradt,
+ * miközben a `D:` alakkal indult társa (46676) megjelent — és a második
+ * példány `esbuild`-je (7112) tévesen az első rekordhoz került.
+ * @param workspace
+ * @returns {string[]} a tűk (az összehasonlítás kisbetűs).
+ */
+function workspaceNeedles(workspace) {
+  /** @type {string[]} */
+  const needles = [];
+  if (typeof workspace !== "string" || workspace.length <= 3) return needles;
+  needles.push(workspace);
+  const base = workspace.replace(/[\\/]+$/u, "").split(/[\\/]/u).pop() ?? "";
+  if (base.length > 3) needles.push("\\" + base + "\\");
+  return needles;
+}
+
+/**
+ * Túlélő folyamatok keresése munkaterület szerint, EGYETLEN CIM-hívással.
+ *
+ * MIÉRT KELL: a panel-héj (`powershell -NoExit -Command -`) a szülő halálakor
+ * EOF-ot kap a stdin-en és KILÉP, a gyerekei (`npm`, `vite`) viszont tovább
+ * élnek — a pid-jüket senki nem mentette el. Ezért bootkor a parancssor
+ * munkaterület-útvonalára illesztünk: a `vite` parancssora hordozza a projekt
+ * útvonalát (`…\node_modules\.bin\..\vite\bin\vite.js`). Mért eset
+ * (2026-11-13): két `vite` (5173/5174) élte túl a restartot, a panelben egyik
+ * sem látszott.
+ * @param workspaces - a vizsgálandó munkaterület-útvonalak.
+ * @returns {Map<string, number[]>} munkaterület -> élő pid-ek.
+ */
 function survivorPidsByWorkspace(workspaces) {
   const result = new Map();
-  const wanted = workspaces.filter((value) => typeof value === "string" && value.length > 3);
+  /** @type {{workspace: string, needle: string}[]} */
+  const wanted = [];
+  for (const value of workspaces) {
+    for (const needle of workspaceNeedles(value)) wanted.push({ workspace: value, needle });
+  }
   if (process.platform !== "win32" || wanted.length === 0) return result;
   try {
-    const list = wanted.map((value) => "'" + value.replace(/'/gu, "''") + "'").join(",");
+    const indexList = wanted.map((_entry, index) => String(index)).join(",");
+    const needleList = wanted.map((entry) => "'" + entry.needle.replace(/'/gu, "''") + "'").join(",");
     const script = [
-      `$wanted = @(${list})`,
+      `$idx = @(${indexList})`,
+      `$ndl = @(${needleList})`,
       `$skipPid = ${process.pid}`,
       "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object {",
       "  $cl = $_.CommandLine",
@@ -1646,7 +1687,7 @@ function survivorPidsByWorkspace(workspaces) {
       // Héjakat NEM veszünk túlélőnek: egy parancssorában útvonalat említő
       // terminál nem munkafolyamat, és a leállítása a felhasználó kezét vágná le.
       "  if ($_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe' -or $_.Name -eq 'conhost.exe' -or $_.Name -eq 'WindowsTerminal.exe') { return }",
-      "  foreach ($w in $wanted) { if ($cl.IndexOf($w, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { Write-Output ($w + '|' + $_.ProcessId + '|' + $_.ParentProcessId); break } }",
+      "  for ($k = 0; $k -lt $ndl.Count; $k++) { if ($cl.IndexOf($ndl[$k], [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { Write-Output ('{0}|{1}|{2}' -f $idx[$k], $_.ProcessId, $_.ParentProcessId); break } }",
       "}"
     ].join("\n");
     const probe = spawnSync("powershell.exe", [
@@ -1656,11 +1697,13 @@ function survivorPidsByWorkspace(workspaces) {
     for (const line of String(probe.stdout ?? "").split(/\r?\n/u)) {
       const parts = line.split("|");
       if (parts.length < 3) continue;
-      const pid = Number(parts[parts.length - 2]);
-      const parentPid = Number(parts[parts.length - 1]);
-      const workspace = parts.slice(0, parts.length - 2).join("|");
+      const index = Number(parts[0]);
+      const pid = Number(parts[1]);
+      const parentPid = Number(parts[2]);
+      const entry = wanted[index];
+      if (entry === undefined) continue;
       if (Number.isFinite(pid) !== true || pid <= 0) continue;
-      matched.push({ workspace, pid, parentPid });
+      matched.push({ workspace: entry.workspace, pid, parentPid });
     }
     // Csak a GYÖKEREKET adjuk vissza: ha egy jelölt szülője is jelölt, akkor a
     // gyereket a szülő `taskkill /T`-je amúgy is elviszi, és így nem lövünk rá
@@ -1722,11 +1765,19 @@ function restoreRuns() {
     : survivorPidsByWorkspace([...new Set(orphanRows.map((row) => row.workspace))]);
 
   let restored = 0;
+  // Egy folyamat CSAK EGY rekordhoz tartozhat. Enélkül két rekord ugyanarra a
+  // munkaterületre ugyanazokat a pid-eket követelné (mért eset 2026-11-13
+  // 23:33: a `run-3` és a `run-7` is `[46676, 7112]`-t kapott), és a panelben
+  // két azonos bejegyzés látszana ugyanarra a folyamatra.
+  const claimedPids = new Set();
   const restore = (row, pid, survivors) => {
     const id = typeof row.id === "string" && row.id.length > 0 ? row.id : "run-" + String(++runSequence);
     const match = /^run-(\d+)$/u.exec(id);
     if (match !== null) runSequence = Math.max(runSequence, Number(match[1]));
-    const pidList = survivors.filter((value) => isAlive(value) === true);
+    const pidList = survivors.filter((value) => isAlive(value) === true && claimedPids.has(value) !== true);
+    // Ha a héj sincs meg és a gyerekek is máshoz tartoznak, nincs mit mutatni.
+    if (pid === null && pidList.length === 0) return false;
+    for (const value of pidList) claimedPids.add(value);
     const note = pid === null
       ? `(a héj, ami ezt indította, a harness újraindulásakor kilépett — a folyamat viszont ÉL: ${pidList.join(", ")}. A kimenet már nem érhető el és a bemenet nem irányítható, de innen leállítható.)\r\n`
       : "(ez a futás egy KORÁBBI bootból maradt folyamat. A kimenet már nem érhető el és a bemenet nem irányítható, de a folyamat él — innen leállítható.)\r\n";
@@ -1747,6 +1798,7 @@ function restoreRuns() {
       child: null
     });
     restored++;
+    return true;
   };
 
   for (const row of liveRows) restore(row, row.pid, []);
@@ -1754,8 +1806,6 @@ function restoreRuns() {
     const recorded = Array.isArray(row.survivors) ? row.survivors : [];
     const found = survivorsByWorkspace.get(row.workspace) ?? [];
     const survivors = [...new Set([...recorded, ...found])].filter((pid) => isAlive(pid) === true);
-    // Ha a héj és a gyerekek is elmentek, a rekordnak nincs mit mutatnia.
-    if (survivors.length === 0) continue;
     restore(row, null, survivors);
   }
   diagLine(`runs: ${restored} korábbi futás visszatöltve (${rows.length} rekord, ebből ${orphanRows.length} héj nélküli)`);
@@ -2136,12 +2186,15 @@ function descendantPids(rootPid) {
  */
 function killRecoveredRun(run) {
   if (process.platform !== "win32") return "csak Windows alatt tamogatott";
-  /** @type {{pid: number, needle: string}[]} */
+  /** @type {{pid: number, needles: string[]}[]} */
   const targets = [];
-  if (typeof run.pid === "number") targets.push({ pid: run.pid, needle: "-NoExit" });
+  if (typeof run.pid === "number") targets.push({ pid: run.pid, needles: ["-NoExit"] });
+  // A túlélőnél a tűk között ott van a `\<mappanév>\` szegmens is, mert a
+  // folyamat a MEGINDÍTÁSKORI (junctionos) útvonalat hordozza a parancssorában.
+  const survivorNeedles = workspaceNeedles(run.workspace);
   for (const pid of Array.isArray(run.survivors) ? run.survivors : []) {
     if (typeof pid === "number" && targets.some((entry) => entry.pid === pid) !== true) {
-      targets.push({ pid, needle: String(run.workspace ?? "") });
+      targets.push({ pid, needles: survivorNeedles });
     }
   }
   if (targets.length === 0) return "a rekordnak nincs pid-je";
@@ -2159,8 +2212,8 @@ function killRecoveredRun(run) {
     } catch {
       commandLine = "";
     }
-    const matches = target.needle.length > 0
-      && commandLine.toLowerCase().includes(target.needle.toLowerCase());
+    const matches = target.needles.some((needle) => needle.length > 0
+      && commandLine.toLowerCase().includes(needle.toLowerCase()));
     if (matches !== true) {
       skipped.push(target.pid);
       continue;
