@@ -63,6 +63,21 @@ const DSH_HOME = typeof process.env.DSH_HOME === "string" && process.env.DSH_HOM
 const SESSIONS_ROOT = join(DSH_HOME, "sessions");
 const SESSION_LOG_NAME = "session.v3.jsonl.zstd";
 const SESSION_LOG_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+
+/**
+ * A naplók gyökere — TESZTBŐL felülbírálható.
+ *
+ * MIÉRT: az egységteszt (2026-11-14) e nélkül a VALÓDI session-naplóimat
+ * olvasta, megtalálta a nyitott kört, és a „nem küld" esetek is küldtek —
+ * 2/4 teszt elhasalt. A `DSH_AUTO_CONTINUE_SESSIONS_ROOT` egy üres temp
+ * mappára állítva izolálja a tesztet.
+ * @returns {string}
+ */
+function sessionsRoot() {
+  const override = process.env.DSH_AUTO_CONTINUE_SESSIONS_ROOT;
+  if (typeof override === "string" && override.length > 0) return override;
+  return join(typeof process.env.DSH_HOME === "string" && process.env.DSH_HOME.length > 0 ? process.env.DSH_HOME : join(homedir(), ".dsh"), "sessions");
+}
 const LOG_PATH = join(STATE_DIR, "auto-continue.log");
 const OFF_PATH = join(STATE_DIR, "no-auto-continue");
 
@@ -192,12 +207,12 @@ function listRecentSessionFiles(limit) {
   const found = [];
   let projects = [];
   try {
-    projects = readdirSync(SESSIONS_ROOT);
+    projects = readdirSync(sessionsRoot());
   } catch {
     return found;
   }
   for (const project of projects) {
-    const projectPath = join(SESSIONS_ROOT, project);
+    const projectPath = join(sessionsRoot(), project);
     let ids = [];
     try {
       ids = readdirSync(projectPath);

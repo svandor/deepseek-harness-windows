@@ -13,7 +13,8 @@
  * A teszt a `state\auto-continue.json` jelölőt használja és a végén üríti.
  */
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, test } from "node:test";
@@ -22,6 +23,11 @@ const PLUGIN_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const STATE_DIR = join(PLUGIN_ROOT, "..", "..", "state");
 const MARKER_PATH = join(STATE_DIR, "auto-continue.json");
 const WAIT_MS = 9000;
+
+// IZOLÁCIÓ: a plugin a lemezről is olvasná a VALÓDI session-naplókat, azokban
+// pedig ott a most futó beszélgetés nyitott köre — a teszt ettől hamis
+// találatot kapna. Ezért üres temp mappára állítjuk a napló-gyökeret.
+process.env.DSH_AUTO_CONTINUE_SESSIONS_ROOT = mkdtempSync(join(tmpdir(), "dsh-autocontinue-"));
 
 /** @param {string} id @param {object[]} events */
 function fakeSession(id, events) {
