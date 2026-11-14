@@ -7004,7 +7004,11 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
             if (!alive || autoStartedRef.current) return;
             var runs = body && body.ok === true && Array.isArray(body.runs) ? body.runs : [];
             var existing = runs.filter(function (run) {
-              return String(run.workspace).toLowerCase() === workspaceDir.toLowerCase();
+              // ALIAS-TUDATOS összehasonlítás: a `C:\Herd\…` és a `D:\Herd\…`
+              // ugyanaz a mappa ezen a gépen (junction). Szövegesen összevetve
+              // „nincs futás" lett, és a panel ÜRES SHELLT indított minden
+              // munkaterület-váltásnál — ez volt a „széteső panel".
+              return workspaceKey(run.workspace) === workspaceKey(workspaceDir);
             });
             autoStartedRef.current = true;
             if (existing.length > 0) {
@@ -7012,10 +7016,12 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                 workspaceDir + " (a projektben mar fut " + String(existing.length) + " terminal)");
               return;
             }
-            autoStartCountRef.current += 1;
-            reportToHost("terminal autostart", workspaceDir +
-              " (#" + String(autoStartCountRef.current) + " panel=" + panelTagRef.current + ")");
-            newTerminal();
+            // NEM indítunk üres terminált magától. A felhasználó kérése
+            // (2026-11-14): „1 pane, de 4-5 munkafolyamat fusson, és lehessen
+            // köztük váltani" — a váltás nem hozhat létre folyamatot. A „+"
+            // gomb továbbra is nyit shellt.
+            reportToHost("terminal autostart disabled",
+              workspaceDir + " (nincs futás; üres terminált nem indítunk)");
           })
           .catch(function () { });
         return function () { alive = false; };
