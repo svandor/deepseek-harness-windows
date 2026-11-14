@@ -1699,15 +1699,19 @@ function workspaceNeedles(workspace) {
  * útvonalát (`…\node_modules\.bin\..\vite\bin\vite.js`). Mért eset
  * (2026-11-13): két `vite` (5173/5174) élte túl a restartot, a panelben egyik
  * sem látszott.
- * @param workspaces - a vizsgálandó munkaterület-útvonalak.
+ * @param targets - `{workspace, notBefore}` rekordok (a `notBefore` a futás indulása, ms).
  * @returns {Map<string, number[]>} munkaterület -> élő pid-ek.
  */
-function survivorPidsByWorkspace(workspaces) {
+function survivorPidsByWorkspace(targets) {
   const result = new Map();
-  /** @type {{workspace: string, needle: string}[]} */
+  /** @type {{workspace: string, needle: string, notBefore: number|null}[]} */
   const wanted = [];
-  for (const value of workspaces) {
-    for (const needle of workspaceNeedles(value)) wanted.push({ workspace: value, needle });
+  for (const target of targets) {
+    const workspace = typeof target === "string" ? target : target?.workspace;
+    const notBefore = typeof target === "object" && target !== null && Number.isFinite(target.notBefore)
+      ? target.notBefore
+      : null;
+    for (const needle of workspaceNeedles(workspace)) wanted.push({ workspace, needle, notBefore });
   }
   if (process.platform !== "win32" || wanted.length === 0) return result;
   try {
@@ -1723,25 +1727,39 @@ function survivorPidsByWorkspace(workspaces) {
       // A kereső saját parancssora és a harness is tartalmazhatja az útvonalat.
       "  if ($_.ProcessId -eq $PID -or $_.ProcessId -eq $skipPid) { return }",
       "  if ($cl -like '*Get-CimInstance Win32_Process*') { return }",
-      // Héjakat NEM veszünk túlélőnek: egy parancssorában útvonalat említő
-      // terminál nem munkafolyamat, és a leállítása a felhasználó kezét vágná le.
-      "  if ($_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe' -or $_.Name -eq 'conhost.exe' -or $_.Name -eq 'WindowsTerminal.exe') { return }",
-      "  for ($k = 0; $k -lt $ndl.Count; $k++) { if ($cl.IndexOf($ndl[$k], [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { Write-Output ('{0}|{1}|{2}' -f $idx[$k], $_.ProcessId, $_.ParentProcessId); break } }",
+      // Héjakat ÉS a DSH saját asztali binárisait NEM vesszük túlélőnek: ezek
+      // parancssorában is ott a munkaterület útvonala, mégsem munkafolyamatok.
+      // Mért eset (2026-11-14 04:58): a `DshWindow.exe` (36392) és a
+      // `DshTray.exe` (37368) került be „túlélőként” egy teszt-rekordhoz.
+      "  if ($_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe' -or $_.Name -eq 'conhost.exe' -or $_.Name -eq 'WindowsTerminal.exe' -or $_.Name -eq 'explorer.exe' -or $_.Name -eq 'DshWindow.exe' -or $_.Name -eq 'DshTray.exe' -or $_.Name -eq 'DshLauncher.exe') { return }",
+      "  for ($k = 0; $k -lt $ndl.Count; $k++) { if ($cl.IndexOf($ndl[$k], [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { Write-Output ('{0}|{1}|{2}|{3}' -f $idx[$k], $_.ProcessId, $_.ParentProcessId, $(if ($null -eq $_.CreationDate) { '' } else { $_.CreationDate.ToUniversalTime().ToString('o') })); break } }",
       "}"
     ].join("\n");
     const probe = spawnSync("powershell.exe", [
       "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script
     ], { windowsHide: true, timeout: 15000, encoding: "utf8" });
     const matched = [];
+    // A MOSTANI harness indulása: ennél fiatalabb folyamat nem lehet a korábbi
+    // boot túlélője — csak a saját gyerekünk (mért eset 2026-11-14 04:00: a
+    // sandbox-runner és a grep is bekerült „túlélőként”, mert a munkaterület
+    // útvonala a parancssorukban van).
+    const harnessStart = Date.now() - Math.round(process.uptime() * 1000);
     for (const line of String(probe.stdout ?? "").split(/\r?\n/u)) {
       const parts = line.split("|");
       if (parts.length < 3) continue;
       const index = Number(parts[0]);
       const pid = Number(parts[1]);
       const parentPid = Number(parts[2]);
+      const createdAt = Date.parse(parts[3] ?? "");
       const entry = wanted[index];
       if (entry === undefined) continue;
       if (Number.isFinite(pid) !== true || pid <= 0) continue;
+      // (a) a mostani harness közvetlen gyereke nem túlélő;
+      if (parentPid === process.pid) continue;
+      // (b) ami a mostani boot UTÁN született, az sem túlélő;
+      if (Number.isFinite(createdAt) && createdAt > harnessStart + 2000) continue;
+      // (c) a túlélő nem születhetett a futás indulása ELŐTT (5 s tűréssel).
+      if (entry.notBefore !== null && Number.isFinite(createdAt) && createdAt < entry.notBefore - 5000) continue;
       matched.push({ workspace: entry.workspace, pid, parentPid });
     }
     // Csak a GYÖKEREKET adjuk vissza: ha egy jelölt szülője is jelölt, akkor a
@@ -1799,9 +1817,21 @@ function restoreRuns() {
       if (label.length > 0 && label !== "shell") orphanRows.push(row);
     }
   }
+  // Munkaterületenként a LEGKORÁBBI indulás a küszöb: ennél régebbi folyamat
+  // nem lehet a futás túlélője (a `DshWindow.exe`/`DshTray.exe` például ilyen).
+  // A boot-oldali egyetlen CIM-hívás így is elég.
+  /** @type {Map<string, number|null>} */
+  const notBeforeByWorkspace = new Map();
+  for (const row of orphanRows) {
+    const startedAt = typeof row.startedAt === "string" ? Date.parse(row.startedAt) : NaN;
+    const value = Number.isFinite(startedAt) ? startedAt : null;
+    const current = notBeforeByWorkspace.get(row.workspace);
+    if (current === undefined) notBeforeByWorkspace.set(row.workspace, value);
+    else if (value !== null && (current === null || value < current)) notBeforeByWorkspace.set(row.workspace, value);
+  }
   const survivorsByWorkspace = orphanRows.length === 0
     ? new Map()
-    : survivorPidsByWorkspace([...new Set(orphanRows.map((row) => row.workspace))]);
+    : survivorPidsByWorkspace([...notBeforeByWorkspace].map(([workspace, notBefore]) => ({ workspace, notBefore })));
 
   let restored = 0;
   // Egy folyamat CSAK EGY rekordhoz tartozhat. Enélkül két rekord ugyanarra a
@@ -1852,7 +1882,13 @@ function restoreRuns() {
   const pending = [];
   for (const row of orphanRows) {
     const recorded = Array.isArray(row.survivors) ? row.survivors : [];
-    const survivors = recorded.filter((pid) => isAlive(pid) === true);
+    // A MENTETT pid-eket is ellenőrizzük: csak az maradhat, amit a keresés is
+    // talált (azaz a parancssora tényleg a munkaterülethez tartozik). Enélkül
+    // egy elavult/rossz rekord idegen folyamatra mutathatna — mért eset
+    // (2026-11-14 04:58): a teszt-rekord túlélőiként a `DshWindow.exe` és a
+    // `DshTray.exe` került a fájlba, és egy `stop` kilőtte volna a tálcát.
+    const found = survivorsByWorkspace.get(row.workspace) ?? [];
+    const survivors = recorded.filter((pid) => isAlive(pid) === true && found.includes(pid));
     if (restore(row, null, survivors)) continue;
     pending.push(row);
   }
