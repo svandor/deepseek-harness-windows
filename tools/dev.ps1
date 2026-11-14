@@ -51,7 +51,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('status', 'start', 'stop', 'restart', 'logs', 'list', 'service')]
+    [ValidateSet('status', 'start', 'stop', 'restart', 'logs', 'list', 'service', 'php-install', 'php-available', 'php-ini')]
     [string]$Action = 'status',
     [string]$Project = '',
     [string]$SitesRoot = 'D:\Herd',
@@ -61,7 +61,11 @@ param(
     # service muvelet: melyik szolgaltatas (caddy | php:<domain> | all)
     [string]$Service = '',
     [ValidateSet('start', 'stop', 'restart', 'status')]
-    [string]$ServiceAction = 'status'
+    [string]$ServiceAction = 'status',
+    # php-install: a telepítendo verzio (pl. 8.4.27 vagy 8.4 = a legfrissebb 8.4.x)
+    [string]$PhpVersion = '',
+    # php-install: a 'current' junction is erre alljon at
+    [switch]$MakeCurrent
 )
 
 $ErrorActionPreference = 'Stop'
@@ -647,6 +651,158 @@ function Invoke-Service {
     foreach ($line in $done) { Write-Host $line }
 }
 
+<#
+    php.ini generalasa egy telepitett PHP-hoz, a tenyleges `ext` tartalomhoz.
+    Csak akkor ir, ha a fajl nem letezik, vagy a MI fejlecuenket tartalmazza
+    (tehat nem ir fel kezzel testreszabottat).
+#>
+function New-PhpIni {
+    param([string]$PhpDir)
+    $iniPath = Join-Path $PhpDir 'php.ini'
+    $ours = $false
+    if (Test-Path $iniPath) {
+        $first = (Get-Content $iniPath -TotalCount 1) -join ''
+        $ours = $first -match 'DSH dev PHP'
+        if (-not $ours) { return @("php.ini mar letezik es nem a mienk: $iniPath (nem irom felul)") }
+    }
+    $extDir = Join-Path $PhpDir 'ext'
+    $wanted = @('curl', 'fileinfo', 'gd', 'intl', 'mbstring', 'openssl', 'pdo_mysql', 'pdo_sqlite', 'sqlite3', 'exif', 'sodium', 'zip', 'mysqli')
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('; DSH dev PHP — faek egyszeru Laravel fejlesztokornyezet (Herd kivaltas)')
+    $lines.Add('[PHP]')
+    $lines.Add(('extension_dir = "{0}"' -f $extDir))
+    $lines.Add('memory_limit = 512M')
+    $lines.Add('error_reporting = E_ALL')
+    $lines.Add('display_errors = On')
+    $lines.Add('display_startup_errors = On')
+    $lines.Add('log_errors = On')
+    $lines.Add('error_log = "D:\Tools\php\logs\php_errors.log"')
+    $lines.Add('date.timezone = Europe/Budapest')
+    $lines.Add('default_charset = "UTF-8"')
+    $lines.Add('max_execution_time = 0')
+    $lines.Add('max_input_time = -1')
+    $lines.Add('upload_max_filesize = 64M')
+    $lines.Add('post_max_size = 64M')
+    $lines.Add('max_input_vars = 5000')
+    $lines.Add('allow_url_fopen = On')
+    $lines.Add('cgi.fix_pathinfo = 1')
+    $lines.Add('realpath_cache_size = 4096k')
+    $lines.Add('realpath_cache_ttl = 600')
+    $lines.Add('')
+    $enabled = @()
+    foreach ($name in $wanted) {
+        if (Test-Path (Join-Path $extDir ("php_{0}.dll" -f $name))) {
+            $lines.Add(('extension={0}' -f $name))
+            $enabled += $name
+        }
+    }
+    $lines.Add('')
+    $lines.Add('[opcache]')
+    if (Test-Path (Join-Path $extDir 'php_opcache.dll')) {
+        $lines.Add('zend_extension=opcache')
+        $enabled += 'opcache(kulso DLL)'
+    } else {
+        # 8.5+: az OPcache beepitett, kulon sor nem kell (sot: hiba lenne)
+        $lines.Add('; az OPcache ebben a verzioban BEEPITETT, nincs kulon zend_extension')
+        $enabled += 'opcache(beepitett)'
+    }
+    $lines.Add('opcache.enable=1')
+    $lines.Add('opcache.enable_cli=0')
+    $lines.Add('opcache.validate_timestamps=1')
+    $lines.Add('opcache.revalidate_freq=0')
+    $lines.Add('')
+    $lines.Add('[Session]')
+    $lines.Add('session.save_path = "D:\Tools\php\logs"')
+    [IO.File]::WriteAllLines($iniPath, $lines, (New-Object System.Text.UTF8Encoding($false)))
+    return @(("php.ini megirva: {0}  [{1}]" -f $iniPath, ($enabled -join ', ')))
+}
+
+<#
+    PHP-verzio telepito (a valto csak akkor tud valtani, ha van mibol).
+    A hivatalos windows.php.net "releases.json"-bol valasztja a kert verziohoz
+    tartozo NTS x64 ZIP-et, kicsomagolja D:\Tools\php\<verzio> ala, es a
+    faek-egyszeru php.ini-t is megirja. Nem indit ujra semmit.
+#>
+function Invoke-PhpInstall {
+    param([string]$Version, [switch]$MakeCurrent)
+
+    if ([string]::IsNullOrWhiteSpace($Version)) { throw 'php-install: kell a -PhpVersion (pl. 8.4.27 vagy 8.4)' }
+    $rels = Invoke-RestMethod 'https://windows.php.net/downloads/releases/releases.json' -TimeoutSec 60
+    $all = @($rels.PSObject.Properties.Name | Where-Object { $_ -match '^\d+\.\d+' })
+
+    $wanted = if ($Version -match '^\d+\.\d+$') {
+        # a releases.json kulcsa legtobbszor pontosan "8.5" (patch nelkul), neha "8.4.27":
+        $all | Where-Object { $_ -eq $Version -or $_ -like "$Version.*" } | Sort-Object { [version]$_ } -Descending | Select-Object -First 1
+    } else {
+        $all | Where-Object { $_ -eq $Version } | Select-Object -First 1
+    }
+    if (-not $wanted) { throw ("nincs ilyen kiadas a windows.php.net listaban: {0} (elerheto: {1})" -f $Version, (($all | Sort-Object -Descending | Select-Object -First 8) -join ', ')) }
+
+    $entry = $rels.$wanted
+    $node = if ($entry.'nts-vs17-x64') { $entry.'nts-vs17-x64' } elseif ($entry.'nts-vs16-x64') { $entry.'nts-vs16-x64' } else { $null }
+    if (-not $node -or -not $node.zip) { throw ("a(z) {0} kiadasnak nincs NTS x64 ZIP-je" -f $wanted) }
+    $zipName = [string]$node.zip.path
+    if ([string]::IsNullOrWhiteSpace($zipName)) { throw 'a releases.json nem adott ZIP-fajlnevet' }
+
+    # A releases.json kulcsa foallapot (8.4), a ZIP neve pontos verzio (8.4.27):
+    # a telepitesi konyvtar a PONTOS verzio legyen, mert a projektprofil is ezt keri.
+    $patchMatch = [regex]::Match($zipName, 'php-(\d+\.\d+\.\d+)-')
+    $target = if ($patchMatch.Success) { $patchMatch.Groups[1].Value } else { $wanted }
+    $dest = Join-Path $PhpRoot $target
+    if (Test-Path (Join-Path $dest 'php.exe')) {
+        Write-Host ("mar telepitve: {0} ({1})" -f $target, $dest)
+    } else {
+        New-Item -ItemType Directory -Force -Path $PhpRoot, (Join-Path $PhpRoot '_dl'), $dest | Out-Null
+        $zip = Join-Path (Join-Path $PhpRoot '_dl') $zipName
+        if (-not (Test-Path $zip) -or (Get-Item $zip).Length -lt 10MB) {
+            $ProgressPreference = 'SilentlyContinue'
+            Write-Host ("letoltes: {0}" -f $zipName)
+            Invoke-WebRequest ("https://windows.php.net/downloads/releases/" + $zipName) -OutFile $zip -TimeoutSec 600
+        }
+        Write-Host ("kicsomagolas: {0} -> {1}" -f $zipName, $dest)
+        Expand-Archive -Path $zip -DestinationPath $dest -Force
+        if (-not (Test-Path (Join-Path $dest 'php.exe'))) { throw ("a kicsomagolas utan sincs php.exe itt: {0}" -f $dest) }
+
+        # A php.ini VERZIOFUGGO: ami eppen letezik az `ext` konyvtarban, azt
+        # kapcsoljuk be. MERVE (2026-11-14): a 8.5-ben az OPcache BEEPITETT
+        # (nincs php_opcache.dll), a 8.4-ben kulon DLL - egy fix sablon ezert
+        # vagy hianyzo extension-t jelzett, vagy nem volt opcache.
+        New-PhpIni -PhpDir $dest | ForEach-Object { Write-Host $_ }
+    }
+
+    $version = (& (Join-Path $dest 'php.exe') -r 'echo PHP_VERSION;' 2>$null) -join ''
+    Write-Host ("telepitve: {0} -> {1}  (php {2})" -f $target, $dest, $version)
+
+    if ($MakeCurrent) {
+        & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'php-version.ps1') -Use $target | ForEach-Object { Write-Host $_ }
+    } else {
+        Write-Host ("a 'current' atallitasahoz: tools\php-version.ps1 -Use {0}" -f $target)
+    }
+}
+
+<#
+    A windows.php.net kinalatanak listaja (mi telepitheto). Csak az NTS x64
+    ZIP-pel rendelkezo kiadasok, a mar telepitettek jelolve.
+#>
+function Invoke-PhpAvailable {
+    $rels = Invoke-RestMethod 'https://windows.php.net/downloads/releases/releases.json' -TimeoutSec 60
+    $installed = @()
+    if (Test-Path $PhpRoot) {
+        $installed = @(Get-ChildItem $PhpRoot -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^\d+\.\d+' } | ForEach-Object { $_.Name })
+    }
+    $rows = @()
+    foreach ($name in @($rels.PSObject.Properties.Name | Where-Object { $_ -match '^\d+\.\d+' } | Sort-Object { [version]$_ } -Descending)) {
+        $node = $rels.$name.'nts-vs17-x64'
+        if (-not $node -or -not $node.zip) { continue }
+        $rows += [pscustomobject]@{
+            version   = $name
+            zip       = [string]$node.zip.path
+            installed = (@($installed | Where-Object { $_ -eq $name -or $_ -like "$name.*" }).Count -gt 0)
+        }
+    }
+    $rows | ConvertTo-Json -Depth 3
+}
+
 switch ($Action) {
     'list' { Invoke-List }
     'status' { Invoke-Status }
@@ -655,5 +811,8 @@ switch ($Action) {
     'restart' { Invoke-Stop; Start-Sleep -Milliseconds 500; Invoke-Start }
     'logs' { Invoke-Logs }
     'service' { Invoke-Service -Name $Service -Verb $ServiceAction }
+    'php-available' { Invoke-PhpAvailable }
+    'php-ini' { New-PhpIni -PhpDir (Resolve-PhpDir -Wanted $PhpVersion) | ForEach-Object { Write-Host $_ } }
+    'php-install' { Invoke-PhpInstall -Version $PhpVersion -MakeCurrent:$MakeCurrent }
 }
 

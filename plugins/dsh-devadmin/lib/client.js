@@ -53,24 +53,27 @@ window.__ModuleLoader__.load({
       wordBreak: "break-all",
     };
     const DIM = { opacity: 0.65 };
-    /** A fejlec-ikon gomb: a menüsor magassagahoz illik, nem hivja fel magara a figyelmet. */
+    /** A fejlec-ikon gomb: a menüsor magassagahoz illik, kerettel (mint a tobbi ikon). */
     const HEADER_BTN = {
       display: "inline-flex",
       alignItems: "center",
-      gap: "4px",
+      justifyContent: "center",
       font: "inherit",
       fontSize: "12px",
       lineHeight: "18px",
       height: "26px",
-      padding: "0 8px",
+      minWidth: "30px",
+      padding: "0 7px",
       borderRadius: "6px",
-      border: "1px solid transparent",
+      // A keret MINDIG látszik, ahogy a többi menüsor-ikonon (a felhasználó
+      // kérése: „a php ikonnak is kéne a keret, amit a többi ikon megkapott").
+      border: "1px solid var(--dsw-alias-border-secondary, rgba(127,127,127,.35))",
       background: "transparent",
       color: "var(--dsw-alias-label-secondary, inherit)",
       cursor: "pointer",
     };
     const HEADER_BTN_HOVER = {
-      borderColor: "var(--dsw-alias-border-secondary, rgba(127,127,127,.5))",
+      borderColor: "var(--dsw-alias-border-primary, rgba(127,127,127,.7))",
       color: "var(--dsw-alias-label-primary, inherit)",
     };
     const BTN = {
@@ -126,6 +129,23 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = react.useState("");
       const [logSite, setLogSite] = react.useState("");
       const [logs, setLogs] = react.useState("");
+      const [installable, setInstallable] = react.useState([]);
+
+      // Telepíthető PHP-verziók: egyszer töltjük, a lista ritkán változik.
+      react.useEffect(() => {
+        let alive = true;
+        getJson("/devadmin/php?action=available")
+          .then((payload) => {
+            if (!alive) return;
+            setInstallable((payload.versions || []).filter((entry) => !entry.installed));
+          })
+          .catch(() => {
+            if (alive) setInstallable([]);
+          });
+        return () => {
+          alive = false;
+        };
+      }, []);
 
       const refresh = react.useCallback(async () => {
         try {
@@ -308,6 +328,25 @@ window.__ModuleLoader__.load({
             ),
           ),
           h("div", { style: { ...MONO, ...DIM } }, data.php.root),
+          installable.length > 0
+            ? h(
+                "div",
+                { style: { ...ROW, marginTop: "4px" } },
+                h("span", { style: { ...MONO, ...DIM } }, "Telepíthető:"),
+                installable.map((entry) =>
+                  h(
+                    "button",
+                    {
+                      key: entry.version,
+                      style: BTN,
+                      disabled: busy !== "",
+                      onClick: () => act("php-install", `version=${encodeURIComponent(entry.version)}`),
+                    },
+                    `${entry.version} telepítése`,
+                  ),
+                ),
+              )
+            : null,
         ),
 
         // szolgaltatasok: mindegyik kulon indithato/leallithato/ujraindithato

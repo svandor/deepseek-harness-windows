@@ -13,6 +13,7 @@
 '   cscript //nologo tools\dev-hidden.vbs service caddy restart
 '   cscript //nologo tools\dev-hidden.vbs service php:termeszetgyogyaszoktatas-l12.test stop
 '   cscript //nologo tools\dev-hidden.vbs service all restart
+'   cscript //nologo tools\dev-hidden.vbs php-install 8.5
 Dim sh, action, scriptRoot, cmd, logPath, psArgs, logName
 Set sh = CreateObject("WScript.Shell")
 scriptRoot = Left(WScript.ScriptFullName, InStrRev(WScript.ScriptFullName, "\") - 1)
@@ -25,6 +26,11 @@ If LCase(action) = "service" Then
   logName = "dev-service.log"
   If WScript.Arguments.Count > 1 Then psArgs = psArgs & " -Service '" & WScript.Arguments(1) & "'"
   If WScript.Arguments.Count > 2 Then psArgs = psArgs & " -ServiceAction '" & WScript.Arguments(2) & "'"
+ElseIf LCase(action) = "php-install" Then
+  ' Telepites utan a 'current' is alljon at az uj verziora (a felhasznalo
+  ' szandeka a feluleten a "Telepites" gomb: telepit + beallit).
+  logName = "dev-php-install.log"
+  If WScript.Arguments.Count > 1 Then psArgs = psArgs & " -PhpVersion '" & WScript.Arguments(1) & "' -MakeCurrent"
 End If
 
 logPath = scriptRoot & "\..\state\dev\logs\" & logName

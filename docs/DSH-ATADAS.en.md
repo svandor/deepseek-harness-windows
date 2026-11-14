@@ -398,6 +398,13 @@ untouched address space), not resident memory. That explains why
 - the byte-copying investigation found nothing (header read: 9.2 MB),
 - the **commit limit** (pagefile) was exhausted while RAM looked idle,
 - the report showed "1.2 → 3.0 → 6.7 → 1.7 GB" swings.
+**CORRECTION (2026-11-14, per the user):** the "commit limit (pagefile) was
+exhausted" phenomenon above was **caused by a misconfigured pagefile** that the
+agent had broken earlier and has since fixed (measured: `C:\pagefile.sys`,
+32 768 MB initial / 65 536 MB max, `AutomaticManagedPagefile = False`; current
+allocation 32 GB, peak usage 224 MB). The Windows restart seen at ~22 GB was
+therefore **not** caused by the local model and the harness together. The local
+Ollama ban (AGENTS.md 2.1) stays in force as a user decision.
 
 **Criterion 3 is met on the correct metric:** startup resident memory is
 825–941 MB, i.e. **< 1 GB**. The criterion inherited the commit metric from the

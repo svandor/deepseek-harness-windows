@@ -385,6 +385,14 @@ nem használt címtér), nem lakó memória. Ez magyarázza, hogy
 - miért nem talált semmit a bájtmásolás-vizsgálat (a header-olvasás 9,2 MB),
 - miért telt be a **commit limit** (lapozófájl), miközben a RAM üresnek látszott,
 - és miért ugrált a jelentés „1,2 → 3,0 → 6,7 → 1,7 GB" között.
+**HELYESBÍTÉS (2026-11-14, a felhasználó pontosítása):** a fenti „commit limit
+(lapozófájl) betelt" jelenség **oka a rosszul beállított lapozófájl volt**, amit
+korábban az ágens rontott el, és azóta javított (mért: `C:\pagefile.sys`,
+32 768 MB kezdő / 65 536 MB max, `AutomaticManagedPagefile = False`; a
+jelenlegi foglalás 32 GB, a csúcs-használat 224 MB). A ~22 GB-nál jelentkező
+Windows-újraindítás tehát **nem** a helyi modell és a DSH együttes
+memóriaigénye miatt történt. A helyi Ollama tiltása (AGENTS.md 2.1) felhasználói
+döntésként érvényben marad.
 
 **A 3. kritérium a helyes metrikán TELJESÜL:** az induláskori lakó memória
 825–941 MB, azaz **< 1 GB**. A dokumentum 3. kritériuma a commit-metrikát

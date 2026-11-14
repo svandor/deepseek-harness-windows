@@ -480,6 +480,98 @@ async function handleState(_req, res) {
   });
 }
 
+/**
+ * Telepíthető PHP-verziók a hivatalos windows.php.net listából.
+ * 10 percig cache-eljük: a felület 5 másodpercenként frissít, a lista viszont
+ * ritkán változik, és nem akarjuk minden kérésnél letölteni.
+ */
+let phpReleasesCache = { at: 0, rows: [] };
+async function availablePhpVersions() {
+  if (Date.now() - phpReleasesCache.at < 10 * 60 * 1000 && phpReleasesCache.rows.length > 0) {
+    return phpReleasesCache.rows;
+  }
+  const response = await fetch("https://windows.php.net/downloads/releases/releases.json", {
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!response.ok) throw new Error(`windows.php.net: HTTP ${response.status}`);
+  const releases = await response.json();
+  const installedDirs = phpVersions().versions;
+  const rows = [];
+  for (const key of Object.keys(releases)) {
+    if (!/^\d+\.\d+/u.test(key)) continue;
+    const node = releases[key]["nts-vs17-x64"];
+    if (!node || !node.zip) continue;
+    const zip = String(node.zip.path ?? "");
+    const patch = /php-(\d+\.\d+\.\d+)-/u.exec(zip);
+    const version = patch ? patch[1] : key;
+    rows.push({
+      version,
+      zip,
+      installed: installedDirs.some((dir) => dir === version || dir.startsWith(`${key}.`)),
+      url: `https://windows.php.net/downloads/releases/${zip}`,
+    });
+  }
+  rows.sort((left, right) => {
+    const a = left.version.split(".").map(Number);
+    const b = right.version.split(".").map(Number);
+    for (let index = 0; index < 3; index++) {
+      if ((a[index] ?? 0) !== (b[index] ?? 0)) return (b[index] ?? 0) - (a[index] ?? 0);
+    }
+    return 0;
+  });
+  phpReleasesCache = { at: Date.now(), rows };
+  return rows;
+}
+
+/**
+ * `/devadmin/php?action=available|install|use`
+ *
+ * - `available`: mi telepíthető (a már telepítettek jelölve)
+ * - `install&version=8.5`: telepítés a háttérben (wscript), mert a letöltés
+ *   30–60 s is lehet, és a felület nem várhat ennyit
+ * - `use&version=8.5.12`: a `current` junction átállítása (ez gyors, szinkron)
+ */
+async function handlePhp(url, res) {
+  const action = url.searchParams.get("action") ?? "available";
+  const version = (url.searchParams.get("version") ?? "").trim();
+
+  if (action === "available") {
+    const rows = await availablePhpVersions();
+    return json(res, 200, { ok: true, versions: rows, installed: phpVersions() });
+  }
+
+  if (!/^\d+\.\d+(\.\d+)?$/u.test(version)) {
+    return json(res, 400, { ok: false, error: "ervenytelen verzio" });
+  }
+
+  if (action === "install") {
+    const result = await new Promise((resolve) => {
+      const child = spawn("cscript", ["//nologo", DEV_HIDDEN_VBS, "php-install", version], {
+        windowsHide: true,
+        detached: true,
+        stdio: "ignore",
+      });
+      child.on("error", (error) => resolve({ ok: false, error: error.message }));
+      child.on("spawn", () => {
+        child.unref();
+        resolve({ ok: true, version, queued: true, log: join(LOG_DIR, "dev-php-install.log") });
+      });
+    });
+    return json(res, result.ok ? 200 : 500, result);
+  }
+
+  if (action === "use") {
+    const result = await runFile("pwsh", ["-NoProfile", "-NonInteractive", "-File", PHP_VERSION_PS1, "-Use", version], 30000);
+    return json(res, result.ok ? 200 : 500, {
+      ok: result.ok,
+      version,
+      output: (result.stdout || result.stderr || result.error).trim(),
+    });
+  }
+
+  return json(res, 400, { ok: false, error: `ismeretlen php action: ${action}` });
+}
+
 async function handleAction(url, res) {
   const action = url.searchParams.get("action") ?? "";
   if (action === "start" || action === "stop" || action === "restart") {
@@ -500,6 +592,24 @@ async function handleAction(url, res) {
     const hosts = hostsEntries();
     const missing = discoverSites().filter((site) => !hosts.has(site.domain)).map((site) => site.domain);
     return json(res, 200, { ok: true, missing, hostsFile: HOSTS_FILE });
+  }
+  if (action === "php-install") {
+    // A kliens ezt a format hasznalja: /devadmin/action?action=php-install&version=8.5
+    const version = (url.searchParams.get("version") ?? "").trim();
+    if (!/^\d+\.\d+(\.\d+)?$/u.test(version)) return json(res, 400, { ok: false, error: "ervenytelen verzio" });
+    const result = await new Promise((resolve) => {
+      const child = spawn("cscript", ["//nologo", DEV_HIDDEN_VBS, "php-install", version], {
+        windowsHide: true,
+        detached: true,
+        stdio: "ignore",
+      });
+      child.on("error", (error) => resolve({ ok: false, error: error.message }));
+      child.on("spawn", () => {
+        child.unref();
+        resolve({ ok: true, version, queued: true, log: join(LOG_DIR, "dev-php-install.log") });
+      });
+    });
+    return json(res, result.ok ? 200 : 500, result);
   }
   if (action === "service" || url.searchParams.get("service")) {
     // /devadmin/action?action=service&id=caddy&verb=restart  VAGY
@@ -556,6 +666,11 @@ function apply(ctx) {
       return launchService(id, verb).then((result) => json(res, result.ok ? 200 : 400, result));
     }],
     ["/devadmin/logs", (req, res) => handleLogs(new URL(req.url ?? "/", "http://dsh.invalid"), res)],
+    ["/devadmin/php", (req, res) => {
+      handlePhp(new URL(req.url ?? "/", "http://dsh.invalid"), res).catch((error) => {
+        json(res, 500, { ok: false, error: `devadmin/php: ${error?.message ?? error}` });
+      });
+    }],
     [
       "/devadmin/",
       (_req, res) => {
@@ -611,3 +726,4 @@ export { apply, inject };
 export { discoverSites, phpVersions, testTcp, tailFile, probeUrl, DEV_PS1, DEV_HIDDEN_VBS };
 export { handleState, handleAction, handleLogs, databaseStatus, hostsEntries, autostartEntries };
 export { buildServices, launchService };
+export { handlePhp, availablePhpVersions };

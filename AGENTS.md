@@ -134,12 +134,29 @@ Szabályok:
 
 **A szabály:** amíg ez a gép Windows alatt fut, **egyetlen komponens sem hívhatja
 a helyi Ollamát** (`127.0.0.1:11434`) — sem a DSH, sem az ingyenes delegálási
-lánc, sem mérő/ellenőrző szkript, sem bot-job. A tiltás nem a gyorsaságról szól:
-a betöltés memóriát foglal, és a Windows a DSH-t újraindítja.
+lánc, sem mérő/ellenőrző szkript, sem bot-job. A tiltás **felhasználói döntés**,
+és érvényben marad; az indoklását lásd a következő bekezdésben (HELYESBÍTVE).
 
-**Mért tünet (2026-11-11):** ~22 GB használt RAM környékén a Windows újraindítja
-a DSH-t, és a folyamatban lévő munkamenetek megszakadnak. A helyi modell
-(`llama-server`) és a DSH ezen a 32 GB-os gépen együtt nem fér el.
+**HELYESBÍTETT OK (2026-11-14, a felhasználó pontosítása):** a `2026-11-11`-i
+„~22 GB-nál a Windows újraindítja a DSH-t" tünet **valódi oka a rosszul beállított
+lapozófájl (virtuális memória) volt** — nem az, hogy a helyi modell és a DSH nem
+fér el a 32 GB-on. Azt a beállítást korábban **én rontottam el**, és azóta
+javítottam: a lapozófájl most `C:\pagefile.sys`, **32 768 MB kezdő / 65 536 MB
+max**, automatikus kezelés nélkül (`AutomaticManagedPagefile = False`, mért
+`Win32_PageFileSetting`); a jelenlegi foglalás 32 GB, a csúcs-használat 224 MB
+(`Win32_PageFileUsage`). A korábbi kicsi/letiltott lapozófájl mellett a
+**commit limit** telt be ~22 GB-nál, miközben a fizikai RAM üresnek látszott —
+ezért indította újra a Windows a DSH-t. Ellenőrzés:
+
+```
+Get-CimInstance Win32_PageFileSetting   # kezdő/max MB
+Get-CimInstance Win32_PageFileUsage     # foglalt + csúcs
+```
+
+A tiltás tehát **nem** a „nem fér el a memóriában" miatt van érvényben, hanem mert
+a felhasználó így döntött; a lapozófájl javítása óta a 22 GB-os újraindulás oka
+megszűnt. A helyi modell memória-szabályai (2. pont) továbbra is élnek.
+
 
 **Kikényszerítés — két védvonal, mindkettő kötelező:**
 
@@ -451,9 +468,12 @@ Kötelező:
   (`couldn't create signal pipe, Win32 error 5`) — ilyenkor a commit emelt
   hozzáféréssel megy át.
 - `2026-11-11` — **a helyi Ollama hívása TILOS Windows alatt** (2.1. pont).
-  Mért tünet: ~22 GB használt RAM környékén a Windows újraindítja a DSH-t, és a
-  munkamenetek megszakadnak — a `llama-server` és a DSH együtt nem fér el a 32 GB-os
-  gépen. Kivéve: (1) `providers\config.json` minden `ollama/...` lánctagja, a kivett
+  **HELYESBÍTETT OK (2026-11-14):** a „~22 GB-nál a Windows újraindítja a DSH-t"
+  tünet oka **a rosszul beállított lapozófájl (virtuális memória) volt** — azt
+  korábban én rontottam el, és azóta javítottam (32 768 MB kezdő / 65 536 MB max,
+  mért). A „a `llama-server` és a DSH együtt nem fér el a 32 GB-os gépen" mondat
+  tehát **téves volt**; a tiltás felhasználói döntésként marad érvényben. Kivéve:
+  (1) `providers\config.json` minden `ollama/...` lánctagja, a kivett
   láncok az `localOllama.archivedTargets`-ben (worker, free-quota, deepseek-chat,
   fast-chat, vision-worker, `auto.rules.kep`, local-only), a `local-only` route
   üres lánccal 503-at ad; (2) `~/.dsh/settings.yaml`: `ollama-local` provider és

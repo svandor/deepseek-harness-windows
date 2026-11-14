@@ -272,8 +272,30 @@
       });
       rows.push("</tbody></table>");
     }
+    rows.push('<div class="row" style="margin-top:10px"><strong style="font-size:12px">Telepíthető verziók</strong>' +
+      '<button id="btn-php-refresh">Lista frissítése</button></div>');
+    rows.push('<div id="php-installable" class="muted">betöltés…</div>');
     el("php-body").innerHTML = rows.join("");
     el("php-body").classList.remove("muted");
+    loadInstallablePhp();
+  }
+
+  /** A windows.php.net kínálata: ami még nincs telepítve, azt egy gombbal lehet. */
+  function loadInstallablePhp() {
+    var box = el("php-installable");
+    if (!box) return;
+    getJson("/devadmin/php?action=available").then(function (payload) {
+      var free = (payload.versions || []).filter(function (entry) { return !entry.installed; });
+      if (!free.length) {
+        box.innerHTML = '<span class="muted">Minden elérhető verzió telepítve van.</span>';
+        return;
+      }
+      box.innerHTML = '<div class="row">' + free.map(function (entry) {
+        return '<button data-install-php="' + esc(entry.version) + '">' + esc(entry.version) + " telepítése</button>";
+      }).join("") + "</div>";
+    }).catch(function (error) {
+      box.innerHTML = '<span class="warn">a lista nem érhető el: ' + esc(error.message) + "</span>";
+    });
   }
 
   function renderSites(data) {
@@ -409,6 +431,15 @@
   el("php-body").addEventListener("click", function (event) {
     var version = event.target.getAttribute && event.target.getAttribute("data-php");
     if (version) action("php-use", "version=" + encodeURIComponent(version));
+    var install = event.target.getAttribute && event.target.getAttribute("data-install-php");
+    if (install) {
+      toast(install + " telepítése elindult (a háttérben; 30-60 s)");
+      getJson("/devadmin/php?action=install&version=" + encodeURIComponent(install)).then(function (result) {
+        if (!result.ok) throw new Error(result.error || "nem sikerült");
+        return new Promise(function (resolve) { window.setTimeout(resolve, 8000); });
+      }).then(function () { return refresh(); }).catch(function (error) { toast("hiba: " + error.message); });
+    }
+    if (event.target.id === "btn-php-refresh") loadInstallablePhp();
   });
   el("services-body").addEventListener("click", function (event) {
     var service = event.target.getAttribute && event.target.getAttribute("data-service");
