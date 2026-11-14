@@ -1761,6 +1761,10 @@ function discoverExternalRuns(workspaces) {
         survivors: [pid],
         recovered: true,
         external: true,
+        // A külső folyamat DEFINÍCIÓ SZERINT él (a folyamatlistából került elő),
+        // ezért a panel a munkaterülettől függetlenül mutathatja (lásd a kliens
+        // `alive` szűrőjét).
+        alive: true,
         child: null
       });
     }
@@ -1804,7 +1808,10 @@ function survivorPidsByWorkspace(targets) {
       // parancssorában is ott a munkaterület útvonala, mégsem munkafolyamatok.
       // Mért eset (2026-11-14 04:58): a `DshWindow.exe` (36392) és a
       // `DshTray.exe` (37368) került be „túlélőként” egy teszt-rekordhoz.
-      "  if ($_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe' -or $_.Name -eq 'conhost.exe' -or $_.Name -eq 'WindowsTerminal.exe' -or $_.Name -eq 'explorer.exe' -or $_.Name -eq 'DshWindow.exe' -or $_.Name -eq 'DshTray.exe' -or $_.Name -eq 'DshLauncher.exe') { return }",
+      // A dev-környezet saját szolgáltatásai is ki: a `caddy.exe` és a
+      // `php-cgi.exe` a `D:\Tools` alatt fut, de a kimenete nem a panelé, és
+      // „külső folyamat"-ként hamis terminált csinált (mért: ext-17200 = caddy).
+      "  if ($_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe' -or $_.Name -eq 'conhost.exe' -or $_.Name -eq 'WindowsTerminal.exe' -or $_.Name -eq 'explorer.exe' -or $_.Name -eq 'DshWindow.exe' -or $_.Name -eq 'DshTray.exe' -or $_.Name -eq 'DshLauncher.exe' -or $_.Name -eq 'caddy.exe' -or $_.Name -eq 'php-cgi.exe' -or $_.Name -eq 'mysqld.exe' -or $_.Name -eq 'nginx.exe') { return }",
       "  for ($k = 0; $k -lt $ndl.Count; $k++) { if ($cl.IndexOf($ndl[$k], [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { Write-Output ('{0}|{1}|{2}|{3}|{4}' -f $idx[$k], $_.ProcessId, $_.ParentProcessId, $(if ($null -eq $_.CreationDate) { '' } else { $_.CreationDate.ToUniversalTime().ToString('o') }), $cl); break } }",
       "}"
     ].join("\n");
