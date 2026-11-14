@@ -53,8 +53,8 @@ export const inject = ["sessions", "sessionController"];
 const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 /** A repó `state\` mappája. */
-const STATE_DIR = join(PACKAGE_ROOT, "..", "..", "state");
-const MARKER_PATH = join(STATE_DIR, "auto-continue.json");
+
+
 
 /** A DSH home és a session-tároló gyökere (`<home>\sessions\<projekt>\<id>\session.v3.jsonl.zstd`). */
 const DSH_HOME = typeof process.env.DSH_HOME === "string" && process.env.DSH_HOME.length > 0
@@ -78,14 +78,70 @@ function sessionsRoot() {
   if (typeof override === "string" && override.length > 0) return override;
   return join(typeof process.env.DSH_HOME === "string" && process.env.DSH_HOME.length > 0 ? process.env.DSH_HOME : join(homedir(), ".dsh"), "sessions");
 }
-const LOG_PATH = join(STATE_DIR, "auto-continue.log");
-const OFF_PATH = join(STATE_DIR, "no-auto-continue");
+/**
+ * A plugin állapot-mappája — TESZTBŐL felülbírálható.
+ *
+ * MIÉRT: az egységteszt a VALÓDI `state\` mappát használta, ahol a
+ * `no-auto-continue` jelölő (2026-11-14, a hibás prompt-út miatt) minden
+ * tesztesetet kikapcsolt — 3/4 teszt elhasalt. A
+ * `DSH_AUTO_CONTINUE_STATE_DIR` egy temp mappára állítva izolál.
+ * @returns {string}
+ */
+function stateDir() {
+  const override = process.env.DSH_AUTO_CONTINUE_STATE_DIR;
+  if (typeof override === "string" && override.length > 0) return override;
+  return join(PACKAGE_ROOT, "..", "..", "state");
+}
+
+/** @returns {string} a jelölőfájl (dupla küldés ellen). */
+function markerPath() {
+  return join(stateDir(), "auto-continue.json");
+}
+
+/** @returns {string} a naplófájl. */
+function logPath() {
+  return join(stateDir(), "auto-continue.log");
+}
+
+/** @returns {string} a kikapcsoló jelölő. */
+function offPath() {
+  return join(stateDir(), "no-auto-continue");
+}
 
 /** Legfeljebb ennyi session folytatódik egy booton. */
 const MAX_SESSIONS = 2;
 
 /** Ennél régebbi megszakadást nem folytatunk (6 óra). */
 const MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+/** Mély fagyasztás — a mag `freezeMessage`-ének a mintája. */
+function deepFreeze(value) {
+  if (value === null || typeof value !== "object") return value;
+  for (const key of Object.keys(value)) deepFreeze(value[key]);
+  return Object.freeze(value);
+}
+
+/**
+ * Felhasználói üzenet építése a MAG mintája szerint.
+ *
+ * A `@deepseek-ai/dsh-llm` `createUserMessage` ennyi: `createMessage({...input,
+ * role: "user"})` → `{ ...input, role: "user", id: randomUUID() }`, majd
+ * `deepFreeze(structuredClone(message))`. Ezt itt helyben megismételjük, mert a
+ * plugin a repóból töltődik (nincs `node_modules`), a csomag importja pedig a
+ * junction valódi útvonala miatt bukna — ugyanaz a buktató, mint a
+ * `dsh-terminal-tool`-nál.
+ * @param {string} requestId
+ * @returns {object} fagyasztott user-üzenet.
+ */
+function buildUserMessage(requestId) {
+  const message = {
+    role: "user",
+    content: [{ type: "text", text: CONTINUE_TEXT }],
+    source: { kind: "user", rpcId: requestId },
+    id: randomUUID()
+  };
+  return deepFreeze(structuredClone(message));
+}
 
 /**
  * Boot utáni próbák (ms). MIÉRT NEM ELÉG HÁROM: a sessionök a memóriabeli
@@ -112,8 +168,8 @@ const CONTINUE_TEXT = "Automatikus folytatás: a harness újraindult, miközben 
  */
 function log(line) {
   try {
-    mkdirSync(STATE_DIR, { recursive: true });
-    appendFileSync(LOG_PATH, `${new Date().toISOString()} ${line}\n`, "utf8");
+    mkdirSync(stateDir(), { recursive: true });
+    appendFileSync(logPath(), `${new Date().toISOString()} ${line}\n`, "utf8");
   } catch {
     /* a napló hibája nem hathat a bootra */
   }
@@ -122,7 +178,7 @@ function log(line) {
 /** @returns {Record<string, boolean>} */
 function readMarkers() {
   try {
-    const parsed = JSON.parse(readFileSync(MARKER_PATH, "utf8"));
+    const parsed = JSON.parse(readFileSync(markerPath(), "utf8"));
     return parsed !== null && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
@@ -134,8 +190,8 @@ function readMarkers() {
  */
 function writeMarkers(markers) {
   try {
-    mkdirSync(STATE_DIR, { recursive: true });
-    writeFileSync(MARKER_PATH, JSON.stringify(markers, null, 2), "utf8");
+    mkdirSync(stateDir(), { recursive: true });
+    writeFileSync(markerPath(), JSON.stringify(markers, null, 2), "utf8");
   } catch {
     /* nem kritikus */
   }
@@ -144,7 +200,7 @@ function writeMarkers(markers) {
 /** A kikapcsolás bármely módja. */
 function disabled() {
   if (process.env.DSH_NO_AUTO_CONTINUE === "1") return "kikapcsolva (DSH_NO_AUTO_CONTINUE=1)";
-  if (existsSync(OFF_PATH)) return `kikapcsolva (${OFF_PATH})`;
+  if (existsSync(offPath())) return `kikapcsolva (${offPath()})`;
   return null;
 }
 
@@ -359,7 +415,7 @@ function listServiceNames(ctx) {
 function describeSurface(ctx) {
   const surface = (holder) => {
     if (holder === null || holder === undefined) return "nincs";
-    return ["prompt", "resume", "list", "get"]
+    return ["prompt", "resume", "list", "get", "followup"]
       .map((name) => `${name}:${typeof holder[name] === "function" ? "igen" : "nem"}`)
       .join(",");
   };
@@ -439,12 +495,13 @@ async function runOnce(ctx) {
     const sessionId = candidate.sessionId;
     try {
       // A kontroller resume() a session-attach útvonala: lemezről tölti be a
-      // sessiont (sessionQuery.observeSession → agents.resume), és lefuttatja a
-      // crash-javítást. Csak akkor kell, ha a store még nem tartalmazza.
+      // sessiont (sessionQuery.observeSession → agents.resume), lefuttatja a
+      // crash-javítást, és VISSZAADJA az ágenst — ezt felhasználjuk.
+      let agent = null;
       for (const holder of [serviceOrNull(ctx, "sessionController"), serviceOrNull(ctx, "sessions")]) {
         if (holder !== null && holder !== undefined && typeof holder.resume === "function") {
           try {
-            await holder.resume(sessionId);
+            agent = await holder.resume(sessionId);
             log(`resume: ${String(sessionId)}${candidate.fromDisk ? " (lemezről)" : ""}`);
           } catch (error) {
             log(`resume hiba (${String(sessionId)}): ${String(error?.message ?? error)}`);
@@ -452,6 +509,24 @@ async function runOnce(ctx) {
           break;
         }
       }
+      // ELSŐDLEGES ÚT: `agent.followup(message)`.
+      //
+      // MIÉRT: a `sessionController.prompt()` belül pontosan ezt hívja
+      // (`dsh-api-session-controller/lib/index.js:767–774`: `createUserMessage`,
+      // majd `agent.followup(message)`), de a hívás elhasal a hiányzó RPC-
+      // kontextuson (`Cannot read properties of undefined (reading
+      // 'throwIfAborted')`, mért 2026-11-14 05:06). A `followup` viszont a
+      // publikus Agent-interfészen van, üzenetet pedig magunk is építhetünk.
+      if (agent !== null && typeof agent.followup === "function") {
+        const message = buildUserMessage(requestId);
+        agent.followup(message);
+        markers[candidate.key] = true;
+        writeMarkers(markers);
+        sentOnce = true;
+        log(`folytatás elküldve (agent.followup): ${String(sessionId)} (seq ${String(candidate.seq)}, open=${String(candidate.open)}, lemez=${String(candidate.fromDisk)})`);
+        continue;
+      }
+      // TARTALÉK: a kontroller prompt()-ja (ha az ágens nem érhető el).
       await entry.prompt({
         sessionId,
         content: [{ type: "text", text: CONTINUE_TEXT }],

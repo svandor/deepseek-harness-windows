@@ -20,14 +20,17 @@ import { fileURLToPath } from "node:url";
 import { afterEach, test } from "node:test";
 
 const PLUGIN_ROOT = fileURLToPath(new URL("..", import.meta.url));
-const STATE_DIR = join(PLUGIN_ROOT, "..", "..", "state");
+
+// IZOLÁCIÓ (a konstansok ELŐTT!): a plugin a VALÓDI `state\` mappát és a valódi
+// session-naplókat olvasná — a `no-auto-continue` jelölő minden esetet
+// kikapcsol, a naplókban pedig ott van a most futó beszélgetés nyitott köre.
+// Ezért mindkettőt üres temp mappára állítjuk.
+process.env.DSH_AUTO_CONTINUE_STATE_DIR = mkdtempSync(join(tmpdir(), "dsh-autocontinue-state-"));
+process.env.DSH_AUTO_CONTINUE_SESSIONS_ROOT = mkdtempSync(join(tmpdir(), "dsh-autocontinue-"));
+
+const STATE_DIR = process.env.DSH_AUTO_CONTINUE_STATE_DIR;
 const MARKER_PATH = join(STATE_DIR, "auto-continue.json");
 const WAIT_MS = 9000;
-
-// IZOLÁCIÓ: a plugin a lemezről is olvasná a VALÓDI session-naplókat, azokban
-// pedig ott a most futó beszélgetés nyitott köre — a teszt ettől hamis
-// találatot kapna. Ezért üres temp mappára állítjuk a napló-gyökeret.
-process.env.DSH_AUTO_CONTINUE_SESSIONS_ROOT = mkdtempSync(join(tmpdir(), "dsh-autocontinue-"));
 
 /** @param {string} id @param {object[]} events */
 function fakeSession(id, events) {
