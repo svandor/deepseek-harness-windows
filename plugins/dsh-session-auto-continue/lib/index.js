@@ -38,12 +38,14 @@ import { fileURLToPath } from "node:url";
 export const name = "dsh-session-auto-continue";
 
 /**
- * A mag szolgáltatása: a session-lista (`ctx.sessions` = SessionStore,
- * `dsh-session/lib/index.js:1311` `super(ctx, "sessions")`). A prompt-belépőt
- * NEM injektáljuk, mert a telepítés szerint más néven él (`sessionController`)
- * — a futáskor keressük, és ha nincs, a napló kimondja.
+ * Deklarált szolgáltatások: `sessions` (SessionStore, `dsh-session/lib/index.js:1311`)
+ * és a PROMPT-belépő `sessionController`
+ * (`dsh-api-session-controller/lib/index.js:2726`). A cordis CSAK a deklarált
+ * szolgáltatást engedi olvasni (`cannot get property … without inject`, mért
+ * hiba 2026-11-14 04:05), ezért kell itt deklarálni. Ha a `sessionController`
+ * nincs a kompozícióban, az `apply` nem fut le — ezt a boot-napló hiánya mutatja.
  */
-export const inject = ["sessions"];
+export const inject = ["sessions", "sessionController"];
 
 /** A plugin gyökere (a repó `plugins\dsh-session-auto-continue` mappája). */
 const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -195,6 +197,25 @@ function resolvePrompt(ctx) {
   return null;
 }
 
+/** A registry szolgáltatás-nevei (diagnosztika: ebből derül ki a helyes név). */
+function listServiceNames(ctx) {
+  try {
+    const registry = ctx.registry;
+    if (registry === null || registry === undefined || typeof registry.values !== "function") {
+      return "(nincs registry)";
+    }
+    const names = [];
+    for (const runtime of registry.values()) {
+      const candidate = runtime?.name ?? runtime?.service?.name ?? runtime?.ctx?.name;
+      if (typeof candidate === "string" && candidate.length > 0) names.push(candidate);
+    }
+    names.sort();
+    return names.length > 0 ? names.join(",") : "(üres registry)";
+  } catch (error) {
+    return `(registry hiba: ${String(error?.message ?? error)})`;
+  }
+}
+
 /** A naplóba írt diagnosztika arról, mi érhető el (egy sor, bootonként egyszer). */
 function describeSurface(ctx) {
   const surface = (holder) => {
@@ -218,7 +239,7 @@ async function runOnce(ctx) {
   }
   const entry = resolvePrompt(ctx);
   if (entry === null) {
-    log(`nincs prompt-belépő — ${describeSurface(ctx)}`);
+    log(`nincs prompt-belépő — ${describeSurface(ctx)} | szolgáltatások: ${listServiceNames(ctx)}`);
     return;
   }
   const markers = readMarkers();
