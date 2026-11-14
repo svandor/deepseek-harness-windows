@@ -237,6 +237,24 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-14` — **a megszakadt BESZÉLGETÉS is folytatódik boot után** (a
+  felhasználó pontosítása: a kérés nem csak a terminálra vonatkozott). Új
+  HOST-síkos plugin: `plugins\dsh-session-auto-continue` (junction + `- insert:`
+  a `~\.dsh\profiles\web\cordis.patch.yml`-ben, telepítés:
+  `install.ps1` / `-Check` / `-Remove`). Működés: a mag a crash után betöltéskor
+  **javítja** a naplót (`interruptedTurnClosers`, `dsh-session/lib/index.js`
+  ~593–710) — `turn/end` + `data.reason.kind === "interrupted"` —, de nem
+  folytatja; a plugin ezt a kört indítja újra a hivatalos belépővel:
+  `prompt({ sessionId, content, requestId })` (`SessionCommandController.prompt`,
+  `dsh-api-session-controller/lib/index.js:736`; a host-síkon
+  `sessionController` néven, `:2726`), belül `resolveAgent()` →
+  `agent.followup()`. **Korlátok:** max **2** session bootonként, a megszakadás
+  max **6 órás**, session+szekvencia jelölő a `state\auto-continue.json`-ban
+  (ugyanaz a kör nem folytatódik kétszer), a szöveg előírja a valós állapot
+  ellenőrzését az ismétlés előtt; kikapcsolás `state\no-auto-continue` vagy
+  `DSH_NO_AUTO_CONTINUE=1`; napló `state\auto-continue.log`. A prompt-belépőt
+  futáskor oldja fel (`sessionController` → `sessionCommands` → `sessions`),
+  mert a szolgáltatás neve verziófüggő. Részletek: `docs\DSH-ATADAS.md` 10.7.
 - `2026-11-14` — **a megszakadt panel-futás automatikusan folytatódik** (a
   felhasználó kérése: „újraindítás után automatikus folytatódjanak a
   megszakadt folyamatok"). A `state\runs.json` rekord mostantól a **parancsot**
