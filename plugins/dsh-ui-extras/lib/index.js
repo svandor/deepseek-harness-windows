@@ -5319,6 +5319,14 @@ export { isFreeModel };
 export { handleWorkspaceSession, unarchiveSession };
 export { CHINESE_HOLIDAYS, beijingDay, holidaysCovered, isChineseHoliday, PEAK_WINDOWS_UTC };
 
+/**
+ * Exportalva a `plugins/dsh-ui-extras/test/run-log.test.mjs` tesztnek: a
+ * futas-kimenet lemezes tukre az egyetlen hely, ahol a restart utani tartalom
+ * megmarad, ezert a primitivek (utvonal, hozzafuzes, farok-olvasas) onalloan
+ * merhetok.
+ */
+export { runLogPath, appendToRunOutput, tailRunLog };
+
 
 
 
