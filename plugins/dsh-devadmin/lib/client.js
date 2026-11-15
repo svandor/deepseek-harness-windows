@@ -664,6 +664,63 @@ window.__ModuleLoader__.load({
       );
     }
 
+/**
+     * Munkaasztal-váltó ikonok a FELSŐ MENÜSORBAN: [1] [2].
+     *
+     * Csak ikon + tooltip, a meglévő menüsor-gombokkal azonos keret. A kattintás
+     * a host `/devadmin/desktop?n=N` végpontjára megy, ami a
+     * `state\\window-desktop.txt`-be ír — ezt a `DshWindow` 500 ms-onként
+     * figyeli, tehát az ablak újraindítás NÉLKÜL vált asztalt.
+     * @param props - a slot `inject`-je adja a `setDesktop` hívást.
+     */
+    function DesktopSwitcher(props) {
+      const set = props && typeof props.setDesktop === "function" ? props.setDesktop : null;
+      const [active, setActive] = react.useState(0);
+      const [hover, setHover] = react.useState(0);
+      react.useEffect(() => {
+        let alive = true;
+        const read = () => {
+          getJson("/devadmin/state")
+            .then(() => {
+              if (!alive) return;
+              // az aktív asztal a tray-config-ból nem látszik innen: a fájlt a
+              // host endpoint jelzi vissza, ezért csak a saját kattintást
+              // jelezzük (a vizuális visszajelzés a kattintás után azonnal van)
+            })
+            .catch(() => {});
+        };
+        read();
+        return () => {
+          alive = false;
+        };
+      }, []);
+      const button = (n) =>
+        h(
+          "button",
+          {
+            key: `desk-${n}`,
+            type: "button",
+            title: n === 1 ? "1. munkaasztal (1-3. panel)" : "2. munkaasztal (4-6. panel)",
+            "aria-label": n === 1 ? "1. munkaasztal" : "2. munkaasztal",
+            style: {
+              ...HEADER_BTN,
+              minWidth: "26px",
+              padding: "0 6px",
+              ...(active === n ? { background: "var(--dsw-alias-bg-secondary, rgba(127,127,127,.18))", borderColor: "var(--dsw-alias-border-primary, rgba(127,127,127,.7))" } : null),
+              ...(hover === n ? HEADER_BTN_HOVER : null),
+            },
+            onMouseEnter: () => setHover(n),
+            onMouseLeave: () => setHover(0),
+            onClick: () => {
+              setActive(n);
+              if (set) set(n);
+            },
+          },
+          String(n),
+        );
+      return h("span", { style: { display: "inline-flex", gap: "4px" } }, button(1), button(2));
+    }
+
     // ── plugin ──────────────────────────────────────────────────────────
     const inject = ["slots", "sidebarRightTabs", "sidebarRight"];
 
@@ -717,10 +774,31 @@ window.__ModuleLoader__.load({
           AdminHeaderButton,
         ),
       );
+
+      // 2) Munkaasztal-váltó ikonok (1/2) UGYANABBAN a menüsorban. Csak ikon +
+      // tooltip, a többi menüsor-gombbal azonos kerettel. A kattintás a host
+      // /devadmin/desktop végpontjára megy, ami a state\window-desktop.txt-be
+      // ír — ezt a DshWindow 500 ms-onként figyeli, tehát NINCS újraindítás.
+      ctx.slots.inject(HEADER_SLOT, () =>
+        ctx.slots.register(
+          {
+            name: HEADER_SLOT,
+            id: "devadmin-desktop",
+            order: 61,
+            inject: () => ({
+              setDesktop: (n) => {
+                getJson(`/devadmin/desktop?n=${encodeURIComponent(n)}`).catch(() => {});
+              },
+            }),
+          },
+          DesktopSwitcher,
+        ),
+      );
     }
 
     exports.DevAdminPanel = DevAdminPanel;
     exports.AdminHeaderButton = AdminHeaderButton;
+    exports.DesktopSwitcher = DesktopSwitcher;
     exports.apply = apply;
     exports.inject = inject;
     exports.TAB_KIND = TAB_KIND;

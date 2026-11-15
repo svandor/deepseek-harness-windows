@@ -110,7 +110,7 @@ test("az apply regisztralja a tab tipust, a tab testet es a fejlec-ikont", async
   assert.equal(tabTypes[0].tab.priority, "extension");
 
   const bodies = registered.filter((entry) => !entry.tab);
-  assert.equal(bodies.length, 2, "tab test + fejlec-ikon");
+  assert.equal(bodies.length, 3, "tab test + fejlec-ikon + munkaasztal-valto");
   assert.ok(bodies.some((entry) => entry.key === "dsh-devadmin/admin"), "a tab test kulcsa az id");
 
   const header = bodies.find((entry) => entry.id === "devadmin-header");
@@ -121,7 +121,9 @@ test("az apply regisztralja a tab tipust, a tab testet es a fejlec-ikont", async
     "a cset felett NEM jelenik meg semmi",
   );
 
-  assert.deepEqual(injections.sort(), [HEADER_SLOT, "sidebar.right.pane.tab"].sort());
+  assert.ok(bodies.some((entry) => entry.id === "devadmin-desktop"), "a munkaasztal-valto is regisztralva van");
+  assert.equal(injections.filter((name) => name === HEADER_SLOT).length, 2, "ket regisztracio a fejlecben");
+  assert.deepEqual([...new Set(injections)].sort(), [HEADER_SLOT, "sidebar.right.pane.tab"].sort());
   assert.equal(opened.length, 0, "az apply magatol nem nyit tabot");
 
   // az ikon megnyitja a tabot

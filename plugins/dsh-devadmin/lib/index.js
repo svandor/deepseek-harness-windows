@@ -31,7 +31,7 @@
  * path and the measured, working behaviour cannot drift between CLI and UI.
  */
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync, appendFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, appendFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { connect } from "node:net";
 import { request as httpsRequest } from "node:https";
 import { request as httpRequest } from "node:http";
@@ -582,6 +582,25 @@ async function handlePhp(url, res) {
  * A projekt csak a sites root alatti lehet (biztonsági korlát), és a
  * `restart=1` a projekt saját php-cgi munkását is újraindítja.
  */
+/**
+ * `/devadmin/desktop?n=1|2` — a munkaasztal átkapcsolása.
+ *
+ * A `DshWindow` 500 ms-onként figyeli a `state\window-desktop.txt`-t (mért,
+ * működő mechanizmus), ezért ide csak be kell írni a számot: az ablak azonnal
+ * átvált, újraindítás nélkül. Ez a webes fejléc 1/2 ikonjainak háttere.
+ */
+function handleDesktop(url, res) {
+  const n = Number(url.searchParams.get("n") ?? "0");
+  if (n !== 1 && n !== 2) return json(res, 400, { ok: false, error: "n=1 vagy n=2 kell" });
+  const file = join(REPO_ROOT, "state", "window-desktop.txt");
+  try {
+    mkdirSync(join(REPO_ROOT, "state"), { recursive: true });
+    writeFileSync(file, String(n), "utf8");
+  } catch (error) {
+    return json(res, 500, { ok: false, error: `iras hiba: ${error?.message ?? error}` });
+  }
+  return json(res, 200, { ok: true, desktop: n, file });
+}
 async function handleSite(url, res) {
   const action = url.searchParams.get("action") ?? "save";
   if (action !== "save") return json(res, 400, { ok: false, error: `ismeretlen site action: ${action}` });
@@ -727,6 +746,9 @@ function apply(ctx) {
         json(res, 500, { ok: false, error: `devadmin/site: ${error?.message ?? error}` });
       });
     }],
+    ["/devadmin/desktop", (req, res) => {
+      handleDesktop(new URL(req.url ?? "/", "http://dsh.invalid"), res);
+    }],
     ["/devadmin/php", (req, res) => {
       handlePhp(new URL(req.url ?? "/", "http://dsh.invalid"), res).catch((error) => {
         json(res, 500, { ok: false, error: `devadmin/php: ${error?.message ?? error}` });
@@ -788,4 +810,4 @@ export { discoverSites, phpVersions, testTcp, tailFile, probeUrl, DEV_PS1, DEV_H
 export { handleState, handleAction, handleLogs, databaseStatus, hostsEntries, autostartEntries };
 export { buildServices, launchService };
 export { handlePhp, availablePhpVersions };
-export { handleSite };
+export { handleSite, handleDesktop };
