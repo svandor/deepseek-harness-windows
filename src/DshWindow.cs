@@ -353,7 +353,11 @@ namespace DshWindow
                     {
                         content.ColumnDefinitions[i * 2 - 1].Width = shown ? new GridLength(SplitterWidth) : new GridLength(0);
                     }
-                    hosts[i].Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
+                    // FONTOS: HIDDEN, nem Collapsed. A Collapsed panel WebView2-je
+                    // nem renderel, ezert a 2. asztalra valtasnal feher oldal
+                    // jelent meg es lassan toltott be (felhasznaloi jelzes,
+                    // 2026-11-15). A Hidden panel tovabb tolt, csak nem latszik.
+                    hosts[i].Visibility = shown ? Visibility.Visible : Visibility.Hidden;
                 }
                 int shownCount = 0;
                 for (int i = 0; i < paneCount; i++) if (visible[i]) shownCount++;

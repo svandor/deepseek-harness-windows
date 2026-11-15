@@ -469,6 +469,9 @@ async function handleState(_req, res) {
       logDir: LOG_DIR,
       stateMissing: state === null,
     },
+    // Az aktiv munkaasztal: a window-desktop.txt-t olvassuk (ugyanaz, amit a
+    // DshWindow figyel) — e nelkul a fejlec nem tudta megmutatni, melyiken vagy.
+    desktop: readDesktopIndex(),
     services: buildServices(state),
     database,
     sites,
@@ -589,6 +592,16 @@ async function handlePhp(url, res) {
  * működő mechanizmus), ezért ide csak be kell írni a számot: az ablak azonnal
  * átvált, újraindítás nélkül. Ez a webes fejléc 1/2 ikonjainak háttere.
  */
+/** Az aktív munkaasztal sorszáma (state\window-desktop.txt; hiba esetén 1). */
+function readDesktopIndex() {
+  try {
+    const text = readFileSync(join(REPO_ROOT, "state", "window-desktop.txt"), "utf8").trim();
+    const value = Number(text);
+    return Number.isFinite(value) && value >= 1 ? Math.floor(value) : 1;
+  } catch {
+    return 1;
+  }
+}
 function handleDesktop(url, res) {
   const n = Number(url.searchParams.get("n") ?? "0");
   if (n !== 1 && n !== 2) return json(res, 400, { ok: false, error: "n=1 vagy n=2 kell" });
