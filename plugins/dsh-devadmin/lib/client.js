@@ -803,6 +803,25 @@ window.__ModuleLoader__.load({
           DesktopSwitcher,
         ),
       );
+
+      // ÜRES (hero) panelen a fejléc NEM jelenik meg, ezért a munkaasztal-ikonok
+      // ott a composer fölötti dokkba kerülnek (a ui-extras is így csinálja a
+      // hero-változattal). Enélkül pont az üres paneleken nem látszottak.
+      ctx.slots.inject("conversation.input.dock", () =>
+        ctx.slots.register(
+          {
+            name: "conversation.input.dock",
+            id: "devadmin-desktop-dock",
+            order: 62,
+            inject: () => ({
+              setDesktop: (n) => {
+                getJson(`/devadmin/desktop?n=${encodeURIComponent(n)}`).catch(() => {});
+              },
+            }),
+          },
+          DesktopSwitcher,
+        ),
+      );
     }
 
     exports.DevAdminPanel = DevAdminPanel;
