@@ -3931,6 +3931,38 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
     var GIT_PANEL_MARK = "git-panel";
     var GIT_TOGGLE_MARK = "git-toggle";
 
+    /**
+     * Egy sor a fogaskerék-panelben: ikon + felirat, kattintható.
+     */
+    function toolRow(icon, label, action, disabled) {
+      return jsx.jsx("button", {
+        type: "button",
+        title: label,
+        disabled: disabled === true,
+        onClick: action,
+        style: {
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          width: "100%",
+          padding: "6px 8px",
+          borderRadius: "6px",
+          border: "1px solid transparent",
+          background: "transparent",
+          color: "inherit",
+          font: "inherit",
+          fontSize: "12px",
+          textAlign: "left",
+          cursor: disabled === true ? "default" : "pointer",
+          opacity: disabled === true ? 0.5 : 1
+        },
+        children: [
+          jsx.jsx("span", { style: { width: "16px", textAlign: "center" }, children: icon }),
+          jsx.jsx("span", { children: label })
+        ]
+      });
+    }
+
     /** Compact icon button used by the corner controls. */
     function CornerButton(props) {
       var hoverState = react.useState(false);
@@ -4037,6 +4069,11 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       var permState = react.useState(false);
       var permOpen = permState[0];
       var setPermOpen = permState[1];
+
+      // A FOGASKERÉK-panel: a karbantartó gombok egy ikon mögé vonva.
+      var toolsState = react.useState(false);
+      var toolsOpen = toolsState[0];
+      var setToolsOpen = toolsState[1];
 
       /**
        * A git panel "mellé kattintásra bezár" viselkedése.
@@ -4519,23 +4556,40 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
             disabled: busy,
             onClick: function () { setPermOpen(!permOpen); }
           }),
+          // ── fogaskerék: a frissítés / újraindítás / élesítés egy ikon mögött,
+          // lebegő panelben (a felhasználó kérése, 2026-11-15).
           jsx.jsx(CornerButton, {
-            icon: "⟳",
-            title: t("refreshPage"),
-            onClick: refreshPage
-          }),
-          jsx.jsx(CornerButton, {
-            icon: "⭯",
-            title: t("restartHarness"),
+            icon: "⚙",
+            title: t("refreshPage") + " / " + t("restartHarness") + " / " + t("deployNow"),
+            active: toolsOpen,
             disabled: busy,
-            onClick: restartHarness
+            onClick: function () { setToolsOpen(!toolsOpen); }
           }),
-          jsx.jsx(CornerButton, {
-            icon: "⇪",
-            title: t("deployNow"),
-            disabled: busy,
-            onClick: deployPlugin
-          }),
+          toolsOpen
+            ? jsx.jsx("div", {
+              "data-dsh-ui-extras": "tools",
+              style: {
+                position: "absolute",
+                top: "30px",
+                right: "6px",
+                zIndex: 60,
+                minWidth: "230px",
+                padding: "6px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "2px",
+                borderRadius: "8px",
+                border: "1px solid rgba(127,127,127,.45)",
+                background: "var(--dsw-alias-bg-elevated, #1d1d21)",
+                boxShadow: "0 8px 24px rgba(0,0,0,.45)"
+              },
+              children: [
+                toolRow("⟳", t("refreshPage"), refreshPage, false),
+                toolRow("⭯", t("restartHarness"), restartHarness, busy),
+                toolRow("⇪", t("deployNow"), deployPlugin, busy)
+              ]
+            })
+            : null,
           status
             ? jsx.jsx("span", {
               "data-dsh-ui-extras": "status",
