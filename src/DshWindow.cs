@@ -369,18 +369,7 @@ namespace DshWindow
                 // ASZINKRON érkezik, ezért azonnal ÉS 250 ms múlva is
                 // szinkronizáljuk (különben FEHÉR marad — mért hiba 2026-11-15).
                 content.UpdateLayout();
-                for (int i = 0; i < paneCount; i++)
-                {
-                    if (!visible[i]) continue;
-                    hosts[i].Visibility = Visibility.Collapsed;
-                }
-                content.UpdateLayout();
-                for (int i = 0; i < paneCount; i++)
-                {
-                    if (!visible[i]) continue;
-                    hosts[i].Visibility = Visibility.Visible;
-                }
-                content.UpdateLayout();
+
                 for (int i = 0; i < paneCount; i++)
                 {
                     if (visible[i]) hosts[i].SyncBounds();
