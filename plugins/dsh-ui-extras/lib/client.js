@@ -3804,10 +3804,11 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       return jsx.jsxs("div", {
         "data-dsh-ui-extras": "permissions-panel",
         style: {
-          position: "absolute",
-          top: "30px",
-          right: 0,
-          zIndex: 40,
+          position: "fixed",
+          top: "56px",
+          right: "12px",
+          zIndex: 700,
+          maxHeight: "calc(100vh - 220px)",
           width: "min(620px, 94vw)",
           maxHeight: "70vh",
           overflowY: "auto",
@@ -4885,10 +4886,11 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       return jsx.jsxs("div", {
         "data-dsh-ui-extras": "git-panel",
         style: {
-          position: "absolute",
-          top: "30px",
-          right: 0,
-          zIndex: 40,
+          position: "fixed",
+          top: "56px",
+          right: "12px",
+          zIndex: 700,
+          maxHeight: "calc(100vh - 220px)",
           width: "min(680px, 90vw)",
           maxHeight: "60vh",
           overflowY: "auto",
@@ -5348,10 +5350,11 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       return jsx.jsxs("div", {
         "data-dsh-ui-extras": "ssh-panel",
         style: {
-          position: "absolute",
-          top: "30px",
-          right: 0,
-          zIndex: 40,
+          position: "fixed",
+          top: "56px",
+          right: "12px",
+          zIndex: 700,
+          maxHeight: "calc(100vh - 220px)",
           // The editor needs room for a multi-line document; the read-only view
           // stays a small overlay.
           width: editor ? "min(760px, 95vw)" : "min(560px, 90vw)",
@@ -8184,10 +8187,11 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
             // ebből tudja, hogy a hibadoboz a saját panelé (lásd GIT_PANEL_MARK).
             "data-dsh-ui-extras-owner": this.props.owner,
             style: {
-              position: "absolute",
-              top: "30px",
-              right: 0,
-              zIndex: 40,
+              position: "fixed",
+              top: "56px",
+              right: "12px",
+              zIndex: 700,
+              maxHeight: "calc(100vh - 220px)",
               width: "min(520px, 92vw)",
               padding: "10px 12px",
               border: "1px solid rgba(252,165,165,0.5)",
