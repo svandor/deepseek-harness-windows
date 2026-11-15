@@ -283,12 +283,15 @@ namespace DshWindow
 
             for (int i = 0; i < paneCount; i++)
             {
-                if (i > 0)
+                var grid = desktopGrids[i / PanesPerDesktop];
+                int local = i % PanesPerDesktop;
+
+                if (local > 0)
                 {
-                    content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(SplitterWidth) });
+                    grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(SplitterWidth) });
                 }
 
-                content.ColumnDefinitions.Add(new ColumnDefinition
+                grid.ColumnDefinitions.Add(new ColumnDefinition
                 {
                     Width = new GridLength(paneRatios[i], GridUnitType.Star),
                     MinWidth = 320
@@ -311,10 +314,10 @@ namespace DshWindow
                 hosts.Add(pane);
                 FocusKeeper.RegisterPane(i, pane);
                 if (opts.FocusProbe) Probe.RegisterPane(i, pane);
-                Grid.SetColumn(pane, i * 2);
-                content.Children.Add(pane);
+                Grid.SetColumn(pane, local * 2);
+                grid.Children.Add(pane);
 
-                if (i > 0)
+                if (local > 0)
                 {
                     var splitter = new GridSplitter
                     {
@@ -327,8 +330,8 @@ namespace DshWindow
                         Background = SplitterBrush,
                         Cursor = System.Windows.Input.Cursors.SizeWE
                     };
-                    Grid.SetColumn(splitter, i * 2 - 1);
-                    content.Children.Add(splitter);
+                    Grid.SetColumn(splitter, local * 2 - 1);
+                    grid.Children.Add(splitter);
                 }
             }
 
@@ -336,6 +339,20 @@ namespace DshWindow
             {
                 Logger.Info("panes: " + paneCount + " (each pane has its own WebView2 profile)");
             }
+
+            int activeDesktop = Math.Max(1, Math.Min(desktopCount, opts.Desktop));
+            Action<int> applyDesktop = d =>
+            {
+                for (int i = 0; i < paneCount; i++)
+                {
+                    hosts[i].SetPaneVisible((i / PanesPerDesktop) + 1 == d);
+                }
+                for (int i = 0; i < paneCount; i++)
+                {
+                    if ((i / PanesPerDesktop) + 1 == d) hosts[i].SyncBounds();
+                }
+                Logger.Info("desktop " + d + "/" + desktopCount);
+            };
 
             // Remember the last position/size: every new window opens where the
             // previous one was left (important on a 32:9 desktop, where the
@@ -357,6 +374,8 @@ namespace DshWindow
                 Content = content,
                 ShowInTaskbar = true
             };
+
+            applyDesktop(activeDesktop);
 
             if (restoreGeometry)
             {
@@ -1174,6 +1193,20 @@ namespace DshWindow
                 Logger.Info("pane visible: " + ex.Message);
             }
         }
+        /// <summary>A WebView2 vezérlő méretének kényszerített szinkronja.</summary>
+        internal void SyncBounds()
+        {
+            try
+            {
+                UpdateLayout();
+                Resize();
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("syncBounds: " + ex.Message);
+            }
+        }
+
         private void Resize()
         {
             if (_controller == null || _child == IntPtr.Zero) return;
@@ -2359,6 +2392,7 @@ namespace DshWindow
         public string Url;              // attaches to an existing server instead of booting
         public bool NoBoot;             // never boot the server from the window
         public int Panes = 1;           // side-by-side panels, each its own client
+        public int Desktop;             // which desktop is shown (1-based, 3 panes each)
 
         /// <summary>
         /// Per-pane URL overrides, keyed by 1-based pane index
@@ -2402,6 +2436,7 @@ namespace DshWindow
                     case "--no-focus-restore": noFocusRestore = true; break;
                     case "--focus-probe": o.FocusProbe = true; break;
                     case "--panes": o.Panes = ParseInt(next, o.Panes); i++; break;
+        case "--desktop": o.Desktop = ParseInt(next, o.Desktop); i++; break;
                     case "--pane-url": ParsePaneUrl(o, next); i++; break;
                     case "--boot-timeout": o.BootTimeoutSeconds = ParseInt(next, o.BootTimeoutSeconds); i++; break;
                     case "--width": o.Width = ParseDouble(next, o.Width); i++; break;
