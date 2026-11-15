@@ -114,7 +114,7 @@ test("az apply regisztralja a tab tipust, a tab testet es a fejlec-ikont", async
   const bodies = registered.filter((entry) => !entry.tab);
   // A munkaasztal-ikonok feltetelesen (host valasz utan) regisztralodnak, ezert
   // a szinkron regisztraciok szama 2; a harmadik kulon ellenorzes.
-  assert.equal(bodies.length, 4, "tab test + fejlec-ikon + munkaasztal-valto (fejlec + dokk)");
+  assert.equal(bodies.length, 3, "tab test + fejlec-ikon + munkaasztal-valto (csak fejlec)");
   assert.ok(bodies.some((entry) => entry.key === "dsh-devadmin/admin"), "a tab test kulcsa az id");
 
   const header = bodies.find((entry) => entry.id === "devadmin-header");
@@ -123,13 +123,13 @@ test("az apply regisztralja a tab tipust, a tab testet es a fejlec-ikont", async
   // A hero (üres) panelen a fejléc nem jelenik meg, ezért a dokkban is van
   // egy példány — ez szándékos, a felhasználó kérése szerint.
   assert.ok(
-    bodies.some((entry) => entry.name === "conversation.input.dock"),
-    "a hero-változat a composer dokkban is regisztrálva van",
+    !bodies.some((entry) => entry.name === "conversation.input.dock"),
+    "nincs also duplikalt valto (a felhasznalo jelzese szerint)",
   );
 
   assert.ok(source.includes("devadmin-desktop"), "a munkaasztal-valto forrasban ott van (async regisztracio)");
   assert.equal(injections.filter((name) => name === HEADER_SLOT).length, 2, "ket fejlec-regisztracio (ikon + valto)");
-  assert.deepEqual([...new Set(injections)].sort(), [HEADER_SLOT, "conversation.input.dock", "sidebar.right.pane.tab"].sort());
+  assert.deepEqual([...new Set(injections)].sort(), [HEADER_SLOT, "sidebar.right.pane.tab"].sort());
   assert.equal(opened.length, 0, "az apply magatol nem nyit tabot");
 
   // az ikon megnyitja a tabot
