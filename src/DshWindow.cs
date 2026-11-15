@@ -381,7 +381,7 @@ namespace DshWindow
                     ? WindowStartupLocation.Manual
                     : (opts.Center ? WindowStartupLocation.CenterScreen : WindowStartupLocation.Manual),
                 Content = content,
-                ShowInTaskbar = opts.Desktop <= 1
+                ShowInTaskbar = true   // a rejtett ablakot a ShowWindow(SW_HIDE) veszi le a taskbarrol; a lathatonak mindig kell gomb
             };
 
             applyDesktop(activeDesktop);
