@@ -4556,40 +4556,49 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
             disabled: busy,
             onClick: function () { setPermOpen(!permOpen); }
           }),
-          // ── fogaskerék: a frissítés / újraindítás / élesítés egy ikon mögött,
-          // lebegő panelben (a felhasználó kérése, 2026-11-15).
-          jsx.jsx(CornerButton, {
-            icon: "⚙",
-            title: t("refreshPage") + " / " + t("restartHarness") + " / " + t("deployNow"),
-            active: toolsOpen,
-            disabled: busy,
-            onClick: function () { setToolsOpen(!toolsOpen); }
+          // ── fogaskerék: a frissítés / újraindítás / élesítés egy ikon mögött.
+          // A gomb és a panel EGY `position: relative` tokban van, ezért a
+          // panel a GOMBHOZ igazodik (nem az oldalhoz) — így nem takar ki
+          // idegen tartalmat (mért hiba, 2026-11-15), és minden művelet után
+          // bezárul.
+          jsx.jsx("span", {
+            style: { position: "relative", display: "inline-flex" },
+            children: [
+              jsx.jsx(CornerButton, {
+                icon: "⚙",
+                title: t("refreshPage") + " / " + t("restartHarness") + " / " + t("deployNow"),
+                active: toolsOpen,
+                disabled: busy,
+                onClick: function () { setToolsOpen(!toolsOpen); }
+              }),
+              toolsOpen
+                ? jsx.jsx("div", {
+                  "data-dsh-ui-extras": "tools",
+                  style: {
+                    position: "absolute",
+                    top: "100%",
+                    right: "0",
+                    marginTop: "4px",
+                    zIndex: 900,
+                    minWidth: "230px",
+                    padding: "6px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "2px",
+                    borderRadius: "8px",
+                    border: "1px solid rgba(127,127,127,.45)",
+                    background: "var(--dsw-alias-bg-elevated, #1d1d21)",
+                    boxShadow: "0 8px 24px rgba(0,0,0,.45)"
+                  },
+                  children: [
+                    toolRow("⟳", t("refreshPage"), function () { setToolsOpen(false); refreshPage(); }, false),
+                    toolRow("⭯", t("restartHarness"), function () { setToolsOpen(false); restartHarness(); }, busy),
+                    toolRow("⇪", t("deployNow"), function () { setToolsOpen(false); deployPlugin(); }, busy)
+                  ]
+                })
+                : null
+            ]
           }),
-          toolsOpen
-            ? jsx.jsx("div", {
-              "data-dsh-ui-extras": "tools",
-              style: {
-                position: "absolute",
-                top: "30px",
-                right: "6px",
-                zIndex: 60,
-                minWidth: "230px",
-                padding: "6px",
-                display: "flex",
-                flexDirection: "column",
-                gap: "2px",
-                borderRadius: "8px",
-                border: "1px solid rgba(127,127,127,.45)",
-                background: "var(--dsw-alias-bg-elevated, #1d1d21)",
-                boxShadow: "0 8px 24px rgba(0,0,0,.45)"
-              },
-              children: [
-                toolRow("⟳", t("refreshPage"), refreshPage, false),
-                toolRow("⭯", t("restartHarness"), restartHarness, busy),
-                toolRow("⇪", t("deployNow"), deployPlugin, busy)
-              ]
-            })
-            : null,
           status
             ? jsx.jsx("span", {
               "data-dsh-ui-extras": "status",
