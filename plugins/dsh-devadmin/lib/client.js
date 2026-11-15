@@ -779,7 +779,12 @@ window.__ModuleLoader__.load({
       // tooltip, a többi menüsor-gombbal azonos kerettel. A kattintás a host
       // /devadmin/desktop végpontjára megy, ami a state\window-desktop.txt-be
       // ír — ezt a DshWindow 500 ms-onként figyeli, tehát NINCS újraindítás.
-      ctx.slots.inject(HEADER_SLOT, () =>
+      // CSAK akkor regisztraljuk a munkaasztal-ikonokat, ha van 2. asztal
+      // (4-6 panel). 3 paneles modban nincs mit valtani, ezert nem is latszik.
+      getJson("/devadmin/state")
+        .then((state) => {
+          if (!state || Number(state.desktopCount ?? 1) < 2) return;
+          ctx.slots.inject(HEADER_SLOT, () =>
         ctx.slots.register(
           {
             name: HEADER_SLOT,
@@ -794,6 +799,10 @@ window.__ModuleLoader__.load({
           DesktopSwitcher,
         ),
       );
+        })
+        .catch(() => {
+          /* ha a host nem valaszol, marad a korabbi viselkedes: nincs valto */
+        });
     }
 
     exports.DevAdminPanel = DevAdminPanel;

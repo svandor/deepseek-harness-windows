@@ -472,6 +472,7 @@ async function handleState(_req, res) {
     // Az aktiv munkaasztal: a window-desktop.txt-t olvassuk (ugyanaz, amit a
     // DshWindow figyel) — e nelkul a fejlec nem tudta megmutatni, melyiken vagy.
     desktop: readDesktopIndex(),
+    desktopCount: readDesktopCount(),
     services: buildServices(state),
     database,
     sites,
@@ -593,6 +594,21 @@ async function handlePhp(url, res) {
  * átvált, újraindítás nélkül. Ez a webes fejléc 1/2 ikonjainak háttere.
  */
 /** Az aktív munkaasztal sorszáma (state\window-desktop.txt; hiba esetén 1). */
+/**
+ * Hány munkaasztal van: a tálca `panes` beállításából (3 panel = 1 asztal,
+ * 4-6 = 2 asztal). Ebből dől el, hogy a fejléc 1/2 ikonjai MEGJELENJENEK-e:
+ * 3 paneles módban nincs mit váltani, ott nem szabad látszaniuk (felhasználói
+ * jelzés, 2026-11-15).
+ */
+function readDesktopCount() {
+  try {
+    const tray = JSON.parse(readFileSync(join(REPO_ROOT, "state", "tray-config.json"), "utf8"));
+    const panes = Number(tray?.panes ?? 3);
+    return panes > 3 ? 2 : 1;
+  } catch {
+    return 1;
+  }
+}
 function readDesktopIndex() {
   try {
     const text = readFileSync(join(REPO_ROOT, "state", "window-desktop.txt"), "utf8").trim();
