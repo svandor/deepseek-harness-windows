@@ -342,6 +342,10 @@ namespace DshWindow
                 {
                     bool shown = (i / PanesPerDesktop) + 1 == d;
                     visible[i] = shown;
+                    // FONTOS: a ColumnDefinition MinWidth = 320 volt, ezért a
+                    // 0 szélesség ellenére a rejtett panel oszlopa 320 px maradt —
+                    // ezért nézett ki hibásan a 2. asztal (mért hiba, 2026-11-15).
+                    content.ColumnDefinitions[i * 2].MinWidth = shown ? 320 : 0;
                     content.ColumnDefinitions[i * 2].Width = shown
                         ? new GridLength(paneRatios[i], GridUnitType.Star)
                         : new GridLength(0);
