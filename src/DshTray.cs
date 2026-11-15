@@ -184,6 +184,7 @@ namespace DshTray
         private bool _closeLogged;      // a "felhasználó bezárta" esemény már naplózva
         private DateTime _lastRetune = DateTime.MinValue;
         private System.Windows.Forms.Timer _desktopWatch;   // window-desktop.txt figyelo
+        private DateTime _desktopStamp;
         private int _desktop = 1;            // utoljara latott munkaasztal
         private string _windowUrl = string.Empty;
         private volatile bool _awaitToken;   // harness-újraindítás után az új tokenre várunk
@@ -1004,9 +1005,20 @@ namespace DshTray
             try
             {
                 int current = ReadDesktop();
-                if (current != _desktop)
+                // Nem csak az ERTEK valtozasa szamit: ha a felulet ugyanazt a
+                // szamot irja ujra (pl. 2 -> 2), a valtasnak akkor is meg kell
+                // tortennie. Ezert a fajl irasidejet is figyeljuk.
+                DateTime stamp = DateTime.MinValue;
+                try
+                {
+                    string path = Path.Combine(_cfg.StateDir, "window-desktop.txt");
+                    if (File.Exists(path)) stamp = File.GetLastWriteTimeUtc(path);
+                }
+                catch { }
+                if (current != _desktop || stamp != _desktopStamp)
                 {
                     _desktop = current;
+                    _desktopStamp = stamp;
                     SetDesktop(current);
                 }
             }
