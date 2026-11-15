@@ -249,6 +249,43 @@ namespace DshWindow
             }
         }
 
+        /// <summary>A munkaasztal-allapot fajlja (a naplo mellett, a repo state mappajaban).</summary>
+        private static string DesktopStatePath(string logFile)
+        {
+            string directory = string.IsNullOrWhiteSpace(logFile)
+                ? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "state")
+                : Path.GetDirectoryName(logFile);
+            return Path.Combine(directory ?? ".", "window-desktop.txt");
+        }
+
+        /// <summary>A legutóbb használt munkaasztal sorszáma (hiba esetén 1).</summary>
+        private static int ReadDesktopState(string logFile)
+        {
+            try
+            {
+                string path = DesktopStatePath(logFile);
+                if (!File.Exists(path)) return 1;
+                int value;
+                return int.TryParse(File.ReadAllText(path).Trim(), out value) && value > 0 ? value : 1;
+            }
+            catch
+            {
+                return 1;
+            }
+        }
+
+        /// <summary>A választott munkaasztal mentése a következő ablaknyitáshoz.</summary>
+        private static void SaveDesktopState(string logFile, int desktop)
+        {
+            try
+            {
+                File.WriteAllText(DesktopStatePath(logFile), desktop.ToString(CultureInfo.InvariantCulture));
+            }
+            catch
+            {
+                // a mentés hibája nem állíthatja meg a váltást
+            }
+        }
         private static int ShowWindow(Options opts, string url)
         {
             var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
@@ -333,7 +370,12 @@ namespace DshWindow
             // ne a cimsor-huzast lassa rajtuk.
             const int PanesPerDesktop = 3;
             int desktopCount = (paneCount + PanesPerDesktop - 1) / PanesPerDesktop;
-            int activeDesktop = Math.Max(1, Math.Min(desktopCount, opts.Desktop));
+            // A választott munkaasztal megjegyzése: ha nincs --desktop, a
+            // legutóbbit nyitjuk (a felhasználó kérése: a 2. asztal legyen
+            // elérhető, és ne kelljen minden ablaknyitásnál újraváltani).
+            int wantedDesktop = opts.Desktop;
+            if (wantedDesktop <= 0) wantedDesktop = ReadDesktopState(opts.LogFile);
+            int activeDesktop = Math.Max(1, Math.Min(desktopCount, wantedDesktop));
 
             Action<int> applyDesktop = d =>
             {
@@ -402,6 +444,9 @@ namespace DshWindow
                     }
                     ((Button)s).Background = (Brush)new BrushConverter().ConvertFromString("#2A2A31");
                     applyDesktop(wanted);
+                    // A választás megjegyzése: a következő ablaknyitás ezen az
+                    // asztalon indul (a felhasználó kérése).
+                    SaveDesktopState(opts.LogFile, wanted);
                 };
                 desktopButtons.Add(button);
                 captionButtons.Children.Add(button);
@@ -2452,7 +2497,7 @@ namespace DshWindow
         public string Url;              // attaches to an existing server instead of booting
         public bool NoBoot;             // never boot the server from the window
         public int Panes = 1;           // side-by-side panels, each its own client
-        public int Desktop = 1;         // which desktop is shown (1-based; 3 panes per desktop)
+        public int Desktop;            // 0 = a legutóbb mentett asztal         // which desktop is shown (1-based; 3 panes per desktop)
         public string ProjectName;      // shown in the caption, left side
         public string Version;          // shown in the caption, left side
 
