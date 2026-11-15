@@ -265,7 +265,21 @@ namespace DshWindow
             int paneCount = Math.Max(1, Math.Min(MaxPanes, opts.Panes));
             double[] paneRatios = PaneLayout.Load(paneCount);
             var hosts = new List<DshWebViewHost>(paneCount);
+            // ── munkaasztalok (2026-11-15, dokumentált WebView2-minta) ────
+            // Asztalonként KÜLÖN Grid, ugyanabban a cellában EGYMÁSRA fektetve:
+            // így minden panel valódi méretet kap (nincs 0 széles oszlop), a
+            // váltás pedig a WebView2 dokumentált IsVisible kapcsolójával megy —
+            // a Collapsed/0 méret megszünteti a felületet és fehér panelt ad.
+            const int PanesPerDesktop = 3;
+            int desktopCount = (paneCount + PanesPerDesktop - 1) / PanesPerDesktop;
             var content = new Grid { Background = DarkBackground };
+            var desktopGrids = new Grid[desktopCount];
+            for (int d = 0; d < desktopCount; d++)
+            {
+                var grid = new Grid { Background = DarkBackground };
+                desktopGrids[d] = grid;
+                content.Children.Add(grid);
+            }
 
             for (int i = 0; i < paneCount; i++)
             {
@@ -1142,6 +1156,24 @@ namespace DshWindow
             try { core.ExecuteScriptAsync(ThemeScript); } catch { }
         }
 
+        /// <summary>
+        /// A panel WebView2-jének lathatosaga. Dokumentalt modszer: a vezérlőt
+        /// NEM Collapsed-del vagy 0 mérettel kell elrejteni (az megszünteti a
+        /// felületet, és a panel FEHÉR marad — mért hiba), hanem
+        /// CoreWebView2Controller.IsVisible = false -szal, miközben a panel a
+        /// layoutban valódi mérettel marad.
+        /// </summary>
+        internal void SetPaneVisible(bool visible)
+        {
+            try
+            {
+                if (_controller != null) _controller.IsVisible = visible;
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("pane visible: " + ex.Message);
+            }
+        }
         private void Resize()
         {
             if (_controller == null || _child == IntPtr.Zero) return;
