@@ -229,6 +229,7 @@ namespace DshTray
             _desktopWatch.Start();
             Log.Info("munkaasztal-figyelo elindult (700 ms)");
             Log.Info("felügyelet elindult (20 s), ütemező elindult (60 s)");
+            HealDesktopPidFromRunningWindow();
         }
 
         // ── konfiguráció ───────────────────────────────────────────────────
@@ -644,6 +645,7 @@ namespace DshTray
                 return;
             }
             _closeLogged = false;
+            HealDesktopPidFromRunningWindow();
             // Indítási hullám elleni korlát: 10 percenként legfeljebb három.
             DateTime now = DateTime.UtcNow;
             if (_windowWindow == DateTime.MinValue || (now - _windowWindow).TotalMinutes > 10)
@@ -958,6 +960,31 @@ namespace DshTray
         }
 
         /// <summary>
+        /// If the desktop-1 pid file is missing or stale but a DshWindow process
+        /// is actually running, point the file at the newest such process.
+        /// </summary>
+        private void HealDesktopPidFromRunningWindow()
+        {
+            if (RunningDesktopWindow(1) != 0) return;
+            try
+            {
+                Process newest = null;
+                foreach (Process p in Process.GetProcessesByName("DshWindow"))
+                {
+                    try
+                    {
+                        if (newest == null || p.StartTime > newest.StartTime) newest = p;
+                    }
+                    catch { }
+                }
+                if (newest == null) return;
+                File.WriteAllText(DesktopPidPath(1), newest.Id.ToString(CultureInfo.InvariantCulture), new UTF8Encoding(false));
+                Log.Info("pid fajl potolva: " + newest.Id);
+            }
+            catch (Exception ex) { Log.Error("pid potlas: " + ex.Message); }
+        }
+
+        /// <summary>
         /// Egy munkaasztal-ablak elinditasa: sajat DshWindow.exe --panes 3
         /// folyamat. Ha az adott asztal mar fut, nem inditunk masodikat; az
         /// indulas pid-jet a pid-fajlba irjuk.
@@ -1024,22 +1051,28 @@ namespace DshTray
         /// </summary>
         private static IntPtr FindWindowForProcess(int pid)
         {
-            IntPtr fallback = IntPtr.Zero;
-            NativeMethods.EnumWindowsProc callback = (hWnd, lParam) =>
+            var windows = new List<IntPtr>();
+            NativeMethods.EnumWindows((hWnd, lParam) =>
             {
                 uint windowPid;
                 NativeMethods.GetWindowThreadProcessId(hWnd, out windowPid);
-                if (windowPid != (uint)pid) return true; // masik folyamat: folytatjuk
-                if (fallback == IntPtr.Zero) fallback = hWnd;
-                if (NativeMethods.GetWindowTextLength(hWnd) > 0)
-                {
-                    fallback = hWnd; // szoveges ablak: ezt preferaljuk
-                    return false;    // leallunk
-                }
+                if (windowPid == (uint)pid) windows.Add(hWnd);
                 return true;
-            };
-            NativeMethods.EnumWindows(callback, IntPtr.Zero);
-            return fallback;
+            }, IntPtr.Zero);
+            if (windows.Count == 0) return IntPtr.Zero;
+            IntPtr lastCandidate = IntPtr.Zero, strict = IntPtr.Zero, lastText = IntPtr.Zero;
+            int candidates = 0;
+            foreach (IntPtr h in windows)
+            {
+                if (NativeMethods.GetWindowTextLength(h) > 0) lastText = h;
+                bool topLevelText = NativeMethods.GetWindow(h, NativeMethods.GW_OWNER) == IntPtr.Zero
+                    && NativeMethods.GetWindowTextLength(h) > 0;
+                if (topLevelText) { candidates++; lastCandidate = h; }
+                if (topLevelText && NativeMethods.IsWindowVisible(h)) strict = h;
+            }
+            if (candidates == 1) return lastCandidate;
+            if (strict != IntPtr.Zero) return strict;
+            return lastText != IntPtr.Zero ? lastText : windows[0];
         }
 
         /// <summary>A munkaasztal-ablak ablakfogantyuja, ha a folyamat el.</summary>
@@ -1376,6 +1409,7 @@ namespace DshTray
         public const int SW_HIDE = 0;
         public const int SW_SHOW = 5;
         public const int SW_RESTORE = 9;
+        public const uint GW_OWNER = 4;
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
@@ -1397,6 +1431,9 @@ namespace DshTray
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         internal static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         internal static extern bool IsWindow(IntPtr hWnd);
