@@ -323,6 +323,100 @@ namespace DshWindow
                 Logger.Info("panes: " + paneCount + " (each pane has its own WebView2 profile)");
             }
 
+            // ── munkaasztalok (2026-11-15) ────────────────────────────────
+            // A 3 fölötti panelek a második asztalra kerülnek: 6 panel = 3 + 3.
+            // Egyszerre csak az aktív asztal paneljei látszanak, a többi panel
+            // oszlopa 0 széles (a WebView2 él, csak nem rajzol).
+            const int PanesPerDesktop = 3;
+            int desktopCount = (paneCount + PanesPerDesktop - 1) / PanesPerDesktop;
+            int activeDesktop = Math.Max(1, Math.Min(desktopCount, opts.Desktop));
+
+            Grid rootContent = content;
+
+            Action<int> applyDesktop = d =>
+            {
+                bool[] visible = new bool[paneCount];
+                for (int i = 0; i < paneCount; i++)
+                {
+                    bool shown = (i / PanesPerDesktop) + 1 == d;
+                    visible[i] = shown;
+                    // A panel oszlopa (2*i) és az előtte lévő elválasztó (2*i-1).
+                    content.ColumnDefinitions[i * 2].Width = shown
+                        ? new GridLength(paneRatios[i], GridUnitType.Star)
+                        : new GridLength(0);
+                    if (i > 0)
+                    {
+                        content.ColumnDefinitions[i * 2 - 1].Width = shown ? new GridLength(SplitterWidth) : new GridLength(0);
+                    }
+                    hosts[i].Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
+                }
+                int shownCount = 0;
+                for (int i = 0; i < paneCount; i++) if (visible[i]) shownCount++;
+                Logger.Info("desktop " + d + "/" + desktopCount + " (visible panes: " + shownCount + ")");
+            };
+
+            if (desktopCount > 1)
+            {
+                // Fejléc-sáv a panelek FÖLÖTT, jobbra igazítva: ez a rendszer
+                // kicsinyítő gombja előtti sávban van (a kliens-terület tetején).
+                var strip = new Grid
+                {
+                    Height = 30,
+                    Background = DarkBackground,
+                    HorizontalAlignment = HorizontalAlignment.Stretch
+                };
+                strip.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                var buttons = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 6, 0)
+                };
+                var desktopButtons = new List<Button>();
+                for (int d = 1; d <= desktopCount; d++)
+                {
+                    int wanted = d;
+                    var button = new Button
+                    {
+                        Content = d + ". munkaterulet",
+                        Height = 22,
+                        Margin = new Thickness(4, 0, 0, 0),
+                        Padding = new Thickness(8, 0, 8, 0),
+                        Background = Brushes.Transparent,
+                        Foreground = (Brush)new BrushConverter().ConvertFromString("#C9C9CF"),
+                        BorderBrush = (Brush)new BrushConverter().ConvertFromString("#3A3A40"),
+                        BorderThickness = new Thickness(1),
+                        ToolTip = "Munkaterulet " + d + " (panelek " + (((d - 1) * PanesPerDesktop) + 1)
+                            + "-" + Math.Min(paneCount, d * PanesPerDesktop) + ")"
+                    };
+                    button.Click += (s, e) =>
+                    {
+                        foreach (Button other in desktopButtons)
+                        {
+                            other.Background = Brushes.Transparent;
+                        }
+                        ((Button)s).Background = (Brush)new BrushConverter().ConvertFromString("#2A2A31");
+                        applyDesktop(wanted);
+                    };
+                    desktopButtons.Add(button);
+                    buttons.Children.Add(button);
+                }
+                strip.Children.Add(buttons);
+                Grid.SetColumn(buttons, 0);
+                Grid.SetRow(buttons, 0);
+
+                rootContent = new Grid();
+                rootContent.RowDefinitions.Add(new RowDefinition { Height = new GridLength(30) });
+                rootContent.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                Grid.SetRow(strip, 0);
+                rootContent.Children.Add(strip);
+                Grid.SetRow(content, 1);
+                rootContent.Children.Add(content);
+            }
+
+            applyDesktop(activeDesktop);
+
             // Remember the last position/size: every new window opens where the
             // previous one was left (important on a 32:9 desktop, where the
             // useful place is rarely the screen centre).
@@ -340,7 +434,7 @@ namespace DshWindow
                 WindowStartupLocation = restoreGeometry || (opts.X.HasValue && opts.Y.HasValue)
                     ? WindowStartupLocation.Manual
                     : (opts.Center ? WindowStartupLocation.CenterScreen : WindowStartupLocation.Manual),
-                Content = content,
+                Content = rootContent,
                 ShowInTaskbar = true
             };
 
@@ -2327,6 +2421,7 @@ namespace DshWindow
         public string Url;              // attaches to an existing server instead of booting
         public bool NoBoot;             // never boot the server from the window
         public int Panes = 1;           // side-by-side panels, each its own client
+        public int Desktop = 1;         // which desktop is shown (1-based; 3 panes per desktop)
 
         /// <summary>
         /// Per-pane URL overrides, keyed by 1-based pane index
@@ -2370,6 +2465,7 @@ namespace DshWindow
                     case "--no-focus-restore": noFocusRestore = true; break;
                     case "--focus-probe": o.FocusProbe = true; break;
                     case "--panes": o.Panes = ParseInt(next, o.Panes); i++; break;
+        case "--desktop": o.Desktop = ParseInt(next, o.Desktop); i++; break;
                     case "--pane-url": ParsePaneUrl(o, next); i++; break;
                     case "--boot-timeout": o.BootTimeoutSeconds = ParseInt(next, o.BootTimeoutSeconds); i++; break;
                     case "--width": o.Width = ParseDouble(next, o.Width); i++; break;
