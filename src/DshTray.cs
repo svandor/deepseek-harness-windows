@@ -183,6 +183,8 @@ namespace DshTray
         private DateTime _windowWindow = DateTime.MinValue;
         private bool _closeLogged;      // a "felhasználó bezárta" esemény már naplózva
         private DateTime _lastRetune = DateTime.MinValue;
+        private System.Windows.Forms.Timer _desktopWatch;   // window-desktop.txt figyelo
+        private int _desktop = 1;            // utoljara latott munkaasztal
         private string _windowUrl = string.Empty;
         private volatile bool _awaitToken;   // harness-újraindítás után az új tokenre várunk
 
@@ -202,6 +204,15 @@ namespace DshTray
 
             _supervise = new System.Threading.Timer(_ => Supervise(), null, 1500, 20000);
             _schedule = new System.Threading.Timer(_ => Scheduled(), null, 5000, 60000);
+
+            // Munkaasztal-figyelo: a webes fejlec 1/2 gombja a
+            // state\window-desktop.txt-t irja; 700 ms-onkent figyeljuk, es
+            // valtozasra atvaltunk (4-6 panel eseten ket kulon ablak).
+            _desktop = ReadDesktop();
+            _desktopWatch = new System.Windows.Forms.Timer { Interval = 700 };
+            _desktopWatch.Tick += (s, e) => DesktopWatchTick();
+            _desktopWatch.Start();
+            Log.Info("munkaasztal-figyelo elindult (700 ms)");
             Log.Info("felügyelet elindult (20 s), ütemező elindult (60 s)");
         }
 
@@ -872,18 +883,136 @@ namespace DshTray
         {
             try
             {
+                int clamped = Math.Max(1, Math.Min(2, desktop));
                 string directory = Path.GetDirectoryName(_cfg.WindowLog);
                 if (string.IsNullOrEmpty(directory)) return;
                 File.WriteAllText(
                     Path.Combine(directory, "window-desktop.txt"),
-                    desktop.ToString(CultureInfo.InvariantCulture));
-                Log.Info("munkaasztal: " + desktop);
+                    clamped.ToString(CultureInfo.InvariantCulture));
+                Log.Info("munkaasztal: " + clamped);
+                // 4-6 panel eseten ket kulon ablak van: a kivalasztottat
+                // eloterbe hozzuk, es ha meg nem fut, elinditjuk. 1-3 panelnel
+                // a regi viselkedes marad: csak a fajlt irjuk.
+                if (_cfg.Panes > 3)
+                {
+                    BringToFront(clamped);
+                    StartDesktopWindow(clamped);
+                }
             }
             catch (Exception ex)
             {
                 Log.Error("munkaasztal: " + ex.Message);
             }
         }
+        // ---- munkaasztal-ablakok (ket kulon ablak, 4-6 panel eseten) ----
+        /// <summary>A munkaasztal-ablak pid-fajljanak utvonala.</summary>
+        private string DesktopPidPath(int desktop)
+        {
+            return Path.Combine(_cfg.StateDir, "window-desktop" + desktop + ".pid");
+        }
+
+        /// <summary>
+        /// A munkaasztal-ablak futo PID-je, ha a folyamat el ES a neve
+        /// DshWindow; egyebkent 0. A pid-fajlbol olvasunk, es a folyamatot is
+        /// ellenorizzuk, hogy egy elavult bejegyzest ne tekintsunk elonek.
+        /// </summary>
+        private int RunningDesktopWindow(int desktop)
+        {
+            try
+            {
+                string path = DesktopPidPath(desktop);
+                if (!File.Exists(path)) return 0;
+                int pid;
+                if (!int.TryParse(File.ReadAllText(path).Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out pid) || pid <= 0)
+                    return 0;
+                Process proc = Process.GetProcessById(pid);
+                return string.Equals(proc.ProcessName, "DshWindow", StringComparison.Ordinal) ? pid : 0;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// Egy munkaasztal-ablak elinditasa: sajat DshWindow.exe --panes 3
+        /// folyamat. Ha az adott asztal mar fut, nem inditunk masodikat; az
+        /// indulas pid-jet a pid-fajlba irjuk.
+        /// </summary>
+        private void StartDesktopWindow(int desktop)
+        {
+            if (RunningDesktopWindow(desktop) != 0) return;
+            string url = CurrentUrl();
+            if (string.IsNullOrEmpty(url))
+            {
+                Log.Info("munkaasztal " + desktop + " inditas halasztva: meg nincs token URL");
+                return;
+            }
+            string args = "--port " + _cfg.Port
+                + " --panes 3"
+                + " --desktop " + desktop
+                + " --no-boot --width " + _cfg.Width.ToString(CultureInfo.InvariantCulture)
+                + " --height " + _cfg.Height.ToString(CultureInfo.InvariantCulture)
+                + " --log \"" + _cfg.WindowLog + "\""
+                + " --icon \"" + _cfg.IconFile + "\""
+                + " --dsh-home \"" + _cfg.DshHome + "\""
+                + " --dsh-bin \"" + _cfg.DshBin + "\""
+                + " --url \"" + url + "\" --restart-if-stale";
+            try
+            {
+                Log.Info("munkaasztal " + desktop + " inditas (3 panel)");
+                Process proc = Process.Start(new ProcessStartInfo
+                {
+                    FileName = _cfg.WindowExe,
+                    Arguments = args,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    WorkingDirectory = _cfg.Root
+                });
+                if (proc != null)
+                {
+                    File.WriteAllText(DesktopPidPath(desktop), proc.Id.ToString(CultureInfo.InvariantCulture), new UTF8Encoding(false));
+                    Log.Info("munkaasztal " + desktop + " pid=" + proc.Id);
+                }
+            }
+            catch (Exception ex) { Log.Error("munkaasztal " + desktop + " inditas: " + ex.Message); }
+        }
+
+        /// <summary>A kivalasztott munkaasztal ablakenak eloterbe hozasa.</summary>
+        private void BringToFront(int desktop)
+        {
+            int pid = RunningDesktopWindow(desktop);
+            if (pid == 0) return;
+            try
+            {
+                Process proc = Process.GetProcessById(pid);
+                proc.Refresh();
+                IntPtr hwnd = proc.MainWindowHandle;
+                if (hwnd != IntPtr.Zero) NativeMethods.SetForegroundWindow(hwnd);
+            }
+            catch (Exception ex) { Log.Error("munkaasztal " + desktop + " eloterbe hozas: " + ex.Message); }
+        }
+
+        /// <summary>
+        /// A window-desktop.txt figyeloje: a webes fejlec 1/2 gombja irja a
+        /// fajlt; ha a tartalom elter a megjegyzett ertektol, atvaltunk.
+        /// </summary>
+        private void DesktopWatchTick()
+        {
+            if (_stopping) return;
+            try
+            {
+                int current = ReadDesktop();
+                if (current != _desktop)
+                {
+                    _desktop = current;
+                    SetDesktop(current);
+                }
+            }
+            catch (Exception ex) { Log.Error("munkaasztal-figyelo: " + ex.Message); }
+        }
+
         private void SetPanes(int panes)
         {
             int clamped = Math.Max(1, Math.Min(6, panes));
@@ -1046,12 +1175,47 @@ namespace DshTray
         }
 
         // ── leállítás ──────────────────────────────────────────────────────
+        /// <summary>
+        /// Kilepeskor a munkaasztal-ablakok leallitasa: csak azokat a
+        /// DshWindow folyamatokat oljuk meg, amelyek pid-je a pid-fajlban
+        /// szerepel. A foablaknak nincs pid-fajlja, ezert erintetlen marad.
+        /// </summary>
+        private void StopDesktopWindows()
+        {
+            for (int desktop = 1; desktop <= 2; desktop++)
+            {
+                string pidPath = DesktopPidPath(desktop);
+                try
+                {
+                    if (!File.Exists(pidPath)) continue;
+                    int pid;
+                    if (int.TryParse(File.ReadAllText(pidPath).Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out pid) && pid > 0)
+                    {
+                        try
+                        {
+                            Process proc = Process.GetProcessById(pid);
+                            if (string.Equals(proc.ProcessName, "DshWindow", StringComparison.Ordinal))
+                            {
+                                proc.Kill();
+                                Log.Info("munkaasztal " + desktop + " (pid " + pid + ") leallitva");
+                            }
+                        }
+                        catch { }
+                    }
+                    File.Delete(pidPath);
+                }
+                catch (Exception ex) { Log.Error("munkaasztal " + desktop + " pid-takaritas: " + ex.Message); }
+            }
+        }
+
         private void ExitApp()
         {
             Log.Info("tálca kilépés");
             _stopping = true;
+            StopDesktopWindows();
             try { if (_supervise != null) _supervise.Dispose(); } catch { }
             try { if (_schedule != null) _schedule.Dispose(); } catch { }
+            try { if (_desktopWatch != null) { _desktopWatch.Stop(); _desktopWatch.Dispose(); } } catch { }
             try { if (_icon != null) { _icon.Visible = false; _icon.Dispose(); } } catch { }
             ExitThread();
         }
