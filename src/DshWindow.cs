@@ -32,6 +32,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Shell;
 using Microsoft.Web.WebView2.Core;
 
 namespace DshWindow
@@ -323,15 +324,16 @@ namespace DshWindow
                 Logger.Info("panes: " + paneCount + " (each pane has its own WebView2 profile)");
             }
 
-            // ── munkaasztalok (2026-11-15) ────────────────────────────────
-            // A 3 fölötti panelek a második asztalra kerülnek: 6 panel = 3 + 3.
-            // Egyszerre csak az aktív asztal paneljei látszanak, a többi panel
-            // oszlopa 0 széles (a WebView2 él, csak nem rajzol).
+            // ── munkaasztalok a FEJLÉCBEN (2026-11-15) ────────────────────
+            // A 3 fölötti panelek a második asztalra kerülnek (6 panel = 3+3).
+            // A váltó gombok a cimsorba kerulnek, KOZVETLENUL A KICSINYITO
+            // GOMB ELOTT (balra tole): ehhez a kliens-terulet a cimsorba
+            // nyulik (WindowChrome), es a sajat gombok
+            // IsHitTestVisibleInChrome = true jelolest kapnak, hogy a rendszer
+            // ne a cimsor-huzast lassa rajtuk.
             const int PanesPerDesktop = 3;
             int desktopCount = (paneCount + PanesPerDesktop - 1) / PanesPerDesktop;
             int activeDesktop = Math.Max(1, Math.Min(desktopCount, opts.Desktop));
-
-            Grid rootContent = content;
 
             Action<int> applyDesktop = d =>
             {
@@ -340,7 +342,6 @@ namespace DshWindow
                 {
                     bool shown = (i / PanesPerDesktop) + 1 == d;
                     visible[i] = shown;
-                    // A panel oszlopa (2*i) és az előtte lévő elválasztó (2*i-1).
                     content.ColumnDefinitions[i * 2].Width = shown
                         ? new GridLength(paneRatios[i], GridUnitType.Star)
                         : new GridLength(0);
@@ -355,66 +356,69 @@ namespace DshWindow
                 Logger.Info("desktop " + d + "/" + desktopCount + " (visible panes: " + shownCount + ")");
             };
 
-            if (desktopCount > 1)
+            // A cimsor-sav MINDIG letezik: ez a huzhato fejlec (WindowChrome
+            // CaptionHeight), benne a sajat gombokkal.
+            var caption = new Grid
             {
-                // Fejléc-sáv a panelek FÖLÖTT, jobbra igazítva: ez a rendszer
-                // kicsinyítő gombja előtti sávban van (a kliens-terület tetején).
-                var strip = new Grid
+                Height = 30,
+                Background = DarkBackground,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            caption.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var captionButtons = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center,
+                // A rendszer minimalizal/keretez/bezár gombjai ~138 px-et
+                // foglalnak a jobb szelen: ezert a mi gombjaink ettol BALRA
+                // maradnak (a felhasznalo keresese: a kicsinyito elott).
+                Margin = new Thickness(0, 0, 146, 0)
+            };
+            var desktopButtons = new List<Button>();
+            for (int d = 1; d <= desktopCount; d++)
+            {
+                int wanted = d;
+                var button = new Button
                 {
-                    Height = 30,
-                    Background = DarkBackground,
-                    HorizontalAlignment = HorizontalAlignment.Stretch
+                    Content = d + ". munkaterulet",
+                    Height = 22,
+                    Margin = new Thickness(4, 0, 0, 0),
+                    Padding = new Thickness(8, 0, 8, 0),
+                    FontSize = 12,
+                    Background = Brushes.Transparent,
+                    Foreground = (Brush)new BrushConverter().ConvertFromString("#C9C9CF"),
+                    BorderBrush = (Brush)new BrushConverter().ConvertFromString("#3A3A40"),
+                    BorderThickness = new Thickness(1),
+                    ToolTip = "Munkaterulet " + d + " (panelek " + (((d - 1) * PanesPerDesktop) + 1)
+                        + "-" + Math.Min(paneCount, d * PanesPerDesktop) + ")"
                 };
-                strip.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                var buttons = new StackPanel
+                WindowChrome.SetIsHitTestVisibleInChrome(button, true);
+                button.Click += (s, e) =>
                 {
-                    Orientation = Orientation.Horizontal,
-                    HorizontalAlignment = HorizontalAlignment.Right,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 0, 6, 0)
+                    foreach (Button other in desktopButtons)
+                    {
+                        other.Background = Brushes.Transparent;
+                    }
+                    ((Button)s).Background = (Brush)new BrushConverter().ConvertFromString("#2A2A31");
+                    applyDesktop(wanted);
                 };
-                var desktopButtons = new List<Button>();
-                for (int d = 1; d <= desktopCount; d++)
-                {
-                    int wanted = d;
-                    var button = new Button
-                    {
-                        Content = d + ". munkaterulet",
-                        Height = 22,
-                        Margin = new Thickness(4, 0, 0, 0),
-                        Padding = new Thickness(8, 0, 8, 0),
-                        Background = Brushes.Transparent,
-                        Foreground = (Brush)new BrushConverter().ConvertFromString("#C9C9CF"),
-                        BorderBrush = (Brush)new BrushConverter().ConvertFromString("#3A3A40"),
-                        BorderThickness = new Thickness(1),
-                        ToolTip = "Munkaterulet " + d + " (panelek " + (((d - 1) * PanesPerDesktop) + 1)
-                            + "-" + Math.Min(paneCount, d * PanesPerDesktop) + ")"
-                    };
-                    button.Click += (s, e) =>
-                    {
-                        foreach (Button other in desktopButtons)
-                        {
-                            other.Background = Brushes.Transparent;
-                        }
-                        ((Button)s).Background = (Brush)new BrushConverter().ConvertFromString("#2A2A31");
-                        applyDesktop(wanted);
-                    };
-                    desktopButtons.Add(button);
-                    buttons.Children.Add(button);
-                }
-                strip.Children.Add(buttons);
-                Grid.SetColumn(buttons, 0);
-                Grid.SetRow(buttons, 0);
-
-                rootContent = new Grid();
-                rootContent.RowDefinitions.Add(new RowDefinition { Height = new GridLength(30) });
-                rootContent.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-                Grid.SetRow(strip, 0);
-                rootContent.Children.Add(strip);
-                Grid.SetRow(content, 1);
-                rootContent.Children.Add(content);
+                desktopButtons.Add(button);
+                captionButtons.Children.Add(button);
             }
+            if (desktopCount > 1 && desktopButtons.Count > 0)
+            {
+                desktopButtons[0].Background = (Brush)new BrushConverter().ConvertFromString("#2A2A31");
+            }
+            caption.Children.Add(captionButtons);
+            Grid.SetColumn(captionButtons, 0);
 
+            Grid rootContent = new Grid();
+            rootContent.RowDefinitions.Add(new RowDefinition { Height = new GridLength(30) });
+            rootContent.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            Grid.SetRow(caption, 0);            rootContent.Children.Add(caption);
+            Grid.SetRow(content, 1);
+            rootContent.Children.Add(content);
             applyDesktop(activeDesktop);
 
             // Remember the last position/size: every new window opens where the
@@ -438,6 +442,17 @@ namespace DshWindow
                 ShowInTaskbar = true
             };
 
+            // A cimsor a KLIENS-terulet resze lesz (WindowChrome): igy a sajat
+            // gombjaink a rendszer kicsinyito/keretezo/bezaro gombjai MELLETT,
+            // azoktol BALRA kerulhetnek — a felhasznalo kérése szerint.
+            WindowChrome.SetWindowChrome(window, new WindowChrome
+            {
+                CaptionHeight = 30,
+                ResizeBorderThickness = new Thickness(4),
+                GlassFrameThickness = new Thickness(0),
+                CornerRadius = new CornerRadius(0),
+                UseAeroCaptionButtons = true
+            });
             if (restoreGeometry)
             {
                 window.Left = geometry.Left.Value;
