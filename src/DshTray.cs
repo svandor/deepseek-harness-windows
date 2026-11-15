@@ -699,7 +699,7 @@ namespace DshTray
             try
             {
                 Log.Info("ablak indítás");
-                Process.Start(new ProcessStartInfo
+                Process proc = Process.Start(new ProcessStartInfo
                 {
                     FileName = _cfg.WindowExe,
                     Arguments = args,
@@ -708,6 +708,11 @@ namespace DshTray
                     WindowStyle = ProcessWindowStyle.Hidden,
                     WorkingDirectory = _cfg.Root
                 });
+                if (proc != null)
+                {
+                    File.WriteAllText(DesktopPidPath(1), proc.Id.ToString(CultureInfo.InvariantCulture), new UTF8Encoding(false));
+                    Log.Info("foablak pid=" + proc.Id + " (munkaasztal 1)");
+                }
             }
             catch (Exception ex) { Log.Error("ablak indítás: " + ex.Message); }
         }
@@ -896,8 +901,9 @@ namespace DshTray
                 // a regi viselkedes marad: csak a fajlt irjuk.
                 if (true)
                 {
-                    BringToFront(clamped);
                     StartDesktopWindow(clamped);
+                    ShowDesktopWindow(clamped);
+                    if (WindowHandleOf(clamped) != IntPtr.Zero) HideOtherDesktopWindows(clamped);
                 }
             }
             catch (Exception ex)
@@ -993,6 +999,57 @@ namespace DshTray
                 if (hwnd != IntPtr.Zero) NativeMethods.SetForegroundWindow(hwnd);
             }
             catch (Exception ex) { Log.Error("munkaasztal " + desktop + " eloterbe hozas: " + ex.Message); }
+        }
+
+        /// <summary>A munkaasztal-ablak ablakfogantyuja, ha a folyamat el.</summary>
+        private IntPtr WindowHandleOf(int desktop)
+        {
+            int pid = RunningDesktopWindow(desktop);
+            if (pid == 0) return IntPtr.Zero;
+            try
+            {
+                Process p = Process.GetProcessById(pid);
+                p.Refresh();
+                IntPtr hwnd = p.MainWindowHandle;
+                if (hwnd == IntPtr.Zero)
+                {
+                    try { p.WaitForInputIdle(200); } catch { }
+                    p.Refresh();
+                    hwnd = p.MainWindowHandle;
+                }
+                return hwnd;
+            }
+            catch
+            {
+                return IntPtr.Zero;
+            }
+        }
+
+        /// <summary>A munkaasztal-ablak megjelenitese es eloterbe hozasa.</summary>
+        private void ShowDesktopWindow(int desktop)
+        {
+            IntPtr h = WindowHandleOf(desktop);
+            if (h == IntPtr.Zero) return;
+            if (NativeMethods.IsIconic(h)) NativeMethods.ShowWindow(h, NativeMethods.SW_RESTORE);
+            else NativeMethods.ShowWindow(h, NativeMethods.SW_SHOW);
+            NativeMethods.SetForegroundWindow(h);
+        }
+
+        /// <summary>A munkaasztal-ablak elrejtese ablakszinten (a paneleket nem bantjuk).</summary>
+        private void HideDesktopWindow(int desktop)
+        {
+            IntPtr h = WindowHandleOf(desktop);
+            if (h == IntPtr.Zero) return;
+            NativeMethods.ShowWindow(h, NativeMethods.SW_HIDE);
+        }
+
+        /// <summary>Az aktivon kivul minden masik munkaasztal-ablak elrejtese.</summary>
+        private void HideOtherDesktopWindows(int active)
+        {
+            for (int other = 1; other <= 2; other++)
+            {
+                if (other != active) HideDesktopWindow(other);
+            }
         }
 
         /// <summary>
@@ -1241,6 +1298,8 @@ namespace DshTray
 
     internal static class NativeMethods
     {
+        public const int SW_HIDE = 0;
+        public const int SW_SHOW = 5;
         public const int SW_RESTORE = 9;
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -1248,6 +1307,12 @@ namespace DshTray
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern bool IsIconic(IntPtr hWnd);
     }
 
     internal static class Program
