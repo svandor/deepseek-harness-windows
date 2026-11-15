@@ -695,8 +695,11 @@ window.__ModuleLoader__.load({
           alive = false;
         };
       }, []);
-      // 3 paneles modban nincs mit valtani: ilyenkor semmit nem rajzolunk.
-      if (desktopCount < 2) return null;
+      // CSAK akkor rejtjuk el, ha a host EGYERTELMUEN 1 asztalt mond. Ha a
+      // valasz meg nincs meg (0) vagy nem jott valasz, inkabb latszodjon a gomb:
+      // a korabbi "< 2" feltetel miatt a gombok sosem jelentek meg, ha a
+      // /devadmin/state keres nem futott le (felhasznaloi jelzes, 2026-11-15).
+      if (desktopCount === 1) return null;
       const button = (n) =>
         h(
           "button",
