@@ -6891,6 +6891,11 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                 // A terminal the user closed stays closed: the host keeps the
                 // finished record for a while, which would bring it back here.
                 if (closedRef.current[run.id] === true) return;
+                // A folyamatlistából felismert „külső" folyamat NEM terminál:
+                // nincs olvasható kimenete és nem irányítható. Korábban üres
+                // terminálként teleszemetelte a felületet (felhasználói jelzés,
+                // 2026-11-14) — itt is kihagyjuk, a host már nem is küldi.
+                if (run.external === true) return;
                 // MINDEN ÉLŐ terminál látszik, függetlenül a kiválasztott
                 // repótól (a felhasználó célja: „1 pane, de 4-5 munkafolyamat
                 // fusson, és lehessen köztük váltani"). A MÁS munkaterületről

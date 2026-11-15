@@ -2698,28 +2698,15 @@ async function handleCmd(req, res, url) {
       const knownPids = new Set(runs.flatMap((run) => [Number(run.id?.replace(/^ext-/u, "")) || -1]));
       const workspaces = [...new Set([...RUNS.values()].map((run) => run.workspace).filter((value) => typeof value === "string" && value.length > 0))];
       for (const layoutKey of Object.keys(readLayout())) workspaces.push(layoutKey);
-      for (const discovered of discoverExternalRuns(workspaces)) {
-        const pid = discovered.survivors[0];
-        if (knownPids.has(pid)) continue;
-        runs.push({
-          id: discovered.id,
-          workspace: discovered.workspace,
-          command: discovered.command,
-          label: discovered.label,
-          startedAt: discovered.startedAt,
-          done: false,
-          code: null,
-          promptAt: 0,
-          echoAt: null,
-          length: discovered.output.length,
-          recovered: true,
-          external: true,
-          // A külső folyamat él (épp most találta meg a szkennelés): e nélkül a
-          // kliens a munkaterület-szűrőn eldobta, és nem lehetett átváltani rá.
-          alive: true,
-          output: discovered.output
-        });
-      }
+      // NEM tesszük be a külső folyamatokat a terminál-listába.
+      //
+      // MIÉRT (2026-11-14, a felhasználó jelzése): a folyamatlistából felismert
+      // folyamatokból „üres terminálok" lettek a panelen — nem olvasható a
+      // kimenetük, nem irányítható a bemenetük, és a kiválasztott repó
+      // könyvtárával jelentek meg. Ez teleszemetelte a felületet. A
+      // `discoverExternalRuns()` megmarad a folyamat-őrhöz (leállítás), de a
+      // TERMINÁL-lista kizárólag a panel által indított valódi futásokat
+      // tartalmazza.
       sendJson(res, { ok: true, runs });
       return;
     }
