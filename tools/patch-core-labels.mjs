@@ -50,6 +50,20 @@ const PATCHES = [
 				hu
 			}), "ui-agent-preset: settings row dictionaries");`,
   },
+  {
+    name: "jobs: running -> hatrany-feladat (HU)",
+    file: join(CORE, "dsh-client-ui-jobs", "lib", "client.js"),
+    find: `			ctx.effect(() => ctx.locale.register("job", {
+				zh,
+				en
+			}), "ui-job: dictionaries");`,
+    replace: `			const hu = { ...en, "status.running": "fut", "status.stopping": "leallitas" };
+			ctx.effect(() => ctx.locale.register("job", {
+				zh,
+				en,
+				hu
+			}), "ui-job: dictionaries");`,
+  },
 ];
 
 function backupPath(file) {
