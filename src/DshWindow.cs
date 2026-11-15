@@ -503,7 +503,30 @@ namespace DshWindow
                 }
             };
             desktopWatch.Start();
-            applyDesktop(activeDesktop);
+            // FONTOS (2026-11-15): a kezdeti asztal-alkalmazast KESLELTETJUK.
+            // Ha a rejtett asztal paneljei 0 szelesen jonnek letre, a WebView2
+            // sosem inicializal rendes merettel, es a 2. asztal FEHER marad
+            // (ketszeri meresi hiba). Ezert indulaskor MINDEN panel kap valodi
+            // meretet (~2,5 s), utana valtunk a mentett asztalra.
+            if (desktopCount > 1)
+            {
+                var initial = new System.Windows.Threading.DispatcherTimer
+                {
+                    Interval = TimeSpan.FromMilliseconds(2500)
+                };
+                initial.Tick += (s3, e3) =>
+                {
+                    initial.Stop();
+                    try { applyDesktop(activeDesktop); }
+                    catch (Exception ex) { Logger.Info("initial desktop: " + ex.Message); }
+                };
+                initial.Start();
+                Logger.Info("desktop: minden panel valodi merettel indul, valtas 2,5 s mulva -> " + activeDesktop);
+            }
+            else
+            {
+                applyDesktop(activeDesktop);
+            }
 
             // Remember the last position/size: every new window opens where the
             // previous one was left (important on a 32:9 desktop, where the
