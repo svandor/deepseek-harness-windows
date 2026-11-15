@@ -324,6 +324,21 @@ namespace DshTray
                 entry.Click += (s, e) => SetDesktop(wanted);
                 desktopMenu.DropDownItems.Add(entry);
             }
+            // A menü megnyitásakor kiderül, MELYIK asztalon vagyunk (a
+            // window-desktop.txt-ből), és a címben is látszik.
+            desktopMenu.DropDownOpening += (s, e) =>
+            {
+                int current = ReadDesktop();
+                desktopMenu.Text = "Munkaasztal (" + current + ")";
+                foreach (ToolStripItem item in desktopMenu.DropDownItems)
+                {
+                    var entry = item as ToolStripMenuItem;
+                    if (entry == null) continue;
+                    entry.Checked = entry.Text.StartsWith(current + ".", StringComparison.Ordinal);
+                    // 3 panelnél nincs második asztal: az elem inaktív.
+                    entry.Enabled = !(entry.Text.StartsWith("2.", StringComparison.Ordinal) && _cfg.Panes <= 3);
+                }
+            };
             menu.Items.Add(desktopMenu);
 
             var robotPane = new ToolStripMenuItem("4. felület: robot panel");
@@ -834,6 +849,23 @@ namespace DshTray
 
         // ── panelbeállítások (a PS-tálcából visszaállítva, 2026-11-13) ─────
         /// <summary>Felosztás beállítása, mentés és az ablak újranyitása.</summary>
+        /// <summary>A jelenlegi munkaasztal a window-desktop.txt-ből (hiba esetén 1).</summary>
+        private int ReadDesktop()
+        {
+            try
+            {
+                string directory = Path.GetDirectoryName(_cfg.WindowLog);
+                if (string.IsNullOrEmpty(directory)) return 1;
+                string path = Path.Combine(directory, "window-desktop.txt");
+                if (!File.Exists(path)) return 1;
+                int value;
+                return int.TryParse(File.ReadAllText(path).Trim(), out value) && value > 0 ? value : 1;
+            }
+            catch
+            {
+                return 1;
+            }
+        }
         /// <summary>Munkaasztal váltása: a state\window-desktop.txt-be ír.</summary>
         private void SetDesktop(int desktop)
         {
