@@ -364,11 +364,48 @@ namespace DshWindow
                 // A rejtett panelek 0 szélesek voltak: visszaváltáskor a WebView2
                 // nem kap méretet magától, ezért fehér marad. Kényszerített
                 // layout + bounds szinkron a most látható panelekre.
+                // A rejtett panel 0 széles oszlopban volt, ezért a WebView2
+                // gyerek-HWND-je 0 méretű; a láthatóvá tétel után a méret
+                // ASZINKRON érkezik, ezért azonnal ÉS 250 ms múlva is
+                // szinkronizáljuk (különben FEHÉR marad — mért hiba 2026-11-15).
+                content.UpdateLayout();
+                for (int i = 0; i < paneCount; i++)
+                {
+                    if (!visible[i]) continue;
+                    hosts[i].Visibility = Visibility.Collapsed;
+                }
+                content.UpdateLayout();
+                for (int i = 0; i < paneCount; i++)
+                {
+                    if (!visible[i]) continue;
+                    hosts[i].Visibility = Visibility.Visible;
+                }
                 content.UpdateLayout();
                 for (int i = 0; i < paneCount; i++)
                 {
                     if (visible[i]) hosts[i].SyncBounds();
                 }
+                var resync = new System.Windows.Threading.DispatcherTimer
+                {
+                    Interval = TimeSpan.FromMilliseconds(250)
+                };
+                resync.Tick += (s2, e2) =>
+                {
+                    resync.Stop();
+                    try
+                    {
+                        content.UpdateLayout();
+                        for (int i = 0; i < paneCount; i++)
+                        {
+                            if (visible[i]) hosts[i].SyncBounds();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Info("desktop resync: " + ex.Message);
+                    }
+                };
+                resync.Start();
                 Logger.Info("desktop " + d + "/" + desktopCount + " (visible panes: " + shownCount + ")");
             };
 
