@@ -54,27 +54,30 @@ window.__ModuleLoader__.load({
     };
     const DIM = { opacity: 0.65 };
     /** A fejlec-ikon gomb: a menüsor magassagahoz illik, kerettel (mint a tobbi ikon). */
+    // PONTOSAN a meglévő menüsor-gombok (ui-extras CornerButton) stílusa:
+    // 26px magasság, 7px sarok, 1px keret rgba(255,255,255,0.14), hover 0.28
+    // keret + rgba(255,255,255,0.07) háttér. A felhasználó kérése: egységes
+    // felület, ne legyen külön stílusú ikon.
     const HEADER_BTN = {
       display: "inline-flex",
       alignItems: "center",
       justifyContent: "center",
+      gap: "4px",
+      height: "26px",
+      minWidth: "26px",
+      padding: "0 6px",
+      border: "1px solid var(--dsw-alias-border-l2, rgba(255,255,255,0.14))",
+      borderRadius: "7px",
+      background: "transparent",
+      color: "inherit",
       font: "inherit",
       fontSize: "12px",
-      lineHeight: "18px",
-      height: "26px",
-      minWidth: "30px",
-      padding: "0 7px",
-      borderRadius: "6px",
-      // A keret MINDIG látszik, ahogy a többi menüsor-ikonon (a felhasználó
-      // kérése: „a php ikonnak is kéne a keret, amit a többi ikon megkapott").
-      border: "1px solid var(--dsw-alias-border-secondary, rgba(127,127,127,.35))",
-      background: "transparent",
-      color: "var(--dsw-alias-label-secondary, inherit)",
+      lineHeight: "1",
       cursor: "pointer",
     };
     const HEADER_BTN_HOVER = {
-      borderColor: "var(--dsw-alias-border-primary, rgba(127,127,127,.7))",
-      color: "var(--dsw-alias-label-primary, inherit)",
+      borderColor: "var(--dsw-alias-border-l3, rgba(255,255,255,0.28))",
+      background: "var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,0.07))",
     };
     /** Kis bemenet a projekt-szerkesztőhöz. */
     const INPUT = {
