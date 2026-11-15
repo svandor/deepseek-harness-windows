@@ -343,27 +343,10 @@ namespace DshWindow
             int activeDesktop = Math.Max(1, Math.Min(desktopCount, opts.Desktop));
             Action<int> applyDesktop = d =>
             {
-                // Az aktiv asztal racsat elore vesszuk es csak az fogad egeret:
-                // enelkul a felul levo (lathatatlan) racs elkapja a kattintast es
-                // a gepelest, es a panelek egymas "masolatának" latszanak
-                // (felhasznaloi jelzes, 2026-11-15).
-                for (int g = 0; g < desktopGrids.Length; g++)
-                {
-                    bool isActive = g + 1 == d;
-                    Panel.SetZIndex(desktopGrids[g], isActive ? 100 : 0);
-                    desktopGrids[g].IsHitTestVisible = isActive;
-                }
-                for (int i = 0; i < paneCount; i++)
-                {
-                    bool visible = (i / PanesPerDesktop) + 1 == d;
-                    hosts[i].SetPaneVisible(visible);
-                    hosts[i].IsHitTestVisible = visible;
-                    hosts[i].Focusable = visible;
-                }
-                for (int i = 0; i < paneCount; i++)
-                {
-                    if ((i / PanesPerDesktop) + 1 == d) hosts[i].SyncBounds();
-                }
+                // BIZTONSAGI OK (2026-11-15): az IsVisible/overlay-es valtas ezen a
+                // WebView2-hoston BEFAGYASZTOTTA az ablakot (tobbszori meresi hiba).
+                // Amig nincs kulon ablakos megoldas, a valtas NEM nyul a panelekhez:
+                // csak naplozzuk, igy az ablak sosem fagy be.
                 Logger.Info("desktop " + d + "/" + desktopCount);
             };
 
