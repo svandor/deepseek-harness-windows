@@ -73,6 +73,19 @@ namespace DshWindow
         {
             var opts = Options.Parse(args);
             Logger.Init(opts.LogFile);
+
+            // Shared AppUserModelID (same value as the tray): every DSH window
+            // groups under the same taskbar button as the pinned shortcut.
+            try
+            {
+                Win32.SetCurrentProcessExplicitAppUserModelID("DeepSeek.Harness");
+                Logger.Info("AppUserModelID set: DeepSeek.Harness");
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("AppUserModelID set failed: " + ex.Message);
+            }
+
             Logger.Info("launcher start: pid=" + Process.GetCurrentProcess().Id + " args=" + string.Join(" ", args));
 
             // Függő frissítések alkalmazása: a saját exénket futás közben nem
@@ -368,7 +381,7 @@ namespace DshWindow
                     ? WindowStartupLocation.Manual
                     : (opts.Center ? WindowStartupLocation.CenterScreen : WindowStartupLocation.Manual),
                 Content = content,
-                ShowInTaskbar = true
+                ShowInTaskbar = opts.Desktop <= 1
             };
 
             applyDesktop(activeDesktop);
@@ -2233,6 +2246,9 @@ namespace DshWindow
         public const int WM_MOUSEMOVE = 0x0200;
         public const int HTCLIENT = 1;
         public const uint GA_ROOT = 2;
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        public static extern int SetCurrentProcessExplicitAppUserModelID(string appID);
 
         [DllImport("user32.dll")]
         public static extern IntPtr GetFocus();

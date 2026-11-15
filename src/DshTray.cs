@@ -28,6 +28,7 @@ using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -194,6 +195,19 @@ namespace DshTray
             _cfg.Root = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".."));
             Log.Init(Path.Combine(_cfg.StateDir, "native-tray.log"));
             Log.Info("tálca indul (pid " + Process.GetCurrentProcess().Id + ", gyökér: " + _cfg.Root + ")");
+
+            // Shared AppUserModelID for every DSH process: the tray and the
+            // window use the same ID, so the pinned shortcut and the running
+            // window share a single taskbar button.
+            try
+            {
+                NativeMethods.SetCurrentProcessExplicitAppUserModelID("DeepSeek.Harness");
+                Log.Info("AppUserModelID set: DeepSeek.Harness");
+            }
+            catch (Exception ex)
+            {
+                Log.Error("AppUserModelID set failed: " + ex.Message);
+            }
 
             LoadConfig();
             BuildIcon();
@@ -1389,6 +1403,9 @@ namespace DshTray
 
         [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
         internal static extern int GetWindowTextLength(IntPtr hWnd);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        internal static extern int SetCurrentProcessExplicitAppUserModelID(string appID);
     }
 
     internal static class Program
