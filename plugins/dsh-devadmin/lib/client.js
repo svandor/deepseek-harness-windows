@@ -676,6 +676,7 @@ window.__ModuleLoader__.load({
     function DesktopSwitcher(props) {
       const set = props && typeof props.setDesktop === "function" ? props.setDesktop : null;
       const [active, setActive] = react.useState(0);
+      const [desktopCount, setDesktopCount] = react.useState(0);
       const [hover, setHover] = react.useState(0);
       react.useEffect(() => {
         let alive = true;
@@ -694,6 +695,8 @@ window.__ModuleLoader__.load({
           alive = false;
         };
       }, []);
+      // 3 paneles modban nincs mit valtani: ilyenkor semmit nem rajzolunk.
+      if (desktopCount < 2) return null;
       const button = (n) =>
         h(
           "button",
@@ -779,12 +782,10 @@ window.__ModuleLoader__.load({
       // tooltip, a többi menüsor-gombbal azonos kerettel. A kattintás a host
       // /devadmin/desktop végpontjára megy, ami a state\window-desktop.txt-be
       // ír — ezt a DshWindow 500 ms-onként figyeli, tehát NINCS újraindítás.
-      // CSAK akkor regisztraljuk a munkaasztal-ikonokat, ha van 2. asztal
-      // (4-6 panel). 3 paneles modban nincs mit valtani, ezert nem is latszik.
-      getJson("/devadmin/state")
-        .then((state) => {
-          if (!state || Number(state.desktopCount ?? 1) < 2) return;
-          ctx.slots.inject(HEADER_SLOT, () =>
+      // MINDIG regisztraljuk a munkaasztal-ikonokat; a komponens maga donti el
+      // (pollozva), hogy latszik-e — kulonben a 2. asztal paneljein nem jelentek
+      // meg, mert azok kesobb toltodtek be (felhasznaloi jelzes, 2026-11-15).
+      ctx.slots.inject(HEADER_SLOT, () =>
         ctx.slots.register(
           {
             name: HEADER_SLOT,
@@ -799,10 +800,6 @@ window.__ModuleLoader__.load({
           DesktopSwitcher,
         ),
       );
-        })
-        .catch(() => {
-          /* ha a host nem valaszol, marad a korabbi viselkedes: nincs valto */
-        });
     }
 
     exports.DevAdminPanel = DevAdminPanel;
