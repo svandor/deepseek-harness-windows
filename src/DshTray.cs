@@ -631,7 +631,9 @@ namespace DshTray
             }
             // Robot felület: a PS-tálca `--pane-url "<panes>=<url>"` alakban adta
             // át, a DshWindow ezt értelmezi a 4. (utolsó) panelként.
-            int paneCount = Math.Max(1, Math.Min(3, _cfg.Panes));
+            // MÉRT HIBA (2026-11-15): itt még a régi 3-as plafon állt, ezért a
+            // tálcán beállított 6 panelből 3-at indított (`window.log: panes: 3`).
+            int paneCount = Math.Max(1, Math.Min(6, _cfg.Panes));
             bool robotPane = _cfg.RobotPane || _cfg.RobotOnly;
             if (_cfg.RobotOnly) paneCount = 1;
 
