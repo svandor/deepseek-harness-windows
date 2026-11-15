@@ -348,7 +348,7 @@ namespace DshTray
                     if (entry == null) continue;
                     entry.Checked = entry.Text.StartsWith(current + ".", StringComparison.Ordinal);
                     // 3 panelnél nincs második asztal: az elem inaktív.
-                    entry.Enabled = !(entry.Text.StartsWith("2.", StringComparison.Ordinal) && _cfg.Panes <= 3);
+                    entry.Enabled = true;
                 }
             };
             menu.Items.Add(desktopMenu);
@@ -894,7 +894,7 @@ namespace DshTray
                 // 4-6 panel eseten ket kulon ablak van: a kivalasztottat
                 // eloterbe hozzuk, es ha meg nem fut, elinditjuk. 1-3 panelnel
                 // a regi viselkedes marad: csak a fajlt irjuk.
-                if (_cfg.Panes > 3)
+                if (true)
                 {
                     BringToFront(clamped);
                     StartDesktopWindow(clamped);
