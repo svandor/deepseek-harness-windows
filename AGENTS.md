@@ -254,6 +254,39 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-15` — **a „kis adagokban készülő fejlesztés" okának mérése, és két
+  beállítás ennek ellenére.** (1) **MÉRVE: a harness NEM korlátozza a
+  munkafolyamat hosszát.** A `dsh-agent-loop`-ban nincs `maxSteps`/`maxTurns`
+  (0 találat), és a kör-vég okok teljes típusában (`dsh-session/lib/types/
+  types.d.ts:165-199`) nincs `max-steps` ág: `completed`, `aborted`, `blocked`,
+  `error`, `max-tokens`, `interrupted`. Napló-mérés (163 session / 530 lezárt
+  kör, 45 nap, ez a munkaterület; a session-naplók TÖBB zstd-frame-esek, ezért
+  keretbejáró kell, a Node `zstdDecompressSync` csak az első frame-et adja
+  vissza): `completed` 469 (88,5%), `error` 21, `aborted` 20, `interrupted` 19,
+  `max-tokens` 1 — **egyetlen hosszkorlát sincs**. Lépés/kör: min 1, p25 4,
+  medián 9, p75 21, p90 43, max 187; egy session 172 kör / 1 873 lépés / 527
+  ezer token surface. Tehát a rövid köröket a MODELL megállása okozza. A fő
+  modell plafonjai: `deepseek-flash` contextWindow **1 000 000**, maxTokens
+  **256 000**, stream idle 300 s (`dsh-llm-deepseek/lib/index.js:1390-1394`).
+  (2) **Munkaszerződés a personába** (`~\.dsh\.agent-presets\standard-free\
+  agent.cordis.yml`, `persona.suffix`): egy kör csak akkor ér véget, ha az
+  eredmény kész ÉS ellenőrizve van, vagy felhasználói döntés blokkol; tilos a
+  „folytassam?" zárás; a terv `todo_write`-ba megy (az TÚLÉLI a tömörítést, a
+  beszélgetés nem); elemzés helyett eszközhívás; állítás csak bizonyítékkal.
+  (3) **`compaction-basic` `thresholdRatio` 0,30 → 0,45**
+  (`~\.dsh\profiles\web\cordis.patch.yml`, mentés `.bak-20261115-161414-*`):
+  0,30-nál a tömörítés 300 ezer tokennél vágott, LLM-összefoglalóval
+  helyettesítve a régi előzményt — a mért 172 körös session 2 tömörítést és 9
+  megkurtított tool-eredményt szenvedett el. 0,45 → küszöb 450 ezer token,
+  retention 16% (160 ezer) marad; a schema a (0,1] tartományt fogadja el
+  (`compaction-basic/lib/index.js:200`). Érvénybe lépés: a persona **új
+  sessionben**, a patch **harness-újraindítás után** (boot-időben töltődik).
+  Mindkét fájl YAML-parse ellenőrzése megtörtént (yaml 2.9.1, `!!js` tagekkel
+  együtt). Nyitva hagyva: a gyerekek `write`/`edit` tiltása (`tool-subagent`
+  `toolFilter.deny`) miatt minden szerkesztés a fő szálon sorosodik — ez
+  felhasználói döntés, és a free children naplóiban körönként 4-5 `llm/retry`
+  látszik.
+
 - `2026-11-14` — **Herd-kiváltás, 2. szakasz: admin felület a DSH-ban, és a Herd
   ki van kapcsolva.** (1) **A Herd leállt és kikerült az autostartból**: a
   `HKCU\...\Run\de.beyondco.herd` érték törölve (mentés:
