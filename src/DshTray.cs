@@ -903,7 +903,9 @@ namespace DshTray
                 {
                     StartDesktopWindow(clamped);
                     ShowDesktopWindow(clamped);
-                    if (WindowHandleOf(clamped) != IntPtr.Zero) HideOtherDesktopWindows(clamped);
+                    IntPtr activeHandle = WindowHandleOf(clamped);
+                    HideOtherDesktopWindows(clamped, activeHandle);
+                    if (!AnyVisibleDshWindow()) ShowDesktopWindow(clamped);
                 }
             }
             catch (Exception ex)
@@ -1001,11 +1003,38 @@ namespace DshTray
             catch (Exception ex) { Log.Error("munkaasztal " + desktop + " eloterbe hozas: " + ex.Message); }
         }
 
+        /// <summary>
+        /// A pid-hez tartozo legfelso szintu ablak megkeresese EnumWindows-lal.
+        /// REJTETT ablaknal is megtalalja a fogantyut (a Process.MainWindowHandle
+        /// rejtett ablaknal IntPtr.Zero-t ad, ez volt a hiba forrasa).
+        /// </summary>
+        private static IntPtr FindWindowForProcess(int pid)
+        {
+            IntPtr fallback = IntPtr.Zero;
+            NativeMethods.EnumWindowsProc callback = (hWnd, lParam) =>
+            {
+                uint windowPid;
+                NativeMethods.GetWindowThreadProcessId(hWnd, out windowPid);
+                if (windowPid != (uint)pid) return true; // masik folyamat: folytatjuk
+                if (fallback == IntPtr.Zero) fallback = hWnd;
+                if (NativeMethods.GetWindowTextLength(hWnd) > 0)
+                {
+                    fallback = hWnd; // szoveges ablak: ezt preferaljuk
+                    return false;    // leallunk
+                }
+                return true;
+            };
+            NativeMethods.EnumWindows(callback, IntPtr.Zero);
+            return fallback;
+        }
+
         /// <summary>A munkaasztal-ablak ablakfogantyuja, ha a folyamat el.</summary>
         private IntPtr WindowHandleOf(int desktop)
         {
             int pid = RunningDesktopWindow(desktop);
             if (pid == 0) return IntPtr.Zero;
+            IntPtr h = FindWindowForProcess(pid);
+            if (h != IntPtr.Zero) return h;
             try
             {
                 Process p = Process.GetProcessById(pid);
@@ -1044,12 +1073,36 @@ namespace DshTray
         }
 
         /// <summary>Az aktivon kivul minden masik munkaasztal-ablak elrejtese.</summary>
-        private void HideOtherDesktopWindows(int active)
+        private void HideOtherDesktopWindows(int active, IntPtr activeHandle)
         {
+            if (activeHandle == IntPtr.Zero) return;
             for (int other = 1; other <= 2; other++)
             {
-                if (other != active) HideDesktopWindow(other);
+                if (other == active) continue;
+                IntPtr h = WindowHandleOf(other);
+                if (h == IntPtr.Zero) continue;
+                if (h == activeHandle) continue;
+                NativeMethods.ShowWindow(h, NativeMethods.SW_HIDE);
             }
+        }
+
+        /// <summary>
+        /// Igaz, ha legalabb egy DshWindow folyamatnak van lathato ablaka.
+        /// REJTETT ablaknal a FindWindowForProcess is megtalalja a fogantyut,
+        /// de az IsWindowVisible hamisat ad ra.
+        /// </summary>
+        private static bool AnyVisibleDshWindow()
+        {
+            foreach (Process p in Process.GetProcessesByName("DshWindow"))
+            {
+                try
+                {
+                    IntPtr h = FindWindowForProcess(p.Id);
+                    if (h != IntPtr.Zero && NativeMethods.IsWindowVisible(h)) return true;
+                }
+                catch { }
+            }
+            return false;
         }
 
         /// <summary>
@@ -1082,7 +1135,9 @@ namespace DshTray
                     // A figyelo csak ALKALMAZZA a valasztast.
                     StartDesktopWindow(current);
                     ShowDesktopWindow(current);
-                    if (WindowHandleOf(current) != IntPtr.Zero) HideOtherDesktopWindows(current);
+                    IntPtr activeHandle = WindowHandleOf(current);
+                    HideOtherDesktopWindows(current, activeHandle);
+                    if (!AnyVisibleDshWindow()) ShowDesktopWindow(current);
                 }
             }
             catch (Exception ex) { Log.Error("munkaasztal-figyelo: " + ex.Message); }
@@ -1319,6 +1374,21 @@ namespace DshTray
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         public static extern bool IsIconic(IntPtr hWnd);
+
+        [System.Runtime.InteropServices.UnmanagedFunctionPointer(System.Runtime.InteropServices.CallingConvention.StdCall)]
+        internal delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern bool IsWindow(IntPtr hWnd);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        internal static extern int GetWindowTextLength(IntPtr hWnd);
     }
 
     internal static class Program
