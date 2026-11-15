@@ -377,6 +377,35 @@ namespace DshWindow
 
             applyDesktop(activeDesktop);
 
+            // ÉLŐ asztalváltás: a webes fejléc 1/2 ikonjai (és a tálca) a
+            // state\window-desktop.txt-t írják; az ablak 500 ms-onként figyeli.
+            var desktopWatch = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(500)
+            };
+            string desktopFile = Path.Combine(
+                Path.GetDirectoryName(opts.LogFile ?? ".") ?? ".",
+                "window-desktop.txt");
+            int seenDesktop = activeDesktop;
+            desktopWatch.Tick += (s4, e4) =>
+            {
+                try
+                {
+                    if (!File.Exists(desktopFile)) return;
+                    int wanted;
+                    if (!int.TryParse(File.ReadAllText(desktopFile).Trim(), out wanted)) return;
+                    wanted = Math.Max(1, Math.Min(desktopCount, wanted));
+                    if (wanted == seenDesktop) return;
+                    seenDesktop = wanted;
+                    applyDesktop(wanted);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Info("desktop watch: " + ex.Message);
+                }
+            };
+            desktopWatch.Start();
+
             if (restoreGeometry)
             {
                 window.Left = geometry.Left.Value;

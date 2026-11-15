@@ -667,6 +667,7 @@ namespace DshTray
 
             string args = "--port " + _cfg.Port
                 + " --panes " + paneCount
+                + " --desktop " + ReadDesktop()
                 + " --no-boot --width " + _cfg.Width.ToString(CultureInfo.InvariantCulture)
                 + " --height " + _cfg.Height.ToString(CultureInfo.InvariantCulture)
                 + " --log \"" + _cfg.WindowLog + "\""
