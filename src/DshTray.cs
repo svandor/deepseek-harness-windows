@@ -313,6 +313,19 @@ namespace DshTray
             };
             menu.Items.Add(split);
 
+            // Munkaasztal-váltás: a window-desktop.txt-t írja, amit az ablak
+            // 500 ms-onként figyel — így NEM kell újraindítani az ablakot.
+            var desktopMenu = new ToolStripMenuItem("Munkaasztal");
+            desktopMenu.ToolTipText = "4-6 panel esetén a második munkaasztal (3+3 kiosztás).";
+            for (int index = 1; index <= 2; index++)
+            {
+                int wanted = index;
+                var entry = new ToolStripMenuItem(wanted + ". munkaasztal");
+                entry.Click += (s, e) => SetDesktop(wanted);
+                desktopMenu.DropDownItems.Add(entry);
+            }
+            menu.Items.Add(desktopMenu);
+
             var robotPane = new ToolStripMenuItem("4. felület: robot panel");
             robotPane.ToolTipText = "A robot állapotpanelje (" + _cfg.RobotUrl + ") külön felületként.";
             robotPane.Checked = _cfg.RobotPane;
@@ -821,6 +834,23 @@ namespace DshTray
 
         // ── panelbeállítások (a PS-tálcából visszaállítva, 2026-11-13) ─────
         /// <summary>Felosztás beállítása, mentés és az ablak újranyitása.</summary>
+        /// <summary>Munkaasztal váltása: a state\window-desktop.txt-be ír.</summary>
+        private void SetDesktop(int desktop)
+        {
+            try
+            {
+                string directory = Path.GetDirectoryName(_cfg.WindowLog);
+                if (string.IsNullOrEmpty(directory)) return;
+                File.WriteAllText(
+                    Path.Combine(directory, "window-desktop.txt"),
+                    desktop.ToString(CultureInfo.InvariantCulture));
+                Log.Info("munkaasztal: " + desktop);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("munkaasztal: " + ex.Message);
+            }
+        }
         private void SetPanes(int panes)
         {
             int clamped = Math.Max(1, Math.Min(6, panes));

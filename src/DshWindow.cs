@@ -32,6 +32,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Shell;
 using Microsoft.Web.WebView2.Core;
 
 namespace DshWindow
@@ -323,6 +324,134 @@ namespace DshWindow
                 Logger.Info("panes: " + paneCount + " (each pane has its own WebView2 profile)");
             }
 
+            // ── munkaasztalok a FEJLÉCBEN (2026-11-15) ────────────────────
+            // A 3 fölötti panelek a második asztalra kerülnek (6 panel = 3+3).
+            // A váltó gombok a cimsorba kerulnek, KOZVETLENUL A KICSINYITO
+            // GOMB ELOTT (balra tole): ehhez a kliens-terulet a cimsorba
+            // nyulik (WindowChrome), es a sajat gombok
+            // IsHitTestVisibleInChrome = true jelolest kapnak, hogy a rendszer
+            // ne a cimsor-huzast lassa rajtuk.
+            const int PanesPerDesktop = 3;
+            int desktopCount = (paneCount + PanesPerDesktop - 1) / PanesPerDesktop;
+            int activeDesktop = Math.Max(1, Math.Min(desktopCount, opts.Desktop));
+
+            Action<int> applyDesktop = d =>
+            {
+                bool[] visible = new bool[paneCount];
+                for (int i = 0; i < paneCount; i++)
+                {
+                    bool shown = (i / PanesPerDesktop) + 1 == d;
+                    visible[i] = shown;
+                    content.ColumnDefinitions[i * 2].Width = shown
+                        ? new GridLength(paneRatios[i], GridUnitType.Star)
+                        : new GridLength(0);
+                    if (i > 0)
+                    {
+                        content.ColumnDefinitions[i * 2 - 1].Width = shown ? new GridLength(SplitterWidth) : new GridLength(0);
+                    }
+                    hosts[i].Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
+                }
+                int shownCount = 0;
+                for (int i = 0; i < paneCount; i++) if (visible[i]) shownCount++;
+                Logger.Info("desktop " + d + "/" + desktopCount + " (visible panes: " + shownCount + ")");
+            };
+
+            // A cimsor-sav MINDIG letezik: ez a huzhato fejlec (WindowChrome
+            // CaptionHeight), benne a sajat gombokkal.
+            var caption = new Grid
+            {
+                Height = 0,
+                Visibility = Visibility.Collapsed,
+                Background = DarkBackground,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            caption.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var captionButtons = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center,
+                // A rendszer minimalizal/keretez/bezár gombjai ~138 px-et
+                // foglalnak a jobb szelen: ezert a mi gombjaink ettol BALRA
+                // maradnak (a felhasznalo keresese: a kicsinyito elott).
+                Margin = new Thickness(0, 0, 146, 0)
+            };
+            var desktopButtons = new List<Button>();
+            for (int d = 1; d <= desktopCount; d++)
+            {
+                int wanted = d;
+                var button = new Button
+                {
+                    Content = d + ". munkaterulet",
+                    Height = 22,
+                    Margin = new Thickness(4, 0, 0, 0),
+                    Padding = new Thickness(8, 0, 8, 0),
+                    FontSize = 12,
+                    Background = Brushes.Transparent,
+                    Foreground = (Brush)new BrushConverter().ConvertFromString("#C9C9CF"),
+                    BorderBrush = (Brush)new BrushConverter().ConvertFromString("#3A3A40"),
+                    BorderThickness = new Thickness(1),
+                    ToolTip = "Munkaterulet " + d + " (panelek " + (((d - 1) * PanesPerDesktop) + 1)
+                        + "-" + Math.Min(paneCount, d * PanesPerDesktop) + ")"
+                };
+                WindowChrome.SetIsHitTestVisibleInChrome(button, true);
+                button.Click += (s, e) =>
+                {
+                    foreach (Button other in desktopButtons)
+                    {
+                        other.Background = Brushes.Transparent;
+                    }
+                    ((Button)s).Background = (Brush)new BrushConverter().ConvertFromString("#2A2A31");
+                    applyDesktop(wanted);
+                };
+                desktopButtons.Add(button);
+                captionButtons.Children.Add(button);
+            }
+            if (desktopCount > 1 && desktopButtons.Count > 0)
+            {
+                desktopButtons[0].Background = (Brush)new BrushConverter().ConvertFromString("#2A2A31");
+            }
+            caption.Children.Add(captionButtons);
+            Grid.SetColumn(captionButtons, 0);
+
+            Grid rootContent = new Grid();
+            rootContent.RowDefinitions.Add(new RowDefinition { Height = new GridLength(0) });
+            rootContent.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            Grid.SetRow(caption, 0);            rootContent.Children.Add(caption);
+            Grid.SetRow(content, 1);
+            rootContent.Children.Add(content);
+            // A munkaasztal-váltás FÁJLRÓL: a webes fejléc (vagy a tálca) írja a
+            // state\window-desktop.txt-t, az ablak pedig 500 ms-onként figyeli.
+            // Az operációs rendszer címsorához nem nyúlunk (a WindowChrome
+            // eltüntette a rendszer gombjait — mért hiba, 2026-11-15).
+            var desktopWatch = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(500)
+            };
+            string desktopFile = Path.Combine(
+                Path.GetDirectoryName(opts.LogFile ?? ".") ?? ".",
+                "window-desktop.txt");
+            int seenDesktop = activeDesktop;
+            desktopWatch.Tick += (s, e) =>
+            {
+                try
+                {
+                    if (!File.Exists(desktopFile)) return;
+                    int wanted2;
+                    if (!int.TryParse(File.ReadAllText(desktopFile).Trim(), out wanted2)) return;
+                    wanted2 = Math.Max(1, Math.Min(desktopCount, wanted2));
+                    if (wanted2 == seenDesktop) return;
+                    seenDesktop = wanted2;
+                    applyDesktop(wanted2);
+                }
+                catch
+                {
+                    // a figyelo hibaja nem allithatja meg az ablakot
+                }
+            };
+            desktopWatch.Start();
+            applyDesktop(activeDesktop);
+
             // Remember the last position/size: every new window opens where the
             // previous one was left (important on a 32:9 desktop, where the
             // useful place is rarely the screen centre).
@@ -340,11 +469,14 @@ namespace DshWindow
                 WindowStartupLocation = restoreGeometry || (opts.X.HasValue && opts.Y.HasValue)
                     ? WindowStartupLocation.Manual
                     : (opts.Center ? WindowStartupLocation.CenterScreen : WindowStartupLocation.Manual),
-                Content = content,
+                Content = rootContent,
                 ShowInTaskbar = true
             };
 
-            if (restoreGeometry)
+            // A cimsor a KLIENS-terulet resze lesz (WindowChrome): igy a sajat
+            // gombjaink a rendszer kicsinyito/keretezo/bezaro gombjai MELLETT,
+            // azoktol BALRA kerulhetnek — a felhasznalo kérése szerint.
+          if (restoreGeometry)
             {
                 window.Left = geometry.Left.Value;
                 window.Top = geometry.Top.Value;
@@ -2327,6 +2459,7 @@ namespace DshWindow
         public string Url;              // attaches to an existing server instead of booting
         public bool NoBoot;             // never boot the server from the window
         public int Panes = 1;           // side-by-side panels, each its own client
+        public int Desktop = 1;         // which desktop is shown (1-based; 3 panes per desktop)
 
         /// <summary>
         /// Per-pane URL overrides, keyed by 1-based pane index
@@ -2370,6 +2503,7 @@ namespace DshWindow
                     case "--no-focus-restore": noFocusRestore = true; break;
                     case "--focus-probe": o.FocusProbe = true; break;
                     case "--panes": o.Panes = ParseInt(next, o.Panes); i++; break;
+        case "--desktop": o.Desktop = ParseInt(next, o.Desktop); i++; break;
                     case "--pane-url": ParsePaneUrl(o, next); i++; break;
                     case "--boot-timeout": o.BootTimeoutSeconds = ParseInt(next, o.BootTimeoutSeconds); i++; break;
                     case "--width": o.Width = ParseDouble(next, o.Width); i++; break;
