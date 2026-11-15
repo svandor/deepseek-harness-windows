@@ -361,6 +361,14 @@ namespace DshWindow
                 }
                 int shownCount = 0;
                 for (int i = 0; i < paneCount; i++) if (visible[i]) shownCount++;
+                // A rejtett panelek 0 szélesek voltak: visszaváltáskor a WebView2
+                // nem kap méretet magától, ezért fehér marad. Kényszerített
+                // layout + bounds szinkron a most látható panelekre.
+                content.UpdateLayout();
+                for (int i = 0; i < paneCount; i++)
+                {
+                    if (visible[i]) hosts[i].SyncBounds();
+                }
                 Logger.Info("desktop " + d + "/" + desktopCount + " (visible panes: " + shownCount + ")");
             };
 
@@ -1280,6 +1288,26 @@ namespace DshWindow
         private static void ApplyThemeHint(CoreWebView2 core)
         {
             try { core.ExecuteScriptAsync(ThemeScript); } catch { }
+        }
+
+        /// <summary>
+        /// A WebView2 vezérlő méretének kényszerített szinkronja.
+        /// MIÉRT KELL: a rejtett munkaasztal paneljeinek oszlopa 0 széles, így a
+        /// vezérlő bounds-a 0x0 lesz; visszaváltáskor a panel látható lesz, de a
+        /// böngészőmotor nem kap új méretet, ezért FEHÉR marad (mért hiba,
+        /// 2026-11-15). Az asztalváltás után ezt minden látható panelre hívjuk.
+        /// </summary>
+        internal void SyncBounds()
+        {
+            try
+            {
+                UpdateLayout();
+                Resize();
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("syncBounds: " + ex.Message);
+            }
         }
 
         private void Resize()
