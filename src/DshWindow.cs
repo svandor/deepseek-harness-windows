@@ -386,6 +386,26 @@ namespace DshWindow
 
             applyDesktop(activeDesktop);
 
+            // INDULASI MERET-SZINKRON (2026-11-16): a panelek neha 0 merettel
+            // jonnek letre (Explorer/DPI valtas, ujraindítás), ezert az ablak
+            // csak egy keskeny savot mutat. Indulas utan ketszer (700 ms es
+            // 1500 ms) rakenyszeritjuk a WebView2 vezerlok valodi meretet.
+            Action resyncAll = () =>
+            {
+                try
+                {
+                    content.UpdateLayout();
+                    for (int i = 0; i < paneCount; i++) hosts[i].SyncBounds();
+                }
+                catch (Exception ex) { Logger.Info("startup resync: " + ex.Message); }
+            };
+            var resync1 = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+            resync1.Tick += (sR1, eR1) => { resync1.Stop(); resyncAll(); };
+            resync1.Start();
+            var resync2 = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
+            resync2.Tick += (sR2, eR2) => { resync2.Stop(); resyncAll(); };
+            resync2.Start();
+
             // ÉLŐ asztalváltás: a webes fejléc 1/2 ikonjai (és a tálca) a
             // state\window-desktop.txt-t írják; az ablak 500 ms-onként figyeli.
             var desktopWatch = new System.Windows.Threading.DispatcherTimer
