@@ -1076,7 +1076,13 @@ namespace DshTray
                 {
                     _desktop = current;
                     _desktopStamp = stamp;
-                    SetDesktop(current);
+                    // FIGYELEM: itt NEM SetDesktop-et hivunk, mert az IRJA a
+                    // window-desktop.txt-t -> az irasido valtozik -> a figyelo
+                    // ujra tuzel -> vegtelen ciklus (mert hibaja, 2026-11-15).
+                    // A figyelo csak ALKALMAZZA a valasztast.
+                    StartDesktopWindow(current);
+                    ShowDesktopWindow(current);
+                    if (WindowHandleOf(current) != IntPtr.Zero) HideOtherDesktopWindows(current);
                 }
             }
             catch (Exception ex) { Log.Error("munkaasztal-figyelo: " + ex.Message); }
