@@ -308,8 +308,9 @@ Kötelező:
 - `2026-11-16` (kilencedik kör) — **a titok-audit hamis találata, a konzolablakok
   VALÓDI oka, és a Kiadás gomb egyidejűsége.** (1) **A kiadás elbukott a
   titok-kapun:** a MOSTANI fában 2 találat volt — `tools\patch-sandbox-no-window.ps1`
-  28. és 68. sora, a `134217728` (9 jegyű) konstans, amit a minta TAJ-számnak lát.
-  Ezt hex alak (`0x08000000`) és név szerinti hivatkozás váltotta, így az audit
+  28. és 68. sora: a `CREATE_NO_WINDOW` konstans DECIMÁLIS értéke (kilenc jegyű
+  szám), amit a minta TAJ-számnak lát. Ezt hex alak (`0x08000000`) és név szerinti
+  hivatkozás váltotta, így az audit
   0 találat → `exit 0` (a git-előzményben maradt találat csak figyelmeztetés).
   **Tanulság: 9+ jegyű számot ne írj a szkriptekbe.** (2) **A látható `node.exe`
   konzolablakok valódi oka:** a `CREATE_NO_WINDOW` NEM elég — a gyermeknek így
