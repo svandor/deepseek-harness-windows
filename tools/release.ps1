@@ -259,6 +259,10 @@ if (-not $notes) {
     [void]$body.AppendLine('')
     foreach ($subject in $subjects) {
         if ([string]::IsNullOrWhiteSpace($subject)) { continue }
+        # A kiadás saját commitja és a build által generált bináris-frissítés
+        # nem „újdonság" a jegyzetben.
+        if ($subject -match '^Release v\d') { continue }
+        if ($subject -match '^Update: bin, providers') { continue }
         [void]$body.AppendLine("- $subject")
     }
     [void]$body.AppendLine('')
