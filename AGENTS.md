@@ -254,6 +254,32 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-16` (második kör) — **a „panel újraindul / eltűnik a
+  munkafolyamat-lista" és a WebView2-hiba gyökere.** (1) **Hamis „kicserélték a
+  szervert" újratöltés:** a `dsh-ui-extras` 5 s-os életjele a
+  `/ui-extras/balance` végpontot hívta, ami **külső API-t** kérdez (egyenleg); egy
+  átmeneti hiba/rate limit után az első sikeres válaszra a kód
+  `navigateToFreshServer()`-t hívott, ami ~12 s után
+  `window.location.reload()`-ra esett vissza → a panel újratöltött, a munkaterület
+  munkafolyamat-listája „eltűnt". Javítás: az életjel **helyi** végpontot
+  (`/ui-extras/harness-url`) hív, és újratöltés **csak akkor** történik, ha a
+  válasz `pid`-je eltér az elsőként látottól (tényleg új szerverprocessz van). A
+  kiszolgált bundle ellenőrizve: `dsh-ui-extras/client.js` 448 741 byte,
+  tartalmazza a `recovered on the same server` ágat. (2) **A WebView2
+  `E_UNEXPECTED` (0x8000FFFF) lavina gyökere a profil-mappák elszaporodása volt:**
+  a korábbi „próbánként új mappa" stratégia 6 panel × 8 próbával **43
+  profil-mappát** és sok, félig leállt WebView2 folyamatot hagyott maga után, ami
+  után a `CreateCoreWebView2ControllerAsync` tartósan E_UNEXPECTED hibát adott (a
+  környezet létrejött, a vezérlő nem). Javítás: **futásonként EGY tartalék-mappa**
+  panelenként (`pane-N-<pid>-<időbélyeg>`), 8 próba (~25 s, 1/1,5/2,5/3,5/5 s), és
+  **önjavító újrapróbálás** a hibaoldal után (10 s-onként, max 18×): siker esetén
+  letörli a hibaoldal szövegét és a normál láncot futtatja (`AttachController`),
+  tehát nem kell bezárni/újranyitni az ablakot. Kézi takarítás után (43 → 0
+  timestampes mappa, orphan `msedgewebview2` leállítva) **mind a 6 panel**
+  vezérlője létrejött (07:08:14 és 07:08:31), a váltás **119–231 ms**. (3) A
+  `%TEMP%\dsh-*\DSH Harness\WebView2` mappák is törölhetők; a stabil profilok a
+  `state\webview2\pane-N` / `pane-N-d2`. Részletek: `docs\DSH-ASZTAL-TERV.md`.
+
 - `2026-11-16` — **a munkaasztal két külön ablakra állt át, és a „minden
   bezárult" hiba okai javítva.** (1) **A tálca kilépése megölte az ablakokat:**
   `ExitApp()` → `StopDesktopWindows()` miatt egy tálca-frissítés („Kilépés",

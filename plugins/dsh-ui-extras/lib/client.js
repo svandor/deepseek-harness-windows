@@ -8267,6 +8267,8 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       var timeout = 6000;
       /** When this beat last ran, to expose a blocked main thread. */
       var lastBeat = Date.now();
+      /** A szerver IDENTITÁSA (pid) az első pingnél: ehhez hasonlítunk. */
+      var baselinePid = null;
 
       function request(url) {
         // The component publishes its abortable fetch; before the first render
@@ -8291,21 +8293,34 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
             new Date(now - gap).toISOString() + " to " + new Date(now).toISOString() + ")");
         }
         if (recovering) return;
-        request("/ui-extras/balance")
+        // MÉRT HIBA (2026-11-16): a beat korábban a `/ui-extras/balance`
+        // végpontot hívta, ami KÜLSŐ API-t kérdez (egyenleg). Egy átmeneti hiba
+        // vagy rate limit után az első SIKERES válaszra a kód azt hitte, hogy
+        // „kicserélték a szervert", és ÚJRATÖLTÖTTE a panelt — a felhasználó ezt
+        // úgy látta, hogy eltűnik egy munkaterület munkafolyamat-listája, majd a
+        // panel újraindul. Ezért a beat HELYI, olcsó végpontot hív, és
+        // újratöltés CSAK akkor történik, ha a szerver PROCESSZE (pid) tényleg
+        // megváltozott.
+        request("/ui-extras/harness-url")
           .then(function (response) {
-            return response.ok ? response.json() : Promise.reject(new Error("HTTP " + response.status));
+            return response.ok
+              ? response.json().catch(function () { return {}; })
+              : Promise.reject(new Error("HTTP " + response.status));
           })
-          .then(function () {
-            // ANY recovery after a failed ping means the server was replaced
-            // (a restart hands out a new sign-in token), so the page must
-            // reload to rebuild its socket and re-run the token exchange.
-            if (failures > 0) {
-              recovering = true;
-              console.info("[dsh-ui-extras] the host answered after a gap; reconnecting");
-              navigateToFreshServer(6);
+          .then(function (body) {
+            var pid = body && body.pid !== undefined && body.pid !== null ? String(body.pid) : null;
+            if (baselinePid === null) baselinePid = pid;
+            if (failures === 0) return;
+            var wasDown = failures;
+            failures = 0;
+            if (pid === null || baselinePid === null || pid === baselinePid) {
+              // Ugyanaz a szerverprocessz válaszol: nincs mit újratölteni.
+              console.info("[dsh-ui-extras] recovered on the same server (" + wasDown + " failed beats); no reload");
               return;
             }
-            failures = 0;
+            recovering = true;
+            console.info("[dsh-ui-extras] the server process changed; reconnecting");
+            navigateToFreshServer(6);
           })
           .catch(function () {
             failures++;

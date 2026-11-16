@@ -795,7 +795,13 @@ namespace DshWindow
                 // ablak 4 másodperccel korábban záródott be. Ezért a próba a
                 // környezetre ÉS a vezérlőre együtt vonatkozik, friss profillal
                 // és növekvő várakozással (1,5 s → 3 s).
-                for (int attempt = 0; attempt < 3 && controller == null; attempt++)
+                // MÉRT HIBA (2026-11-16 05:55–05:56): a második ablak indításakor
+                // mindhárom panel 3/3 próbálkozása E_UNEXPECTED (0x8000FFFF) lett,
+                // és a panelek a statikus hibaoldalon maradtak. A 3 próba (~4,5 s)
+                // túl rövid volt: a másik ablak WebView2 folyamatai még álltak le.
+                // Ezért 8 próba (~25 s), növekvő várakozással, és próbánként ÚJ,
+                // egyedi profil-mappa (a zárolt mappát nem lehet újra megnyitni).
+                for (int attempt = 0; attempt < MaxInitAttempts && controller == null; attempt++)
                 {
                     string userDataFolder = ResolveUserDataFolder(attempt);
                     try
@@ -814,7 +820,7 @@ namespace DshWindow
                             + (_paneIndex + 1) + "): " + ex.Message);
                         environment = null;
                         controller = null;
-                        if (attempt < 2) await System.Threading.Tasks.Task.Delay(1500 + 1500 * attempt);
+                        if (attempt < MaxInitAttempts - 1) await System.Threading.Tasks.Task.Delay(RetryDelayMillis(attempt));
                     }
                 }
 
@@ -825,74 +831,169 @@ namespace DshWindow
 
                 _controller = controller;
                 Logger.Info("webview2 controller ready (pane " + (_paneIndex + 1) + ")");
-
-                var core = _controller.CoreWebView2;
-                Configure(core);
-                FocusKeeper.Attach(this, core);
-
-                // A vezérlő saját fókusz-eseményei: a WebView2 hivatalos jelzése
-                // arról, hogy ez a panel vette át a billentyűzet-fókuszt.
-                try
-                {
-                    _controller.GotFocus += (s, e) =>
-                    {
-                        // A WebView2 saját jelzése: ez a panel vette át a
-                        // fókuszt. Ebből tartunk nyilván EGY aktív panelt, és a
-                        // visszatéréskor ide adjuk vissza — nincs kérdezősködés,
-                        // nincs koordináta-számítás, nincs versenyhelyzet.
-                        FocusKeeper.NoteActive(this);
-                        Logger.Info("controller focus: pane " + (_paneIndex + 1) + " got focus");
-                    };
-                    _controller.LostFocus += (s, e) =>
-                    {
-                        FocusKeeper.NoteLost(this);
-                        Logger.Info("controller focus: pane " + (_paneIndex + 1) + " lost focus");
-                    };
-                    _controller.MoveFocusRequested += (s, e) =>
-                    {
-                        Logger.Info("controller focus: pane " + (_paneIndex + 1)
-                            + " requests move (" + e.Reason + ")");
-                    };
-                }
-                catch (Exception ex)
-                {
-                    Logger.Info("controller focus events not attached: " + ex.Message);
-                }
-
-                _controller.BoundsMode = CoreWebView2BoundsMode.UseRawPixels;
-
-                // The surface WebView2 paints before (and outside) the page
-                // canvas must be dark: at some zoom levels and window heights a
-                // sliver between the page and the controller edge stayed
-                // unpainted and showed up as a light strip at the bottom.
-                try
-                {
-                    _controller.DefaultBackgroundColor = System.Drawing.Color.FromArgb(0xFF, 0x15, 0x15, 0x17);
-                }
-                catch (Exception ex)
-                {
-                    Logger.Info("DefaultBackgroundColor not applied: " + ex.Message);
-                }
-
-                Resize();
-
-                core.Navigate(_url);
-                Logger.Info("navigating to " + _url + " (pane " + (_paneIndex + 1) + ")");
-                // A token-figyelo CSAK a Harness klienst toltő paneleken fut: egy
-                // `--pane-url` overriddal nyitott panel (robot panel) soha nem
-                // navigálhat a Harness token-URL-jére.
-                if (_isHarnessPane) StartTokenWatch(core);
+                AttachController(controller);
             }
             catch (Exception ex)
             {
                 Logger.Error("webview2 init failed (pane " + (_paneIndex + 1) + "): " + ex);
                 ShowErrorPage("A beépített WebView2 ablak nem tudott elindulni: " + ex.Message);
+                // Nem hagyjuk a panelt a statikus hibaoldalon: háttérben
+                // tovább próbálkozunk, és siker esetén ugyanaz a lánc fut le,
+                // mintha induláskor sikerült volna (2026-11-16).
+                StartRecovery();
             }
             finally
             {
                 if (gateHeld) WebViewGate.Release();
             }
         }
+
+        /// <summary>
+        /// A létrejött WebView2 vezérlő bekötése: beállítások, fókusz-események,
+        /// háttérszín, méret, majd navigálás. KÜLÖN metódus, mert a
+        /// hibaoldalról visszaálló panel (lásd <see cref="StartRecovery"/>) is
+        /// ezt hívja — így a helyreállás pontosan ugyanazt a láncot futja.
+        /// </summary>
+        private void AttachController(CoreWebView2Controller controller)
+        {
+            _controller = controller;
+            var core = controller.CoreWebView2;
+            Configure(core);
+            FocusKeeper.Attach(this, core);
+
+            // A vezérlő saját fókusz-eseményei: a WebView2 hivatalos jelzése
+            // arról, hogy ez a panel vette át a billentyűzet-fókuszt.
+            try
+            {
+                controller.GotFocus += (s, e) =>
+                {
+                    // A WebView2 saját jelzése: ez a panel vette át a fókuszt.
+                    // Ebből tartunk nyilván EGY aktív panelt, és a visszatéréskor
+                    // ide adjuk vissza — nincs kérdezősködés, nincs
+                    // koordináta-számítás, nincs versenyhelyzet.
+                    FocusKeeper.NoteActive(this);
+                    Logger.Info("controller focus: pane " + (_paneIndex + 1) + " got focus");
+                };
+                controller.LostFocus += (s, e) =>
+                {
+                    FocusKeeper.NoteLost(this);
+                    Logger.Info("controller focus: pane " + (_paneIndex + 1) + " lost focus");
+                };
+                controller.MoveFocusRequested += (s, e) =>
+                {
+                    Logger.Info("controller focus: pane " + (_paneIndex + 1)
+                        + " requests move (" + e.Reason + ")");
+                };
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("controller focus events not attached: " + ex.Message);
+            }
+
+            controller.BoundsMode = CoreWebView2BoundsMode.UseRawPixels;
+
+            // The surface WebView2 paints before (and outside) the page canvas
+            // must be dark: at some zoom levels and window heights a sliver
+            // between the page and the controller edge stayed unpainted and
+            // showed up as a light strip at the bottom.
+            try
+            {
+                controller.DefaultBackgroundColor = System.Drawing.Color.FromArgb(0xFF, 0x15, 0x15, 0x17);
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("DefaultBackgroundColor not applied: " + ex.Message);
+            }
+
+            Resize();
+
+            core.Navigate(_url);
+            Logger.Info("navigating to " + _url + " (pane " + (_paneIndex + 1) + ")");
+            // A token-figyelo CSAK a Harness klienst toltő paneleken fut: egy
+            // `--pane-url` overriddal nyitott panel (robot panel) soha nem
+            // navigálhat a Harness token-URL-jére.
+            if (_isHarnessPane) StartTokenWatch(core);
+        }
+
+        private const int MaxInitAttempts = 8;
+
+        /// <summary>
+        /// Várakozás a következő WebView2-próba előtt: 1 s, 1,5 s, 2,5 s, 3,5 s,
+        /// majd 5 s (összesen ~25 s). Ennyi idő alatt a másik ablak WebView2
+        /// folyamatai leállnak — ez okozta az E_UNEXPECTED sorozatot.
+        /// </summary>
+        private static int RetryDelayMillis(int attempt)
+        {
+            switch (attempt)
+            {
+                case 0: return 1000;
+                case 1: return 1500;
+                case 2: return 2500;
+                case 3: return 3500;
+                default: return 5000;
+            }
+        }
+
+        /// <summary>
+        /// ÖNGYÓGYÍTÁS: ha minden próba elbukott (a panel a statikus hibaoldalon
+        /// áll), 10 másodpercenként tovább próbálkozunk, legfeljebb 18-szor
+        /// (~3 perc). Siker esetén letöröljük a hibaoldal szövegét, és a normál
+        /// láncot futtatjuk — a felhasználónak nem kell bezárnia és újranyitnia
+        /// az ablakot (ez volt a mért panasza 2026-11-16-án).
+        /// </summary>
+        private void StartRecovery()
+        {
+            if (_recoveryTimer != null || _controller != null) return;
+            _recoveryTries = 0;
+            _recoveryTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(10)
+            };
+            _recoveryTimer.Tick += async (s, e) =>
+            {
+                if (_controller != null)
+                {
+                    try { _recoveryTimer.Stop(); } catch { }
+                    return;
+                }
+                _recoveryTries++;
+                if (_recoveryTries > 18)
+                {
+                    try { _recoveryTimer.Stop(); } catch { }
+                    Logger.Error("webview2 recovery feladva (pane " + (_paneIndex + 1) + ")");
+                    return;
+                }
+                try
+                {
+                    string folder = ResolveUserDataFolder(2);   // ideiglenes, egyedi mappa
+                    Directory.CreateDirectory(folder);
+                    Logger.Info("webview2 recovery próba " + _recoveryTries + " (pane " + (_paneIndex + 1)
+                        + "): " + folder);
+                    var options = new CoreWebView2EnvironmentOptions();
+                    if (_opts.BrowserArgs != null) options.AdditionalBrowserArguments = _opts.BrowserArgs;
+                    var environment = await CoreWebView2Environment.CreateAsync(null, folder, options);
+                    var controller = await environment.CreateCoreWebView2ControllerAsync(_child);
+                    if (controller == null) return;
+                    Logger.Info("webview2 VISSZAÁLLT (pane " + (_paneIndex + 1) + ", próba " + _recoveryTries + ")");
+                    try { _recoveryTimer.Stop(); } catch { }
+                    try
+                    {
+                        if (_child != IntPtr.Zero) Win32.SetWindowTextW(_child, string.Empty);
+                    }
+                    catch { }
+                    AttachController(controller);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Info("webview2 recovery próba " + _recoveryTries + " nem sikerült (pane "
+                        + (_paneIndex + 1) + "): " + ex.Message);
+                }
+            };
+            _recoveryTimer.Start();
+        }
+
+        private System.Windows.Threading.DispatcherTimer _recoveryTimer;
+        private int _recoveryTries;
 
         /// <summary>
         /// Picks the profile directory for this pane: the configured generation
@@ -910,7 +1011,13 @@ namespace DshWindow
             string baseDir = _opts.UserDataDir;
             if (string.IsNullOrEmpty(baseDir)) baseDir = DshPaths.ResolveUserDataDir();
 
-            if (attempt >= 2)
+            // MÉRT HIBA (2026-11-16): próbánként ÚJ mappa = próbánként ÚJ WebView2
+            // böngészőfolyamat; 6 panel × 8 próba 43 mappát és sok folyamatot
+            // hagyott maga után, ami után a controller-létrehozás tartósan
+            // E_UNEXPECTED hibát adott. Ezért a futás alatt EGY tartalék-mappa
+            // van panelenként (a zárolt mappát nem kell újra megnyitni, de a
+            // próbák nem szaporítják a folyamatokat).
+            if (attempt >= 1)
             {
                 baseDir = Path.Combine(Path.GetTempPath(), "DSH Harness", "WebView2");
             }
@@ -929,20 +1036,26 @@ namespace DshWindow
             // „A kért erőforrás használatban van" hibával bukott el, a tartalék
             // időbélyeges mappa miatt pedig ~6 s-ig fehér/üres panel látszott.
             // Ezért a profil asztalonként külön: pane-<N>-d<asztal>.
-            if (_opts.Desktop > 1)
+            if (_opts.Desktop > 1 && attempt == 0)
             {
                 folder += "-d" + _opts.Desktop.ToString(CultureInfo.InvariantCulture);
             }
 
-            // A profile another (killed) window still holds open cannot be taken
-            // over; a timestamped sibling starts anyway and the locked folder is
-            // reused by the next launch once its owner is gone.
-            if (attempt == 1)
+            // A tartalék-mappa futásonként EGY: az első tartalék-próbánál kap
+            // időbélyeget, a további próbák ugyanazt használják.
+            if (attempt >= 1)
             {
-                folder += "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+                if (_runStamp == null)
+                {
+                    _runStamp = Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture)
+                        + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+                }
+                folder += "-" + _runStamp;
             }
             return folder;
         }
+
+        private string _runStamp;
 
         private void Configure(CoreWebView2 core)
         {

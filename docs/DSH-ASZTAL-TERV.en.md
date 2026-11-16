@@ -51,6 +51,16 @@ which desktop), `state\tray.pid`, `state\tray-config.json` (`panes` = total).
 5. **The pid file cannot be shared:** every window used to write desktop 1's
    file, so the desktop-2 window appeared as "desktop 1" and switching did not
    start a new window.
+6. **A new WebView2 profile folder per attempt = process explosion.** With the
+   8-attempt retry, every attempt got a fresh folder: 6 panes × 8 attempts =
+   **43 profile folders** and many half-dead `msedgewebview2` processes, after
+   which `CreateCoreWebView2ControllerAsync` failed **permanently** with
+   `E_UNEXPECTED` (the environment succeeded, the controller did not). Fixed by
+   using **one fallback folder per run** per pane; after the cleanup (timestamped
+   folders + orphan WebView2 processes removed) all six panes got a controller.
+   If a pane still lands on the error page, the program **retries every 10 s**
+   (up to 18 times) and, on success, runs the same chain as a normal start — the
+   window no longer has to be closed and reopened.
 
 ## Taskbar: why the pinned launcher and the running window cannot merge
 

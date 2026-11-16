@@ -52,6 +52,16 @@ működött ezen a WebView2-hoston.
 5. **A pid-fájl nem lehet közös:** korábban minden ablak az 1-es fájlba íródott,
    ezért a 2. asztal ablaka „1. asztalként" jelent meg, és a váltás nem indított
    új ablakot.
+6. **Próbánként új WebView2 profil-mappa = folyamat-robbanás.** A 8 próbás
+   újrapróbálás mellett minden próba új mappát kapott: 6 panel × 8 próba = **43
+   profil-mappa** és sok félig leállt `msedgewebview2` folyamat, ami után a
+   `CreateCoreWebView2ControllerAsync` **tartósan** `E_UNEXPECTED` hibát adott (a
+   környezet létrejött, a vezérlő nem). Javítás: **futásonként egy**
+   tartalék-mappa panelenként; a takarítás (timestampes mappák + orphan WebView2
+   törlése) után mind a 6 panel vezérlője létrejött. Ha a panel mégis a
+   hibaoldalra esik, a program **10 s-onként újrapróbálja** (max 18×), és siker
+   esetén ugyanazt a láncot futtatja, mintha induláskor sikerült volna — nem kell
+   bezárni az ablakot.
 
 ## Tálcaikon: miért nem olvad össze a kitűzött indító és a futó ablak ikonja
 
