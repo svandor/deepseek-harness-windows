@@ -305,6 +305,18 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-16` (tizenharmadik kör) — **három javítás.** (1) **A becsukott ablak
+  nem nyílik újra:** a tálca induláskor feltétel nélkül törölte a
+  `state\window.closed` jelölőt, ezért egy tálca-újraindulás után az ablak
+  visszajött. Most csak akkor törli, ha a jelölő a mostani **boot előtt**
+  keletkezett (`GetTickCount64`, mert a .NET 4.8-ban nincs `Environment.TickCount64`
+  — a build meg is mutatta). (2) **Maximalizált indulás:** a `WindowState` a
+  `Loaded`-ban újra beállítva, és a valódi Win32 állapot naplózva
+  (`window placement after load: showCmd=…`, 3 = maximalizált) — mérés, nem
+  találgatás. (3) **FTP napló:** a host `{log: "sor\nsor"}` sztringet ad, a panel
+  `.join`-t hívott → `logLines.join is not a function`; most sorokra vágja.
+  `bin\DshWindow.exe.new` + `bin\DshTray.exe.new` kész.
+
 - `2026-11-16` (tizenkettedik kör) — **három mért hiba: a látható konzolablakok
   VALÓDI forrása, a Kiadás gomb aktív maradása, és az üres FTP fül.** (1) **A
   konzolablakok a `dsh-subprocess-local`-ból jönnek, NEM a `dsh-win32-process`-ből.**
@@ -320,8 +332,7 @@ Kötelező:
   konzol titka a `windowsHide` hiánya volt. (2) **A Kiadás gomb azért maradt
   aktív a v0.2.8 kiadás után, mert a státuszfájl BOM-mal íródott** (a
   `Set-Content -Encoding utf8` BOM-ot tesz, a `JSON.parse` elutasítja) → a host
-  „nincs kiadás" állapotot adott. MÉRVE: a fájl első 3 byte-ja `EF BB BF`, a
-  nyers parse `Unexpected token ''`, a BOM levágva `state:"done"`, `tag:"v0.2.8"`.
+  „nincs kiadás" állapotot adott.
   Javítás: a host BOM-ot levág, a `release.ps1` BOM nélkül ír, a kliens pedig
   MINDEN lezáró ágban (`done`/`failed`/`none`/`stale`/timeout) frissíti a
   git-snapshotot, mert a gomb inaktivitása a `releaseTag`-en múlik. (3) **Az FTP
