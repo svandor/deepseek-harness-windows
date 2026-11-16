@@ -461,6 +461,34 @@ namespace DshWindow
                     + (trayMaximized.HasValue ? " (forced by tray config)" : " (restored)"));
             }
 
+            // MÉRT HIBA (2026-11-16, felhasználói jelzés: „hiába van bekapcsolva,
+            // nem maximalizálva indul"): a `WindowState = Maximized` a megjelenítés
+            // ELŐTT néha nem érvényesül (a WPF a Show után visszaállítja a normál
+            // méretre). Ezért a betöltés után MÉGEGYSZER beállítjuk — csak akkor,
+            // ha a szándék maximalizált —, és a tényleges állapotot (Win32
+            // `GetWindowPlacement.showCmd`) is naplózzuk, hogy legközelebb mérés
+            // legyen belőle, ne találgatás.
+            window.Loaded += (s, e) =>
+            {
+                try
+                {
+                    if (wantMaximized && window.WindowState != WindowState.Maximized)
+                    {
+                        window.WindowState = WindowState.Maximized;
+                        Logger.Info("maximized re-applied at Loaded (WPF had reset it)");
+                    }
+                    var handle = new WindowInteropHelper(window).Handle;
+                    Logger.Info("window placement after load: showCmd="
+                        + Win32.WindowShowCommand(handle)
+                        + " state=" + window.WindowState
+                        + " (3=maximalizalt, 1=normal)");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Info("maximized placement check failed: " + ex.Message);
+                }
+            };
+
             // Save on close. RestoreBounds is used so a maximized window still
             // reports the rectangle the user will get when un-maximizing.
             bool geometrySaved = false;
@@ -2534,6 +2562,38 @@ namespace DshWindow
         {
             public int X;
             public int Y;
+        }
+
+        /// <summary>
+        /// A Win32 ablak-elhelyezés (a WPF `WindowState`-tól független, valódi állapot).
+        /// `showCmd`: 1 = normál, 3 = maximalizált, 7 = minimalizált.
+        /// </summary>
+        [StructLayout(LayoutKind.Sequential)]
+        public struct WINDOWPLACEMENT
+        {
+            public int length;
+            public int flags;
+            public int showCmd;
+            public POINT minPosition;
+            public POINT maxPosition;
+            public RECT normalPosition;
+        }
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT lpwndpl);
+
+        /// <summary>
+        /// A tényleges megjelenítési parancs (3 = maximalizált, 1 = normál).
+        /// MIÉRT KELL: a WPF `WindowState` és a valós Win32 állapot eltérhet, és a
+        /// „nem maximalizálva indul" hibát csak így lehet mérni (nem találgatással).
+        /// </summary>
+        public static int WindowShowCommand(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return 0;
+            var placement = new WINDOWPLACEMENT();
+            placement.length = Marshal.SizeOf(typeof(WINDOWPLACEMENT));
+            return GetWindowPlacement(hwnd, ref placement) ? placement.showCmd : -1;
         }
 
         [DllImport("user32.dll")]

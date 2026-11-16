@@ -372,7 +372,13 @@ window.__ModuleLoader__.load({
       function loadLog() {
         return getJson("/ftp/log?lines=25")
           .then(function (body) {
-            if (body && body.ok === true) setLogLines(body.log || []);
+            // A host a naplót EGY szövegként adja (`{log: "sor\nsor"}`) — a
+            // felület sorfolyamként rajzolja, ezért itt vágjuk sorokra. MÉRT HIBA
+            // 2026-11-16: `logLines.join is not a function` (a string nem tömb).
+            if (body && body.ok === true) {
+              var text = typeof body.log === "string" ? body.log : "";
+              setLogLines(text.split(/\r?\n/).filter(function (line) { return line.trim() !== ""; }));
+            }
           })
           .catch(function () {});
       }
@@ -849,7 +855,9 @@ window.__ModuleLoader__.load({
             h("strong", null, t("log.title")),
             h("button", { type: "button", style: { ...S.button, marginLeft: "auto" }, onClick: loadLog }, t("common.refresh")),
           ),
-          logLines.length === 0 ? h("div", { style: S.label }, t("log.empty")) : h("pre", { style: S.pre }, logLines.join("\n")),
+          Array.isArray(logLines) && logLines.length === 0
+            ? h("div", { style: S.label }, t("log.empty"))
+            : h("pre", { style: S.pre }, Array.isArray(logLines) ? logLines.join("\n") : String(logLines)),
         ),
 
         renderProfileForm(),

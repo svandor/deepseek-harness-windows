@@ -251,10 +251,36 @@ namespace DshTray
             }
             catch (Exception ex) { Log.Error("friss indítás: " + ex.Message); }
             BuildIcon();
-            // Új tálca-session (bejelentkezés, frissítés): az ablak a megszokott
-            // módon megnyílik. A bezárás-jelölő csak az adott sessionre szól,
-            // különben egy régi bezárás után a login után sem nyílna meg.
-            ClearCloseMarker();
+            // MÉRT HIBA (2026-11-16, a felhasználó jelzése: „ha becsukom az ablakot,
+            // magától újranyílik"): a tálca INDULÁSAKOR feltétel nélkül törölte a
+            // bezárás-jelölőt (`state\window.closed`), ezért egy tálca-újraindulás
+            // (frissítés, összeomlás, kézi indítás, bejelentkezés utáni autostart)
+            // után az ablak újra megnyílt, hiába zárta be a felhasználó.
+            //
+            // HELYES MŰKÖDÉS: a jelölő a BEJELENTKEZÉSIG él. Ha a jelölő a mostani
+            // boot ELŐTT keletkezett, elavult (a felhasználó a boot után látni
+            // akarja az ablakot) — csak akkor töröljük. A mostani sessionben írt
+            // jelölőt tiszteletben tartjuk, és csak kifejezett kérésre (tálcaikon,
+            // „Ablak megnyitása", felosztás-váltás) töröljük.
+            try
+            {
+                if (File.Exists(_cfg.WindowClosedMarker))
+                {
+                    DateTime boot = DateTime.Now.AddMilliseconds(-(double)NativeMethods.GetTickCount64());
+                    DateTime written = File.GetLastWriteTime(_cfg.WindowClosedMarker);
+                    if (written < boot)
+                    {
+                        ClearCloseMarker();
+                        Log.Info("bezárás-jelölő elavult (a boot előtti) — törölve");
+                    }
+                    else
+                    {
+                        _closeLogged = true;
+                        Log.Info("a felhasználó bezárta az ablakot — a tálca-indulás NEM nyitja meg újra");
+                    }
+                }
+            }
+            catch (Exception ex) { Log.Error("bezárás-jelölő ellenőrzés: " + ex.Message); }
             StartShowListener();
 
             _supervise = new System.Threading.Timer(_ => Supervise(), null, 1500, 20000);
@@ -1829,6 +1855,13 @@ namespace DshTray
 
         [System.Runtime.InteropServices.DllImport("kernel32.dll")]
         public static extern uint GetCurrentThreadId();
+
+        /// <summary>
+        /// A gép bekapcsolása óta eltelt milliszekundum (64 bit). A .NET Framework
+        /// 4.8-ban nincs `Environment.TickCount64`, ezért ez a P/Invoke.
+        /// </summary>
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        public static extern ulong GetTickCount64();
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
