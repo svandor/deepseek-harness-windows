@@ -485,9 +485,16 @@ function parseStatus(stdout) {
 
 /** One repository snapshot: branch, tracking, file states, recent commits. */
 async function describeRepository(path) {
-  const [statusResult, logResult] = await Promise.all([
+  const [statusResult, logResult, tagAtHeadResult, lastTagResult] = await Promise.all([
     run("git", ["-C", path, "status", "--porcelain=v1", "--branch"]),
-    run("git", ["-C", path, "log", `-n${String(COMMIT_COUNT)}`, "--date=iso-strict", "--pretty=format:%h\u001f%an\u001f%ad\u001f%s"])
+    run("git", ["-C", path, "log", `-n${String(COMMIT_COUNT)}`, "--date=iso-strict", "--pretty=format:%h\u001f%an\u001f%ad\u001f%s"]),
+    // A KIADÁS GOMB NÉMÍTÁSA: ha a legfrissebb commiton már van kiadási tag,
+    // akkor ehhez a commithoz már készült kiadás — új kiadás csak ÚJ committal
+    // készíthető, ezért a gomb ilyenkor inaktív (a felhasználó kérése,
+    // 2026-11-16). A tag a kiadás-kirakó szkript és a GitHub Release közös
+    // nyoma, ezért offline is elég (nincs `gh` hívás).
+    run("git", ["-C", path, "tag", "--points-at", "HEAD", "--list", "v*"]),
+    run("git", ["-C", path, "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*"])
   ]);
 
   if (!statusResult.ok) {
@@ -502,6 +509,23 @@ async function describeRepository(path) {
     })
     : [];
 
+  const isReleaseTag = (value) => /^v\d+\.\d+\.\d+$/u.test(String(value ?? "").trim());
+  const tagsHere = tagAtHeadResult.ok
+    ? tagAtHeadResult.stdout.split(/\r?\n/u).map((line) => line.trim()).filter((line) => line.length > 0)
+    : [];
+  const releaseTag = tagsHere.find(isReleaseTag) ?? "";
+  const lastTagRaw = lastTagResult.ok ? lastTagResult.stdout.trim() : "";
+  const lastReleaseTag = isReleaseTag(lastTagRaw) ? lastTagRaw : "";
+  // Hány commit van a legutolsó kiadás óta (a gomb tooltipjéhez).
+  let sinceRelease = null;
+  if (lastReleaseTag !== "" && releaseTag === "") {
+    const count = await run("git", ["-C", path, "rev-list", "--count", `${lastReleaseTag}..HEAD`]);
+    if (count.ok) {
+      const parsed = Number.parseInt(count.stdout.trim(), 10);
+      if (Number.isInteger(parsed) && parsed >= 0) sinceRelease = parsed;
+    }
+  }
+
   return {
     path,
     ok: true,
@@ -512,7 +536,10 @@ async function describeRepository(path) {
     changed: status.files.filter((file) => !file.untracked).length,
     untracked: status.files.filter((file) => file.untracked).length,
     files: status.files.slice(0, 50),
-    commits
+    commits,
+    releaseTag,
+    lastReleaseTag,
+    sinceRelease
   };
 }
 
@@ -894,6 +921,9 @@ async function handleGithubAction(req, res) {
     }
 
     if (action === "release") {
+      // `dry=1`: a teljes lánc lefut, de nem ír verziót/commitot/taget és nem
+      // publikál — így a gomb és a host-út maga is próbálható éles kiadás nélkül.
+      const dry = url.searchParams.get("dry") === "1";
       // EGYIDEJŰ KIADÁS TILTVA: két kattintás két verzióemelést indítana (verseny
       // a VERSION fájlon és a tagen), ezért futó kiadásnál elutasítjuk.
       if (releaseInFlight()) {
@@ -903,6 +933,20 @@ async function handleGithubAction(req, res) {
           error: `már fut egy kiadás (pid ${running.pid}, ${running.state}${running.tag ? `, ${running.tag}` : ""}) — várd meg a végét (napló: state\\release-log.txt)`
         });
         return;
+      }
+      // MÁR KIADOTT COMMIT: ha a legfrissebb commiton van kiadási tag, ehhez a
+      // commithoz már készült kiadás; a szkript verziót emelne és DUPLIKÁLT
+      // kiadást csinálna ugyanarra a tartalomra. A panel gombja ilyenkor inaktív
+      // (felhasználói kérés, 2026-11-16), ez a host-oldali kényszer ugyanarra.
+      if (!dry) {
+        const tagsHere = await run("git", ["-C", REPO_ROOT, "tag", "--points-at", "HEAD", "--list", "v*"]);
+        const tagged = tagsHere.ok
+          ? tagsHere.stdout.split(/\r?\n/u).map((line) => line.trim()).find((line) => /^v\d+\.\d+\.\d+$/u.test(line))
+          : "";
+        if (tagged) {
+          sendJson(res, { ok: false, error: `a legújabb commit már kiadva (${tagged}) — új kiadás csak ÚJ commit után készíthető` });
+          return;
+        }
       }
       // Kiadás: a teljes folyamat a workspace tools\release.ps1-ében van (verzió +
       // commit + tag + push + GitHub Release). Azért szkript és nem itt: ugyanez
@@ -921,9 +965,6 @@ async function handleGithubAction(req, res) {
       if (bump) args.push("-Bump", bump);
       const message = url.searchParams.get("message");
       if (message) args.push("-Message", message);
-      // `dry=1`: a teljes lánc lefut, de nem ír verziót/commitot/taget és nem
-      // publikál — így a gomb és a host-út maga is próbálható éles kiadás nélkül.
-      const dry = url.searchParams.get("dry") === "1";
       if (dry) args.push("-DryRun");
       const child = spawn("powershell.exe", args, {
         cwd: REPO_ROOT,

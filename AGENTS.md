@@ -305,6 +305,23 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-16` (tizedik kör) — **a Kiadás gomb némítása, ha a legújabb commit már
+  kiadott.** (1) **A panel-szintű szabály:** ha a legfrissebb commiton kiadási tag
+  van (`releaseTag` a git-snapshotban), VAGY a legfrissebb commit maga a
+  `Release vX.Y.Z` commit (a `tools\release.ps1` minden kiadást így zár, ezért ez
+  a régi hosttal is működik, újraindítás nélkül), a gomb **„Kiadva”** felirattal
+  inaktív, a tooltipje kimondja a tagot; ha van függő commit, a tooltip azt is
+  kiírja (`sinceRelease`). (2) **Host-oldali kényszer:** a `release` végpont
+  elutasítja a kérést, ha a HEAD-en kiadási tag van (elavult panel se tudjon
+  duplikált kiadást indítani); a `?dry=1` próbaút kivétel. Új snapshot-mezők:
+  `releaseTag`, `lastReleaseTag`, `sinceRelease`. (3) **MÉRT ÁLLAPOT a javítás
+  előtt:** a HEAD `36f99cd` **nincs** tagelve (`git tag --points-at HEAD` üres),
+  és a v0.2.7 óta a `plugins\dsh-ui-extras\lib\index.js` is változott (valódi
+  javítás: `detached: false` kiadás-indítás), tehát ott a gomb **helyesen aktív**
+  — a kiadás indokolt; a következő kiadás után automatikusan „Kiadva” lesz, amíg
+  új commit nem jön. A kliens-oldali szabály panel-újratöltéssel él, a
+  host-oldali kényszer a következő harness-indulásnál.
+
 - `2026-11-16` (kilencedik kör) — **a titok-audit hamis találata, a konzolablakok
   VALÓDI oka, és a Kiadás gomb egyidejűsége.** (1) **A kiadás elbukott a
   titok-kapun:** a MOSTANI fában 2 találat volt — `tools\patch-sandbox-no-window.ps1`

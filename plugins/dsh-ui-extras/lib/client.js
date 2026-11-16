@@ -1468,6 +1468,9 @@ window.__ModuleLoader__.load({
       "gitReleaseStale": "A kiadás folyamata leállt, de eredményt nem írt — nézd meg a naplót: state\\release-log.txt",
       "gitReleaseBusy": "Kiadás fut — a gomb addig inaktív, amíg a kiadás nem hozható létre",
       "gitReleaseBusyShort": "Kiadás fut…",
+      "gitReleaseTagged": "Kiadva",
+      "gitReleaseAlready": "A legújabb commit már kiadva: {tag}. Új kiadás csak ÚJ commit után készíthető — ezért a gomb inaktív.",
+      "gitReleasePending": "a legutóbbi kiadás ({last}) óta {n} commit vár kiadásra",
       "gitCommitPlaceholder": "Commit üzenet (üresen automatikus)",
       "gitAheadBehindHint": "↑ = hány commit vár feltolásra (Push), ↓ = hány commit van a távoli ágon, ami nálad még nincs meg. Ez commitok száma, nem fájloké.",
       "gitCommitFiles": "commitra:",
@@ -1761,6 +1764,9 @@ window.__ModuleLoader__.load({
       "gitReleaseStale": "The release process stopped without reporting a result — check the log: state\\release-log.txt",
       "gitReleaseBusy": "A release is running — the button stays disabled until a release can be started again",
       "gitReleaseBusyShort": "Release running…",
+      "gitReleaseTagged": "Released",
+      "gitReleaseAlready": "The latest commit is already released: {tag}. A new release needs a NEW commit — that is why the button is disabled.",
+      "gitReleasePending": "{n} commit(s) unreleased since {last}",
       "gitCommitPlaceholder": "Commit message (empty = automatic)",
       "gitAheadBehindHint": "↑ = how many commits are waiting to be pushed (Push), ↓ = how many commits exist on the remote branch that you do not have yet. These count commits, not files.",
       "gitCommitFiles": "to commit:",
@@ -5145,6 +5151,27 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
               var busy = action !== null && action.status === "working";
               var canCommit = primary.ok === true && (primary.changed > 0 || primary.untracked > 0) && !busy;
               var canPush = primary.ok === true && primary.ahead > 0 && !busy;
+              // KIADÁS NÉMÍTÁSA (felhasználói kérés, 2026-11-16): ha a legfrissebb
+              // commiton már van kiadási tag, ehhez a commithoz már készült kiadás —
+              // új kiadás csak ÚJ committal készíthető, ezért a gomb inaktív.
+              var releasedTag = primary.ok === true && typeof primary.releaseTag === "string" ? primary.releaseTag : "";
+              // Tartalék ág a régi hosthoz: a kiadás-kirakó szkript a kiadást
+              // mindig egy `Release vX.Y.Z` commitba zárja, és a kiadás után az a
+              // legfrissebb commit (a tag és a GitHub Release ugyanabban a
+              // futásban készül). Ha tehát a legfrissebb commit ez, akkor ehhez a
+              // commithoz már van kiadás — a gomb inaktív.
+              if (releasedTag === "" && primary.ok === true && Array.isArray(primary.commits) && primary.commits.length > 0) {
+                var releaseSubject = /^Release (v\d+\.\d+\.\d+)$/.exec(String(primary.commits[0].subject || "").trim());
+                if (releaseSubject) releasedTag = releaseSubject[1];
+              }
+              var releaseDisabled = busy || releaseFlying || releasedTag !== "";
+              var releaseTitle = releaseFlying
+                ? t("gitReleaseBusy")
+                : releasedTag !== ""
+                  ? t("gitReleaseAlready", { tag: releasedTag })
+                  : t("gitReleaseHint") + (primary.sinceRelease > 0 && primary.lastReleaseTag
+                    ? " · " + t("gitReleasePending", { n: primary.sinceRelease, last: primary.lastReleaseTag })
+                    : "");
               return jsx.jsxs("div", {
                 style: { display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap", marginBottom: "8px" },
                 children: [
@@ -5180,11 +5207,11 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                   // ezért a push önmagában nem elég: a verzió és a Release is kell.
                   jsx.jsx("button", {
                     type: "button",
-                    title: releaseFlying ? t("gitReleaseBusy") : t("gitReleaseHint"),
-                    disabled: busy || releaseFlying,
+                    title: releaseTitle,
+                    disabled: releaseDisabled,
                     onClick: function () { runRelease(); },
-                    style: { border: "1px solid var(--dsw-alias-border-l3, rgba(255,255,255,0.25))", borderRadius: "7px", background: busy || releaseFlying ? "transparent" : "var(--dsw-alias-interactive-bg-hover-solid, rgba(255,255,255,0.08))", color: "inherit", opacity: busy || releaseFlying ? 0.45 : 1, cursor: busy || releaseFlying ? "not-allowed" : "pointer", font: "inherit", padding: "2px 10px" },
-                    children: releaseFlying ? t("gitReleaseBusyShort") : t("gitRelease")
+                    style: { border: "1px solid var(--dsw-alias-border-l3, rgba(255,255,255,0.25))", borderRadius: "7px", background: releaseDisabled ? "transparent" : "var(--dsw-alias-interactive-bg-hover-solid, rgba(255,255,255,0.08))", color: "inherit", opacity: releaseDisabled ? 0.45 : 1, cursor: releaseDisabled ? "not-allowed" : "pointer", font: "inherit", padding: "2px 10px" },
+                    children: releaseFlying ? t("gitReleaseBusyShort") : releasedTag !== "" ? t("gitReleaseTagged") : t("gitRelease")
                   }),
                   primary.ok === true
                     ? jsx.jsx("span", {
