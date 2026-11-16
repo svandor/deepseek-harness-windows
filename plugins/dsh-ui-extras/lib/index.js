@@ -609,6 +609,50 @@ async function handleGithub(req, res) {
  *   action=connect -> `git remote add origin <url>` in the root
  *   action=clone   -> `gh repo clone <nameWithOwner> <target>`
  */
+/**
+ * A kiadás állapotfájlja (a `tools/release.ps1` írja) és a folyamat él-e.
+ *
+ * MIÉRT KELL: a Git panel „Kiadás" gombja leválasztott folyamatot indít
+ * (`detached`, `stdio: ignore`), ezért a kimenet nem megy vissza a böngészőbe.
+ * A panel ebből a fájlból tudja meg, hogy a kiadás fut, kész vagy elbukott —
+ * és ugyanez a forrás véd a két egyidejű kiadás ellen is.
+ */
+const RELEASE_STATUS_FILE = join(REPO_ROOT, "state", "release-status.json");
+const RELEASE_LOG_FILE = join(REPO_ROOT, "state", "release-log.txt");
+
+function readReleaseStatus() {
+  try {
+    if (!existsSync(RELEASE_STATUS_FILE)) return { ok: false };
+    const parsed = JSON.parse(readFileSync(RELEASE_STATUS_FILE, "utf8"));
+    const pid = Number(parsed?.pid);
+    let alive = false;
+    if (Number.isInteger(pid) && pid > 0) {
+      try { process.kill(pid, 0); alive = true; } catch { alive = false; }
+    }
+    return { ok: true, ...parsed, alive };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** A kiadási napló utolsó ~6 KB-a (a panel összecsukható „Napló" blokkja). */
+function readReleaseLogTail() {
+  try {
+    if (!existsSync(RELEASE_LOG_FILE)) return "";
+    return readFileSync(RELEASE_LOG_FILE, "utf8").slice(-6000);
+  } catch {
+    return "";
+  }
+}
+
+/** A kiadás folyamatban van-e (indul vagy fut, és él a folyamat). */
+function releaseInFlight() {
+  const status = readReleaseStatus();
+  if (!status.ok) return false;
+  if (status.state !== "starting" && status.state !== "running") return false;
+  return status.alive === true;
+}
+
 async function handleGithubAction(req, res) {
   try {
     const url = new URL(req.url ?? "/", "http://dsh.invalid");
@@ -824,7 +868,24 @@ async function handleGithubAction(req, res) {
     // --- commit / push / description -----------------------------------------
     // Development happens on `main` unless stated otherwise, so push targets the
     // branch's own upstream (or origin/main when it has none).
+    if (action === "release-status") {
+      const status = readReleaseStatus();
+      if (!status.ok) { sendJson(res, { ok: true, state: "none" }); return; }
+      sendJson(res, { ok: true, ...status, logTail: readReleaseLogTail() });
+      return;
+    }
+
     if (action === "release") {
+      // EGYIDEJŰ KIADÁS TILTVA: két kattintás két verzióemelést indítana (verseny
+      // a VERSION fájlon és a tagen), ezért futó kiadásnál elutasítjuk.
+      if (releaseInFlight()) {
+        const running = readReleaseStatus();
+        sendJson(res, {
+          ok: false,
+          error: `már fut egy kiadás (pid ${running.pid}, ${running.state}${running.tag ? `, ${running.tag}` : ""}) — várd meg a végét (napló: state\\release-log.txt)`
+        });
+        return;
+      }
       // Kiadás: a teljes folyamat a workspace tools\release.ps1-ében van (verzió +
       // commit + tag + push + GitHub Release). Azért szkript és nem itt: ugyanez
       // parancssorból is elérhető kell legyen, és a Git panel gombja pontosan azt
@@ -844,9 +905,26 @@ async function handleGithubAction(req, res) {
       if (message) args.push("-Message", message);
       const child = spawn("powershell.exe", args, { detached: true, stdio: "ignore", windowsHide: true });
       child.unref();
+      // Az első állapot AZONNAL: a szkript ~1 s múlva felülírja a sajátjával, de a
+      // panel addig is látja, hogy fut (és a dupla-indítás védelme is működik).
+      try {
+        const now = new Date().toISOString();
+        writeFileSync(RELEASE_STATUS_FILE, JSON.stringify({
+          state: "starting",
+          pid: child.pid ?? 0,
+          version: "",
+          tag: "",
+          url: "",
+          error: "",
+          startedAt: now,
+          updatedAt: now,
+          logPath: RELEASE_LOG_FILE
+        }), "utf8");
+      } catch { /* a szkript úgyis ír saját állapotot */ }
       sendJson(res, {
         ok: true,
-        output: "A kiadás elindult (verzió + commit + tag + push + GitHub Release). Az eredmény a Git panelen és a GitHubon látszik."
+        pid: child.pid ?? 0,
+        output: "A kiadás elindult (verzió + commit + tag + push + GitHub Release). Az állapot a panelen követhető, a napló: state\\release-log.txt."
       });
       return;
     }

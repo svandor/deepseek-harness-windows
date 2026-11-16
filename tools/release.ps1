@@ -63,7 +63,12 @@ $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $versionFile = Join-Path $root 'VERSION'
 $pluginRoot = Join-Path $root 'plugins'
 
-function Fail([string]$text) { Write-Host "HIBA: $text" -ForegroundColor Red; Stop-ReleaseLog; exit 1 }
+function Fail([string]$text) {
+    Write-Host "HIBA: $text" -ForegroundColor Red
+    try { if (Get-Command Set-ReleaseStatus -ErrorAction SilentlyContinue) { Set-ReleaseStatus -State 'failed' -ErrorText $text } } catch { }
+    Stop-ReleaseLog
+    exit 1
+}
 function Step([string]$text) { Write-Host "==> $text" -ForegroundColor Cyan }
 
 # Kiadási napló: a Git panel „Kiadás" gombja LEVÁLASZTOTT folyamatban futtat
@@ -79,6 +84,28 @@ try {
     Start-Transcript -Path $logFile -Append | Out-Null
     Write-Host "Kiadási napló: $logFile"
 } catch { }
+
+# Állapotfájl a Git panelnek: `state\release-status.json`.
+# A panel ezt pollozza (fut / kész / hiba), mert a szkript leválasztva fut.
+$statusFile = Join-Path $root 'state\release-status.json'
+$startedAt = (Get-Date).ToString('o')
+function Set-ReleaseStatus {
+    param([string]$State, [string]$Tag = '', [string]$Url = '', [string]$ErrorText = '')
+    try {
+        $payload = [ordered]@{
+            state = $State
+            pid = $PID
+            version = $(if ($script:next) { $script:next } else { '' })
+            tag = $(if ($Tag) { $Tag } elseif ($script:tag) { $script:tag } else { '' })
+            url = $Url
+            error = $ErrorText
+            startedAt = $script:startedAt
+            updatedAt = (Get-Date).ToString('o')
+            logPath = $script:logFile
+        } | ConvertTo-Json -Compress
+        Set-Content -Path $statusFile -Value $payload -Encoding utf8 -ErrorAction Stop
+    } catch { }
+}
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Fail 'nincs git a PATH-on' }
 if (-not (Test-Path (Join-Path $root '.git'))) { Fail "nem git repó: $root" }
@@ -113,6 +140,11 @@ if (git -C $root tag -l $tag) { Fail "$tag már létezik — válassz nagyobb ve
 
 $subject = "Release $tag"
 if ($Message) { $subject = "$subject — $Message" }
+
+# --- állapotfájl a felületnek ---------------------------------------------------
+# A Git panel „Kiadás" gombja ebből tudja meg, hogy a kiadás fut, kész vagy
+# elbukott (a folyamat leválasztva fut, a kimenete nem megy vissza a böngészőbe).
+if (-not $DryRun) { Set-ReleaseStatus -State 'running' -Tag $tag }
 
 Write-Host ''
 Write-Host "Projekt : $root"
@@ -299,4 +331,5 @@ if ($assets.Count -gt 0) {
 Write-Host ''
 Write-Host "KÉSZ: $tag kiadva." -ForegroundColor Green
 Write-Host "  https://github.com/svandor/deepseek-harness-windows/releases/tag/$tag"
+Set-ReleaseStatus -State 'done' -Tag $tag -Url "https://github.com/svandor/deepseek-harness-windows/releases/tag/$tag"
 Stop-ReleaseLog

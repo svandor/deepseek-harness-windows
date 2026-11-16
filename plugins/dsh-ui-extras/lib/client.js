@@ -1459,6 +1459,13 @@ window.__ModuleLoader__.load({
       "gitPush": "Push",
       "gitRelease": "Kiadás",
       "gitReleaseHint": "Kiadás: verzióemelés + commit + tag + push + GitHub Release. A tools\\release.ps1 fut le, kérdés nélkül (patch verzió). Parancssorból: tools\\release.cmd",
+      "gitReleasing": "Kiadás indul…",
+      "gitReleaseRunning": "Kiadás fut — az eredmény itt jelenik meg",
+      "gitReleaseDone": "Kész: {tag} — {url}",
+      "gitReleaseFailed": "A kiadás elbukott: {error} (részletek: state\\release-log.txt)",
+      "gitReleaseTimeout": "A kiadás állapota 10 perc után sem érkezett meg — nézd meg a naplót: state\\release-log.txt",
+      "gitReleaseIdle": "Nincs kiadási állapot (ebben a munkamenetben még nem futott kiadás).",
+      "gitReleaseStale": "A kiadás folyamata leállt, de eredményt nem írt — nézd meg a naplót: state\\release-log.txt",
       "gitCommitPlaceholder": "Commit üzenet (üresen automatikus)",
       "gitAheadBehindHint": "↑ = hány commit vár feltolásra (Push), ↓ = hány commit van a távoli ágon, ami nálad még nincs meg. Ez commitok száma, nem fájloké.",
       "gitCommitFiles": "commitra:",
@@ -1743,6 +1750,13 @@ window.__ModuleLoader__.load({
       "gitPush": "Push",
       "gitRelease": "Release",
       "gitReleaseHint": "Release: version bump + commit + tag + push + GitHub Release. Runs tools\\release.ps1 without asking (patch bump). From a shell: tools\\release.cmd",
+      "gitReleasing": "Release starting…",
+      "gitReleaseRunning": "Release running — the result appears here",
+      "gitReleaseDone": "Done: {tag} — {url}",
+      "gitReleaseFailed": "The release failed: {error} (details: state\\release-log.txt)",
+      "gitReleaseTimeout": "No release status after 10 minutes — check the log: state\\release-log.txt",
+      "gitReleaseIdle": "No release status (no release has run in this session).",
+      "gitReleaseStale": "The release process stopped without reporting a result — check the log: state\\release-log.txt",
       "gitCommitPlaceholder": "Commit message (empty = automatic)",
       "gitAheadBehindHint": "↑ = how many commits are waiting to be pushed (Push), ↓ = how many commits exist on the remote branch that you do not have yet. These count commits, not files.",
       "gitCommitFiles": "to commit:",
@@ -4937,6 +4951,82 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
           });
       }
 
+      /**
+       * Kiadás: a host LEVÁLASZTOTT folyamatot indít, ezért a kimenet nem jön
+       * vissza a böngészőbe. Az állapotot a `release-status` végpontról pollozzuk
+       * (2 s), legfeljebb 10 percig — a végén a panel KIÍRJA az eredményt (kész +
+       * link, vagy a hibaüzenet). A ciklus kötött, hogy ne maradjon futva (§1.7).
+       */
+      function runRelease() {
+        setAction({ status: "working", message: t("gitReleasing") });
+        fetch("/ui-extras/github-action?action=release", { headers: { Accept: "application/json" } })
+          .then(function (response) { return response.json(); })
+          .then(function (body) {
+            if (!body || body.ok !== true) {
+              setAction({ status: "error", message: (body && body.error) || "?" });
+              return;
+            }
+            loadGithub();
+            loadGit();
+            pollRelease(0);
+          })
+          .catch(function (error) {
+            setAction({ status: "error", message: String(error && error.message ? error.message : error) });
+          });
+      }
+
+      function pollRelease(tick) {
+        if (tick > 300) {
+          setAction({ status: "error", message: t("gitReleaseTimeout") });
+          return;
+        }
+        setTimeout(function () {
+          fetch("/ui-extras/github-action?action=release-status", { headers: { Accept: "application/json" } })
+            .then(function (response) { return response.json(); })
+            .then(function (body) {
+              if (!body || body.ok !== true) { pollRelease(tick + 1); return; }
+              var tag = String(body.tag || "");
+              // Ha a folyamat már nem él, de eredmény nincs: nem várunk tovább
+              // (a naplóban van a hiba oka).
+              if ((body.state === "running" || body.state === "starting") && body.alive !== true) {
+                setAction({ status: "error", message: t("gitReleaseStale") });
+                return;
+              }
+              if (body.state === "done") {
+                setAction({ status: "done", message: t("gitReleaseDone", { tag: tag || "?", url: String(body.url || "") }) });
+                loadGithub();
+                loadGit();
+                return;
+              }
+              if (body.state === "failed") {
+                // A napló utolsó sorai adják a valódi okot (git/gh stderr).
+                var tail = String(body.logTail || "")
+                  .split("\n")
+                  .filter(function (line) { return line.trim() !== ""; })
+                  .slice(-2)
+                  .join(" · ");
+                setAction({
+                  status: "error",
+                  message: t("gitReleaseFailed", { error: String(body.error || "?") })
+                    + (tail !== "" ? " · " + tail.slice(-260) : "")
+                });
+                loadGit();
+                return;
+              }
+              if (body.state === "none") {
+                setAction({ status: "done", message: t("gitReleaseIdle") });
+                return;
+              }
+              setAction({
+                status: "working",
+                message: t("gitReleaseRunning") + (tag !== "" ? " (" + tag + ")" : (body.version ? " (v" + String(body.version) + ")" : ""))
+              });
+              pollRelease(tick + 1);
+            })
+            .catch(function () { pollRelease(tick + 1); });
+        }, 2000);
+      }
+
       var repositories = data.status === "ready" ? data.body.repositories : [];
       var githubBody = github.status === "ready" ? github.body : null;
       var githubRepos = githubBody && githubBody.repositories ? githubBody.repositories : [];
@@ -5042,7 +5132,8 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                   jsx.jsx("button", {
                     type: "button",
                     title: t("gitReleaseHint"),
-                    onClick: function () { runGithubAction({ action: "release" }); },
+                    disabled: action.status === "working",
+                    onClick: function () { runRelease(); },
                     style: { border: "1px solid var(--dsw-alias-border-l3, rgba(255,255,255,0.25))", borderRadius: "7px", background: "var(--dsw-alias-interactive-bg-hover-solid, rgba(255,255,255,0.08))", color: "inherit", cursor: "pointer", font: "inherit", padding: "2px 10px" },
                     children: t("gitRelease")
                   }),
