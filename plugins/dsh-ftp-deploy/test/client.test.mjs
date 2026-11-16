@@ -51,6 +51,16 @@ function makeReact() {
       cursor += 1;
       return fn;
     },
+    /** A hiba-határhoz (class komponens) minimális alap. */
+    Component: class Component {
+      constructor(props) {
+        this.props = props ?? {};
+        this.state = {};
+      }
+      setState(next) {
+        this.state = { ...this.state, ...(typeof next === "function" ? next(this.state) : next) };
+      }
+    },
     /** A render előtt nullázza a hook-tárat (mint egy friss render). */
     __reset() {
       hooks = [];
@@ -138,6 +148,8 @@ test("kliens: a bundle betölt, a fül/fejléc/panel regisztrálódik", () => {
   const body = calls.slots.find((entry) => entry.name === "sidebar.right.pane.tab");
   assert.ok(body, "a tab törzs a sidebar.right.pane.tab slotban");
   assert.equal(body.registration.meta.key, "dsh-ftp-deploy/ftp");
+  // A `locale` kötelező: ebből köti a slot a `t`-t (enélkül üres fül — mért hiba).
+  assert.equal(body.registration.meta.locale, "ftp");
   assert.equal(typeof body.registration.component, "function");
 
   const header = calls.slots.find((entry) => entry.name === "conversation.session.header.utilities");
@@ -163,13 +175,16 @@ test("kliens: a panel renderel profile nélkül és profillal (nincs kivétel)",
   const { exported, react } = loadClient();
   const { ctx, calls } = makeCtx();
   exported.apply(ctx);
-  const body = calls.slots.find((entry) => entry.name === "sidebar.right.pane.tab");
-  const Panel = body.registration.component;
+  const Panel = exported.FtpPanel;
   const t = ctx.locale.bind("ftp");
 
   react.__reset();
   const emptyTree = Panel({ t });
   assert.ok(emptyTree, "üres állapotban is van mit renderelni (nem null)");
+
+  react.__reset();
+  const noProps = Panel();
+  assert.ok(noProps, "props nélkül sem dob (defenzív props)");
 
   react.__reset();
   const withProfile = Panel({
@@ -189,6 +204,21 @@ test("kliens: a panel renderel profile nélkül és profillal (nincs kivétel)",
     },
   });
   assert.ok(withProfile, "profillal is renderel");
+});
+
+test("kliens: a body slot komponense hiba-határ (van Component szolgáltatás)", () => {
+  const { exported } = loadClient();
+  const { ctx, calls } = makeCtx();
+  exported.apply(ctx);
+  const body = calls.slots.find((entry) => entry.name === "sidebar.right.pane.tab");
+  const Component = body.registration.component;
+  assert.notEqual(Component, exported.FtpPanel, "a regisztrált komponens a hiba-határ");
+  // A határ egy class: prototípusán van render.
+  assert.equal(typeof Component.prototype.render, "function");
+  const instance = new Component({ t: ctx.locale.bind("ftp") });
+  assert.equal(instance.state.error, null);
+  const tree = instance.render();
+  assert.ok(tree, "a határ renderel (nem üres)");
 });
 
 test("kliens: a fejléc-gomb kattintása megnyitja a fület", () => {

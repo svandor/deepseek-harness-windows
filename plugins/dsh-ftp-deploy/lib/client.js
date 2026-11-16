@@ -266,9 +266,29 @@ window.__ModuleLoader__.load({
     // a fordítót modul-szinten is eltesszük (az `apply` állítja be).
     var translator = function (key) { return key; };
 
+    /**
+     * Diagnosztika a host naplójába (`state\ui-extras-client.log`).
+     *
+     * MIÉRT: a panelekben egy kivétel NÉMA fehér/üres fület hagy, és a böngésző
+     * konzolját senki nem látja. Ezért a panel minden fontos eseményt (mount,
+     * hiba) elküld a host `/ui-extras/log` végpontjára.
+     */
+    function reportToHost(what, detail) {
+      try {
+        fetch("/ui-extras/log", {
+          method: "POST",
+          headers: { "content-type": "text/plain" },
+          body: "[dsh-ftp-deploy] " + what + ": " + String(detail == null ? "" : detail).slice(0, 600),
+        }).catch(function () {});
+      } catch (error) {
+        /* a naplózás hibája nem állíthatja meg a panelt */
+      }
+    }
+
     // ─── panel ──────────────────────────────────────────────────────────
     var FtpPanel = react.memo(function FtpPanel(props) {
-      var t = props.t || translator;
+      var safeProps = props || {};
+      var t = safeProps.t || translator;
       var state = react.useState({ status: "loading" });
       var data = state[0];
       var setData = state[1];
@@ -358,6 +378,11 @@ window.__ModuleLoader__.load({
       }
 
       react.useEffect(function () {
+        reportToHost("panel mount", JSON.stringify({
+          t: typeof t,
+          props: safeProps ? Object.keys(safeProps).join(",") : "nincs",
+          href: typeof location !== "undefined" ? String(location.pathname) : "",
+        }));
         loadProfiles();
         loadStatus();
         loadLog();
@@ -831,29 +856,110 @@ window.__ModuleLoader__.load({
       );
     });
 
+    /**
+     * Hiba-határ: ha a panel renderelése kivételt dob, a fül ne maradjon ÜRES —
+     * írja ki a hiba szövegét, és küldje a host naplójába (a felhasználó
+     * visszajelzése: „nem tölt be a panel" — üres fül, nulla információ).
+     */
+    var FtpPanelBoundary = typeof react.Component === "function"
+      ? class FtpPanelBoundary extends react.Component {
+        constructor(props) {
+          super(props);
+          this.state = { error: null };
+        }
+        static getDerivedStateFromError(error) {
+          return { error: String((error && error.message) || error) };
+        }
+        componentDidCatch(error) {
+          reportToHost("panel crashed", (error && error.stack) || String(error));
+        }
+        render() {
+          if (this.state.error) {
+            return h("div", {
+              style: {
+                padding: "10px",
+                color: "#ffb4ab",
+                fontSize: "13px",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+              },
+            }, "FTP panel hiba: " + this.state.error);
+          }
+          return h(FtpPanel, this.props);
+        }
+      }
+      : FtpPanel;
+
     // ─── fejléc-ikon ────────────────────────────────────────────────────
+    /**
+     * A felső menüsor ikonja — CSAK ikon + tooltip, a többi menüsor-gombbal
+     * azonos kerettel (26 px, ugyanaz a border/background), felirat nélkül.
+     * Minta: `dsh-devadmin` `AdminHeaderButton` (a felhasználó kérése:
+     * „az FTP panel gombja legyen ikon + tooltip, ne felirat").
+     */
+    var HEADER_BTN = {
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: "4px",
+      height: "26px",
+      minWidth: "26px",
+      padding: "0 6px",
+      border: "1px solid var(--dsw-alias-border-l2, rgba(255,255,255,0.14))",
+      borderRadius: "7px",
+      background: "transparent",
+      color: "inherit",
+      font: "inherit",
+      fontSize: "12px",
+      lineHeight: "1",
+      cursor: "pointer",
+    };
+
     function FtpHeaderButton(props) {
       var t = props.t || translator;
+      var open = props && typeof props.openTab === "function" ? props.openTab : null;
       return h("button", {
         type: "button",
         title: t("header.title"),
         "aria-label": t("tab.title"),
-        style: {
-          display: "inline-flex",
-          alignItems: "center",
-          gap: "4px",
-          height: "26px",
-          padding: "0 8px",
-          borderRadius: "7px",
-          border: "1px solid var(--dsw-alias-border-l2, rgba(255,255,255,0.14))",
-          background: "transparent",
-          color: "inherit",
-          font: "inherit",
-          fontSize: "12px",
-          cursor: "pointer",
+        style: HEADER_BTN,
+        onClick: function () {
+          if (open) open();
         },
-        onClick: function () { props.openTab(); },
-      }, "⤴ FTP");
+      },
+        // Feltöltés-nyíl egy tálcába (deploy a tárhelyre). Nincs felirat: a név a
+        // tooltipben van, ahogy a menüsor többi gombjánál.
+        h("svg", {
+          width: 16,
+          height: 16,
+          viewBox: "0 0 16 16",
+          fill: "none",
+          "aria-hidden": "true",
+          style: { flex: "none" },
+        },
+          h("path", {
+            d: "M8 10.6V3.4",
+            stroke: "currentColor",
+            strokeWidth: 1.6,
+            strokeLinecap: "round",
+            strokeLinejoin: "round",
+          }),
+          h("path", {
+            d: "M5.2 6.2 8 3.4l2.8 2.8",
+            stroke: "currentColor",
+            strokeWidth: 1.6,
+            strokeLinecap: "round",
+            strokeLinejoin: "round",
+          }),
+          h("path", {
+            d: "M3.2 10.6v1.6a0.6 0.6 0 0 0 0.6 0.6h8.4a0.6 0.6 0 0 0 0.6-0.6v-1.6",
+            stroke: "currentColor",
+            strokeWidth: 1.6,
+            strokeLinecap: "round",
+            strokeLinejoin: "round",
+          }),
+        ),
+      );
     }
 
     // ─── plugin ─────────────────────────────────────────────────────────
@@ -884,8 +990,11 @@ window.__ModuleLoader__.load({
         ctx.effect(function () {
           return ctx.slots.inject(BODY_SLOT, function () {
             return ctx.slots.register(
-              { name: BODY_SLOT, key: TAB_ID, inject: function () { return { t: t }; } },
-              FtpPanel,
+              // `locale` KELL: a fül-törzs slotja ebből köti a `t`-t (a
+              // `dsh-ui-extras` terminál-fülje is így regisztrál; enélkül a
+              // törzs nem renderel — MÉRT HIBA 2026-11-16, üres FTP fül).
+              { name: BODY_SLOT, key: TAB_ID, locale: NS, inject: function () { return { t: t }; } },
+              FtpPanelBoundary,
             );
           });
         }, "ftp-deploy: tab body");
@@ -916,6 +1025,7 @@ window.__ModuleLoader__.load({
     exports.apply = apply;
     exports.inject = inject;
     exports.FtpPanel = FtpPanel;
+    exports.FtpPanelBoundary = FtpPanelBoundary;
     return module.exports;
   },
 });

@@ -104,6 +104,10 @@ function Set-ReleaseStatus {
             logPath = $script:logFile
         } | ConvertTo-Json -Compress
         Set-Content -Path $statusFile -Value $payload -Encoding utf8 -ErrorAction Stop
+        # A `Set-Content -Encoding utf8` BOM-ot tesz a fájl elejére, amit a host
+        # JSON.parse-ja elutasít — ezért BOM nélkül írjuk felül (a panel ebből
+        # tudja, hogy fut/kész/elbukott). MÉRT HIBA 2026-11-16.
+        [IO.File]::WriteAllText($statusFile, $payload, (New-Object System.Text.UTF8Encoding($false)))
     } catch { }
 }
 

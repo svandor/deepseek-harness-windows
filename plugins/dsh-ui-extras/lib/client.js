@@ -5212,6 +5212,9 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
         if (tick > 300) {
           setReleaseFlying(false);
           setAction({ status: "error", message: t("gitReleaseTimeout") });
+          // A git-snapshot frissítése MINDEN lezáró ágban kell: a Kiadás gomb
+          // inaktívvá válása a `releaseTag`-en múlik, nem a státuszfájlon.
+          loadGit();
           return;
         }
         setTimeout(function () {
@@ -5226,6 +5229,7 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
               if ((body.state === "running" || body.state === "starting") && body.inFlight !== true) {
                 setReleaseFlying(false);
                 setAction({ status: "error", message: t("gitReleaseStale") });
+                loadGit();
                 return;
               }
               if (body.state === "done") {
@@ -5254,6 +5258,9 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
               if (body.state === "none") {
                 setReleaseFlying(false);
                 setAction({ status: "done", message: t("gitReleaseIdle") });
+                // Ha a státuszfájl olvashatatlan/eltűnt, a git-snapshot akkor is
+                // megmondja, hogy a legfrissebb commit már kiadott-e.
+                loadGit();
                 return;
               }
               setReleaseFlying(true);

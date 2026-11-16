@@ -305,6 +305,35 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-16` (tizenkettedik kör) — **három mért hiba: a látható konzolablakok
+  VALÓDI forrása, a Kiadás gomb aktív maradása, és az üres FTP fül.** (1) **A
+  konzolablakok a `dsh-subprocess-local`-ból jönnek, NEM a `dsh-win32-process`-ből.**
+  Ablak-figyelővel (EnumWindows + CIM folyamatlánc) mérve: a látható
+  `ConsoleWindowClass` címe a `node.exe` útvonala, a folyamat a
+  `dsh-subprocess-local\lib\runner.js`, a szülője a harness, a gyermeke az ACL
+  runner és a pwsh — tehát a `launchWindowsJob` spawn-ja
+  (`index.js` ~499–507) **`windowsHide` nélkül** indított, és a gyermekek
+  örökölték a látható konzolt. Javítás: `windowsHide: true` (a
+  `tools\patch-sandbox-no-window.ps1` mostantól **ezt is** alkalmazza és
+  `-Check`-kel ellenőrzi; a mag-folt a DSH-frissítés után újrafuttatandó).
+  **Az első körös STARTUPINFO-folt helyes, de másik modulra készült** — a
+  konzol titka a `windowsHide` hiánya volt. (2) **A Kiadás gomb azért maradt
+  aktív a v0.2.8 kiadás után, mert a státuszfájl BOM-mal íródott** (a
+  `Set-Content -Encoding utf8` BOM-ot tesz, a `JSON.parse` elutasítja) → a host
+  „nincs kiadás" állapotot adott. MÉRVE: a fájl első 3 byte-ja `EF BB BF`, a
+  nyers parse `Unexpected token ''`, a BOM levágva `state:"done"`, `tag:"v0.2.8"`.
+  Javítás: a host BOM-ot levág, a `release.ps1` BOM nélkül ír, a kliens pedig
+  MINDEN lezáró ágban (`done`/`failed`/`none`/`stale`/timeout) frissíti a
+  git-snapshotot, mert a gomb inaktivitása a `releaseTag`-en múlik. (3) **Az FTP
+  fül üresen nyílt meg:** a `sidebar.right.pane.tab` regisztrációból hiányzott a
+  **`locale: NS`**, amiből a slot a `t`-t köti (a `dsh-ui-extras` terminál-fülje
+  is így csinálja) → a törzs nem renderelt. Javítás: `locale` + defenzív
+  `props` + **hiba-határ** (kivételnél a fül a hibaüzenetet írja ki a fehér helyett)
+  + host-napló diagnosztika (`/ui-extras/log`: mount + crash). A fejléc-gomb
+  mostantól **ikon + tooltip** (SVG feltöltés-nyíl, 26 px, felirat nélkül — a
+  felhasználó kérése). Tesztek: **41/41** (a kliens-bundle stubolt React-tel:
+  betöltés, regisztrációk, `locale`, render props nélkül is, hiba-határ).
+
 - `2026-11-16` (tizenegyedik kör) — **FTP deploy: panel + gyorsgomb, a Felpuffantó
   motorjával.** (1) **Új plugin `plugins\dsh-ftp-deploy`** (host + kliens): a
   `src\engine\*.ts` (Felpuffantó 0.1.5, `bcf25fd`) **portja** JS-re —

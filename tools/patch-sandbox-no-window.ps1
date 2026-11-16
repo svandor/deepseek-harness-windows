@@ -160,5 +160,64 @@ foreach ($file in $candidates) {
 
 Write-Host ''
 Write-Host ("Folt alkalmazva: {0} fajl; mar foltozott: {1}; hiba: {2}; ellenorzes: {3}" -f $patched, $already, $failed, [bool]$Check)
+
+# --- 2) dsh-subprocess-local: a sandbox-runner indítása rejtett konzollal --------
+# MÉRT HIBA (2026-11-16 16:18, ablaktfigyelővel): a látható konzolablakok NEM a
+# `dsh-win32-process`-ből jönnek, hanem a `dsh-subprocess-local` `launchWindowsJob`
+# hívásából: az `spawn(command, args, { cwd, env, stdio })` opciókban nem volt
+# `windowsHide`, ezért a runner `node.exe` LÁTHATÓ konzolt kapott (a címe a node.exe
+# útvonala), és a gyermekei (ACL runner, pwsh) ezt örökölték — minden eszközhívásnál
+# új ablak. A javítás egy tulajdonság: `windowsHide: true`.
+$subMarker = 'HELYI FOLTAS (tools\patch-sandbox-no-window.ps1'
+$subAnchor = 'stdio: runnerStdio(spec, true, ignoredStdinFd ?? "pipe")'
+$subCandidates = @()
+foreach ($base in @(
+        (Join-Path $env:LOCALAPPDATA 'npm-cache\_npx'),
+        (Join-Path $env:USERPROFILE '.dsh\profiles\node_modules')
+    )) {
+    if (-not (Test-Path $base)) { continue }
+    $subCandidates += @(Get-ChildItem -Path $base -Recurse -File -Filter 'index.js' -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match 'dsh-subprocess-local[\\/]lib[\\/]index\.js$' })
+}
+
+foreach ($file in $subCandidates) {
+    $path = $file.FullName
+    $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+    $done = $text.Contains($subMarker)
+    if ($done) {
+        Write-Host ("OK      {0} (subprocess runner: windowsHide)" -f $path) -ForegroundColor Green
+        continue
+    }
+    if (-not $text.Contains($subAnchor)) {
+        Write-Host ("HIBA    nincs horgony a subprocess runnerhez: {0}" -f $path) -ForegroundColor Red
+        $failed++
+        continue
+    }
+    if ($Check) {
+        Write-Host ("NINCS   {0} (subprocess runner: windowsHide)" -f $path) -ForegroundColor Red
+        $failed++
+        continue
+    }
+    $replacement = $subAnchor + ",`n" +
+        "`t`t`t// " + $subMarker + ", AGENTS 1.):`n" +
+        "`t`t`t// a runner node.exe enelkul LATHATO konzolablakot kap, es a`n" +
+        "`t`t`t// gyermekei (ACL runner, pwsh) oroklik -> minden eszkozhivasnal uj ablak.`n" +
+        "`t`t`twindowsHide: true"
+    $text = $text.Replace($subAnchor, $replacement)
+    if (-not $text.Contains($subMarker)) {
+        Write-Host ("HIBA    a subprocess folt nem illeszkedett: {0}" -f $path) -ForegroundColor Red
+        $failed++
+        continue
+    }
+    if (-not (Test-Path ($path + '.bak-sandboxwindow'))) {
+        Copy-Item -LiteralPath $path ($path + '.bak-sandboxwindow') -Force
+    }
+    [IO.File]::WriteAllText($path, $text, (New-Object Text.UTF8Encoding($false)))
+    Write-Host ("FOLTOZVA {0} (subprocess runner: windowsHide)" -f $path) -ForegroundColor Green
+    $patched++
+}
+
+Write-Host ''
+Write-Host ("Osszesen: alkalmazva {0}; hiba {1}; ellenorzes {2}" -f $patched, $failed, [bool]$Check)
 if ($patched -gt 0) { Write-Host 'Ervenybe lepes: a Harness kovetkezo indulasa (a modul boot-kor toltodik).' -ForegroundColor Yellow }
 if ($failed -gt 0) { exit 1 }

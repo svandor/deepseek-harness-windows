@@ -653,7 +653,12 @@ const RELEASE_STALE_MS = 45 * 60 * 1000;
 function readReleaseStatus() {
   try {
     if (!existsSync(RELEASE_STATUS_FILE)) return { ok: false };
-    const parsed = JSON.parse(readFileSync(RELEASE_STATUS_FILE, "utf8"));
+    // A szkript PowerShellből ír, a `Set-Content -Encoding utf8` pedig BOM-ot tesz
+    // a fájl elejére — a JSON.parse azt elutasítja, és a panel „nincs kiadás"
+    // állapotot látna egy SIKERES kiadás után is (MÉRT HIBA 2026-11-16: a gomb
+    // aktív maradt a v0.2.8 kiadás után). Ezért a BOM-ot levágjuk.
+    const raw = readFileSync(RELEASE_STATUS_FILE, "utf8").replace(/^\uFEFF/, "");
+    const parsed = JSON.parse(raw);
     const pid = Number(parsed?.pid);
     let alive = false;
     if (Number.isInteger(pid) && pid > 0) {
