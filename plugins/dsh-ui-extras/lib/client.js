@@ -5132,7 +5132,7 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                   jsx.jsx("button", {
                     type: "button",
                     title: t("gitReleaseHint"),
-                    disabled: action.status === "working",
+                    disabled: busy,
                     onClick: function () { runRelease(); },
                     style: { border: "1px solid var(--dsw-alias-border-l3, rgba(255,255,255,0.25))", borderRadius: "7px", background: "var(--dsw-alias-interactive-bg-hover-solid, rgba(255,255,255,0.08))", color: "inherit", cursor: "pointer", font: "inherit", padding: "2px 10px" },
                     children: t("gitRelease")
