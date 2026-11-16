@@ -305,6 +305,32 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-16` (hetedik kör) — **az ablakok maximalizált indulása (felhasználói kérés)
+  + az alügynök-fül.** (1) **Miért kellett kézzel kinagyítani minden indításnál:** a
+  `DshWindow` a geometriát a `RestoreBounds`-ból menti (hogy maximalizált ablakból
+  is a helyes NORMÁL méret jöjjön vissza), ezért a maximalizált **állapot** nem
+  öröklődött. Javítás: a `state\window-geometry.txt` mostantól `maximized=0|1`-t is
+  tárol, induláskor pedig a sorrend **CLI (`--maximized` / `--no-maximized`) > a
+  tálca `tray-config.json` `maximized` kulcsa > a mentett állapot**. Új tálca-menü:
+  **„Ablakok maximalizálva nyíljanak"** — menti a configba, és a MOST futó aktív
+  ablakot azonnal átállítja (`ShowWindow` `SW_MAXIMIZE`/`SW_RESTORE`), tehát ehhez
+  nem kell ablakot újraindítani. A `StartDesktopWindow` a beállításnál
+  `--maximized`-et ad át. **Fontos üzemeltetési tény:** a tálca MENÜJE csak akkor
+  jelenik meg, ha a tálca binárisa is frissült (`bin\DshTray.exe.new` készült; a
+  csere a következő természetes tálca-indulásnál történik) — a **hatás** viszont
+  már most él, mert a `DshWindow` a config-fájlt maga is olvassa
+  (`WindowGeometry.ReadTrayMaximizedPreference()`), tehát egy ablak-újraindítással
+  a `maximized: true` érvénybe lép. (2) **Alügynök-fül** (`dsh-ui-extras` kliens,
+  `uix-subagents`, order 30): a beszélgetés alügynökeit a fejléc „N alügynök ⌄"
+  sora helyett fülön mutatja — az adat ugyanaz (`subagentsByParent[sessionId]`
+  katalógus + `byId` session-összegzések), kattintásra `ctx.sessions.openSubagent()`,
+  „Frissítés" gombbal; a fejléc-sort a `conversation.session.header.lineage`
+  (**single**) slot `priority: -100`-as árnyékolása rejti el. **MÉRT TANULSÁG:** a
+  slot-duplikáció a `(id, priority)` párra megy — azonos prioritás **dob**, ezért
+  kell eltérő (alacsonyabb) prioritás; ezt a kliens-napló
+  (`state\ui-extras-client.log`) mondta ki. A két fül a betöltés után **0 hibával**
+  regisztrált (48 új naplósor, 0 hiba), az ablakok initje is hibamentes.
+
 - `2026-11-16` (hatodik kör) — **a „Háttérmunkák" fül befejezése: a slot-szabály, az
   üres nézet és a két fantom-háttérmunka.** (1) **A gyári jelző elrejtése CSAK
   priority-vel megy:** a kliens-napló (`state\ui-extras-client.log`) kimondta, hogy

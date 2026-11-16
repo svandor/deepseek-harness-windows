@@ -442,6 +442,25 @@ namespace DshWindow
                 window.Top = opts.Y.Value;
             }
 
+            // MAXIMALIZÁLT INDULÁS (2026-11-16, felhasználói kérés: „a tálcaikonon
+            // legyen opció, hogy az ablakok mindig teljes képernyőben nyíljanak, ne
+            // kelljen kézzel kinagyítani").
+            //
+            // MIÉRT nem működött eddig: a geometria-mentés a RestoreBounds-ot
+            // tárolja (hogy maximalizált ablakból is a helyes normál méret jöjjön
+            // vissza), ezért a maximalizált ÁLLAPOT nem öröklődött.
+            //
+            // Sorrend: CLI kapcsoló (--maximized / --no-maximized) > a tálca
+            // tray-config.json `maximized` kulcsa > a legutóbb mentett állapot.
+            bool? trayMaximized = opts.Maximized ?? WindowGeometry.ReadTrayMaximizedPreference();
+            bool wantMaximized = trayMaximized ?? geometry.Maximized;
+            if (wantMaximized)
+            {
+                window.WindowState = WindowState.Maximized;
+                Logger.Info("window starts maximized"
+                    + (trayMaximized.HasValue ? " (forced by tray config)" : " (restored)"));
+            }
+
             // Save on close. RestoreBounds is used so a maximized window still
             // reports the rectangle the user will get when un-maximizing.
             bool geometrySaved = false;
@@ -471,7 +490,8 @@ namespace DshWindow
                     Rect bounds = window.RestoreBounds;
                     if (bounds.Width > 0 && bounds.Height > 0)
                     {
-                        geometry.Save(bounds.Left, bounds.Top, bounds.Width, bounds.Height);
+                        geometry.Save(bounds.Left, bounds.Top, bounds.Width, bounds.Height,
+                            window.WindowState == WindowState.Maximized);
                         Logger.Info("window geometry saved: "
                             + bounds.Left.ToString("0", CultureInfo.InvariantCulture) + ","
                             + bounds.Top.ToString("0", CultureInfo.InvariantCulture) + " "
@@ -2626,6 +2646,14 @@ namespace DshWindow
         public string ProfileGeneration;   // per-launch profile folder under UserDataDir
         public bool RestartIfStale;     // on 401, restart the harness to get a fresh token
         public bool IgnoreSavedGeometry; // always use the given/default size and position
+
+        /// <summary>
+        /// Maximized start. <c>true</c>/<c>false</c> overrides both the tray config
+        /// and the saved state; <c>null</c> means "ask the tray config, then fall
+        /// back to the last saved state".
+        /// </summary>
+        public bool? Maximized;
+
         public int CloseAfterSeconds;   // test hook: close the window after N seconds
         public bool FocusProbe;         // diagnostic: log every focus transition
 
@@ -2663,6 +2691,8 @@ namespace DshWindow
                     case "--browser-args": o.BrowserArgs = next; i++; break;
                     case "--restart-if-stale": o.RestartIfStale = true; break;
                     case "--reset-geometry": o.IgnoreSavedGeometry = true; break;
+                    case "--maximized": o.Maximized = true; break;
+                    case "--no-maximized": o.Maximized = false; break;
                     case "--close-after": o.CloseAfterSeconds = ParseInt(next, 0); i++; break;
                 }
             }
@@ -3280,9 +3310,43 @@ namespace DshWindow
         public double? Width;
         public double? Height;
 
+        /// <summary>Az ablak maximalizált állapota a legutóbbi bezáráskor.</summary>
+        public bool Maximized;
+
         private static string FilePath
         {
             get { return Path.Combine(DshPaths.ResolveStateDir(), "window-geometry.txt"); }
+        }
+
+        /// <summary>
+        /// A tálca <c>state\tray-config.json</c> fájljából olvassa a <c>maximized</c>
+        /// kulcsot, vagy <c>null</c>-t, ha a kulcs nincs a fájlban.
+        ///
+        /// MIÉRT kell az ablaknak közvetlenül is: a tálca menüpontja és a
+        /// <c>--maximized</c> kapcsoló csak azután él, hogy a tálca BINÁRIS is
+        /// frissült (a tálca újraindítása a következő természetes indulásnál
+        /// történik). A config-fájl viszont már most olvasható, ezért az opció
+        /// egyetlen ablak-újraindítással életbe lép.
+        /// </summary>
+        public static bool? ReadTrayMaximizedPreference()
+        {
+            try
+            {
+                string path = Path.Combine(DshPaths.ResolveStateDir(), "tray-config.json");
+                if (!File.Exists(path)) return null;
+                string json = File.ReadAllText(path);
+                int at = json.IndexOf("\"maximized\"", StringComparison.OrdinalIgnoreCase);
+                if (at < 0) return null;
+                int colon = json.IndexOf(':', at);
+                if (colon < 0) return null;
+                string tail = json.Substring(colon + 1).TrimStart();
+                if (tail.StartsWith("true", StringComparison.OrdinalIgnoreCase)) return true;
+                if (tail.StartsWith("false", StringComparison.OrdinalIgnoreCase)) return false;
+                if (tail.StartsWith("1", StringComparison.Ordinal)) return true;
+                if (tail.StartsWith("0", StringComparison.Ordinal)) return false;
+                return null;
+            }
+            catch { return null; }
         }
 
         public static WindowGeometry Load()
@@ -3312,6 +3376,7 @@ namespace DshWindow
                         case "top": geometry.Top = parsed; break;
                         case "width": geometry.Width = parsed; break;
                         case "height": geometry.Height = parsed; break;
+                        case "maximized": geometry.Maximized = parsed != 0; break;
                     }
                 }
             }
@@ -3322,7 +3387,7 @@ namespace DshWindow
             return geometry;
         }
 
-        public void Save(double left, double top, double width, double height)
+        public void Save(double left, double top, double width, double height, bool maximized)
         {
             try
             {
@@ -3336,6 +3401,10 @@ namespace DshWindow
                 text.AppendLine("top=" + top.ToString("0.##", CultureInfo.InvariantCulture));
                 text.AppendLine("width=" + width.ToString("0.##", CultureInfo.InvariantCulture));
                 text.AppendLine("height=" + height.ToString("0.##", CultureInfo.InvariantCulture));
+                // A maximalizált ÁLLAPOT is öröklődik (a RestoreBounds csak a normál
+                // méretet adja vissza, ezért eddig minden indításnál kézzel kellett
+                // kinagyítani az ablakot).
+                text.AppendLine("maximized=" + (maximized ? "1" : "0"));
 
                 File.WriteAllText(path, text.ToString(), new UTF8Encoding(false));
             }

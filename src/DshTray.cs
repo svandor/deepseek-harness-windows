@@ -57,6 +57,15 @@ namespace DshTray
         public bool RobotOnly = false;
         public string RobotUrl = "http://127.0.0.1:4180/";
 
+        /// <summary>
+        /// Az új ablakok maximalizálva induljanak-e (2026-11-16, felhasználói
+        /// kérés: „legyen a tálcaikonon opció, hogy ne kelljen kézzel kinagyítani").
+        /// A tálca menüje állítja, a `tray-config.json` `maximized` kulcsa hordozza;
+        /// a DshWindow ezt a fájlt maga is olvassa, ezért az opció már a következő
+        /// ablak-indulásnál érvényes (a tálca-bináris frissítése nélkül is).
+        /// </summary>
+        public bool Maximized = false;
+
         public string StateDir { get { return Path.Combine(Root, "state"); } }
         public string BinDir { get { return Path.Combine(Root, "bin"); } }
         public string ProvidersDir { get { return Path.Combine(Root, "providers"); } }
@@ -349,9 +358,11 @@ namespace DshTray
             _cfg.RobotOnly = TinyJson.Bool(json, "robotOnly", false);
             string robotUrl = TinyJson.Str(json, "robotUrl");
             if (!string.IsNullOrEmpty(robotUrl)) _cfg.RobotUrl = robotUrl;
+            _cfg.Maximized = TinyJson.Bool(json, "maximized", false);
 
             Log.Info("config: port=" + _cfg.Port + " panes=" + _cfg.Panes
                 + " robotPane=" + _cfg.RobotPane + " robotOnly=" + _cfg.RobotOnly
+                + " maximized=" + _cfg.Maximized
                 + " proxyPort=" + _cfg.ProxyPort + " dsh=" + (_cfg.DshBin ?? "?"));
         }
 
@@ -370,9 +381,11 @@ namespace DshTray
                 json = TinyJson.Set(json, "robotPane", _cfg.RobotPane ? "true" : "false");
                 json = TinyJson.Set(json, "robotOnly", _cfg.RobotOnly ? "true" : "false");
                 json = TinyJson.Set(json, "robotUrl", "\"" + _cfg.RobotUrl + "\"");
+                json = TinyJson.Set(json, "maximized", _cfg.Maximized ? "true" : "false");
                 Directory.CreateDirectory(_cfg.StateDir);
                 File.WriteAllText(path, json, new UTF8Encoding(false));
-                Log.Info("panelbeállítás mentve: panes=" + _cfg.Panes + " robotPane=" + _cfg.RobotPane + " robotOnly=" + _cfg.RobotOnly);
+                Log.Info("panelbeállítás mentve: panes=" + _cfg.Panes + " robotPane=" + _cfg.RobotPane
+                    + " robotOnly=" + _cfg.RobotOnly + " maximized=" + _cfg.Maximized);
             }
             catch (Exception ex) { Log.Error("panelbeállítás mentése: " + ex.Message); }
         }
@@ -478,6 +491,19 @@ namespace DshTray
             };
             menu.Items.Add(robotOnly);
 
+            // Maximalizált indulás (2026-11-16, felhasználói kérés): a geometria
+            // mentése a RestoreBounds-ot tárolja, ezért a maximalizált állapot
+            // eddig elveszett és minden indításnál kézzel kellett kinagyítani.
+            var maximizedItem = new ToolStripMenuItem("Ablakok maximalizálva nyíljanak");
+            maximizedItem.ToolTipText = "Új ablak mindig maximalizálva indul; a mostani ablakot azonnal átállítja (nem kell újraindítani).";
+            maximizedItem.Checked = _cfg.Maximized;
+            maximizedItem.Click += (s, e) =>
+            {
+                SetMaximizedWindows(!_cfg.Maximized);
+                maximizedItem.Checked = _cfg.Maximized;
+            };
+            menu.Items.Add(maximizedItem);
+
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Harness újraindítása", null, (s, e) => RestartHarness());
             menu.Items.Add("Proxy újraindítása", null, (s, e) => RestartProxy());
@@ -494,6 +520,36 @@ namespace DshTray
                 ContextMenuStrip = menu
             };
             _icon.DoubleClick += (s, e) => ShowWindow(true);
+        }
+
+        /// <summary>
+        /// A „maximalizált ablak" kapcsoló: elmenti a configba, és a MOST futó aktív
+        /// ablakot AZONNAL átállítja (nem kell újraindítani). A következő ablakok a
+        /// `--maximized` kapcsolóval (illetve a config közvetlen olvasásával) indulnak.
+        /// </summary>
+        private void SetMaximizedWindows(bool enabled)
+        {
+            try
+            {
+                _cfg.Maximized = enabled;
+                SaveLayoutConfig();
+                int desktop = Math.Max(1, Math.Min(DesktopCount(), ReadDesktop()));
+                int pid = RunningDesktopWindow(desktop);
+                if (pid == 0)
+                {
+                    Log.Info("maximalizált ablak: " + enabled + " (nincs futó ablak)");
+                    return;
+                }
+                IntPtr handle = FindWindowForProcess(pid);
+                if (handle == IntPtr.Zero)
+                {
+                    Log.Info("maximalizált ablak: " + enabled + " (nincs ablakfogantyú, pid " + pid + ")");
+                    return;
+                }
+                NativeMethods.ShowWindow(handle, enabled ? NativeMethods.SW_MAXIMIZE : NativeMethods.SW_RESTORE);
+                Log.Info("maximalizált ablak: " + enabled + " (pid " + pid + ")");
+            }
+            catch (Exception ex) { Log.Error("maximalizált ablak: " + ex.Message); }
         }
 
         private void OpenFolder(string path)
@@ -1104,6 +1160,7 @@ namespace DshTray
                 + " --dsh-home \"" + _cfg.DshHome + "\""
                 + " --dsh-bin \"" + _cfg.DshBin + "\""
                 + " --url \"" + url + "\" --restart-if-stale";
+            if (_cfg.Maximized) args += " --maximized";
             if (robotPane)
             {
                 args += " --pane-url \"" + paneCount + "=" + _cfg.RobotUrl + "\"";
@@ -1741,6 +1798,7 @@ namespace DshTray
     internal static class NativeMethods
     {
         public const int SW_HIDE = 0;
+        public const int SW_MAXIMIZE = 3;
         public const int SW_SHOW = 5;
         public const int SW_RESTORE = 9;
         public const uint GW_OWNER = 4;
