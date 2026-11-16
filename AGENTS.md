@@ -327,6 +327,26 @@ Kötelező:
   **11/11**. Kiadás: **v0.2.5**. A host-cache csak **harness-újraindítás** után
   él (§1.5 — a felhasználó engedélye kell), a kliens-oldali ritkítás pedig
   **panel-újratöltés** után.
+  **MÉRT AKTIVÁLÁS (07:44, a felhasználó engedélyével):** a két munkaablak
+  újraindult **ellenőrzött PID-del** (27720, 32728 — a futó képek a régi
+  binárisból: `DshWindow.exe.old-20261116-071825`), a tálca pedig a **nem
+  aktív** asztal ablakát **nem** indítja újra magától (75 s alatt sem), ezért a
+  `window-desktop.txt` 2→1 írásával kellett létrehozni — **tanulság: egy ablak
+  „visszahozása" a `window-desktop.txt` írása, nem a tálca önjavítása.** Eredmény:
+  `36068` (1. asztal, látható) + `10204` (2. asztal, rejtett), 6 panel, mind a 6
+  WebView2-vezérlő **első próbából** (`attempt 1`), **0 `[ERROR]`**. Mérve utána:
+  próba-ráta **1,5/s → 0,20/s**, harness CPU **128% → 1,8%**, asztalváltás
+  **145/108/108/109 ms** (korábban **1 perc fölött**), minden váltás után
+  pontosan egy látható ablak (`asztalvaltas kesz: aktiv=N lathato=[pid]`).
+  A maradék meleg panel-renderer (**2 db, ~95% és ~79%**) a két **ÉLŐ sessiont**
+  mutató panel — a session-naplók 07:40-kor is íródtak (L12 8,3 MB, ez a session
+  13,5 MB) —, ez a streamelés költsége, nem szivárgás. **Nem DSH:** a
+  `RaiderBridge` node 67%-on (a jóváhagyott weboldal-bridge, AGENTS 2.1 — nem
+  vizsgáljuk tovább) és a felhasználó saját Pest-tesztje
+  (`php vendor/pestphp/pest/bin/pest --filter=Document`, 100%). Új eszköz:
+  `tools\perf-check.ps1` — CPU + panel-rendererek + próba-ráta + verdikt, csak
+  olvas. A 15 s-os host-cache továbbra **nem** él (harness-újraindítás kell): a
+  maradék 0,2 próba/s a régi host 30 s-os tartalék útja.
 
 - `2026-11-16` (negyedik kör) — **„Háttérmunkák" fül a Beszélgetés/Pálya sorban, a
   felső sor jelzőjének elrejtésével.** (1) Új nézet a `conversation.view` **slotban**
