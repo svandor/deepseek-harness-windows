@@ -281,6 +281,13 @@ namespace DshTray
         /// A MÁSIK asztal ablakát is előre elindítja (rejtve), hogy a váltás
         /// azonnali legyen. Enélkül az első váltás új ablakot indított, a panelek
         /// betöltése pedig néhány másodpercig fehér felületet adott (mért hiba).
+        ///
+        /// MÉRT HIBA (2026-11-16 07:08:13, boot után): ez a szál FELTÉTEL NÉLKÜL
+        /// indította a MÁSIK asztalt, még mielőtt az AKTÍV asztal ablaka
+        /// létrejött volna (a harness 07:08:24-ig nem adott friss tokent) — ezért
+        /// boot után a **2. asztal** nyílt meg. Ezért most előbb a harnessnek
+        /// figyelnie kell ÉS az aktív asztal ablakának futnia, csak utána indul a
+        /// másik, majd az aktív asztalt normalizáljuk láthatóra.
         /// </summary>
         private void EnsureOtherDesktopWindows(int delayMs)
         {
@@ -290,14 +297,23 @@ namespace DshTray
                 {
                     Thread.Sleep(delayMs);
                     int active = Math.Max(1, Math.Min(DesktopCount(), ReadDesktop()));
-                    for (int d = 1; d <= DesktopCount(); d++)
+                    for (int attempt = 0; attempt < 40 && !_stopping; attempt++)
                     {
-                        if (d == active) continue;
-                        if (RunningDesktopWindow(d) != 0) continue;
-                        if (string.IsNullOrEmpty(CurrentUrl())) return;
-                        StartDesktopWindow(d);       // nem aktiv asztalt maga rejti el
-                        Log.Info("asztal " + d + " elore elinditva (rejtve)");
+                        if (Listening(_cfg.Port) && RunningDesktopWindow(active) != 0)
+                        {
+                            for (int d = 1; d <= DesktopCount(); d++)
+                            {
+                                if (d == active) continue;
+                                if (RunningDesktopWindow(d) != 0) continue;
+                                StartDesktopWindow(d);       // nem aktiv asztalt maga rejti el
+                                Log.Info("asztal " + d + " elore elinditva (rejtve)");
+                            }
+                            ApplyDesktopAsync(active);       // az aktiv legyen a lathato
+                            return;
+                        }
+                        Thread.Sleep(1500);
                     }
+                    Log.Info("asztal elore inditas kihagyva: a harness vagy az aktiv asztal ablaka nem indult el");
                 }
                 catch (Exception ex) { Log.Error("asztal elore inditas: " + ex.Message); }
             });
@@ -1058,6 +1074,18 @@ namespace DshTray
         {
             desktop = Math.Max(1, Math.Min(DesktopCount(), desktop));
             if (RunningDesktopWindow(desktop) != 0) return;
+            // BOOT-SORREND GARANCIA (2026-11-16, mért hiba): a NEM aktív asztal
+            // ablaka nem indulhat el az aktív asztal ablaka ELŐTT — különben boot
+            // után a másik asztal lesz a látható ablak. Ha az aktív asztal ablaka
+            // még nincs meg, ezt a kérést a felügyelet/az előkészítő szál
+            // később újra kiadja.
+            int activeNow = Math.Max(1, Math.Min(DesktopCount(), ReadDesktop()));
+            if (desktop != activeNow && RunningDesktopWindow(activeNow) == 0)
+            {
+                Log.Info("munkaasztal " + desktop + " inditas halasztva: elobb az aktiv asztal ("
+                    + activeNow + ") ablakanak kell elindulnia");
+                return;
+            }
             string url = CurrentUrl();
             if (string.IsNullOrEmpty(url))
             {

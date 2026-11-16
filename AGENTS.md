@@ -72,6 +72,57 @@ Referenciamegvalósítás (másolható):
    elég a `.cmd` belsejét javítani — a konzolt a Task Scheduler hozza létre a
    `.cmd` lefutása előtt.
 
+### 1.5 TILOS a futó Harness-t (vagy a felügyelő láncot) újraindítani  (P0, 2026-11-16)
+
+A Harness **minden futó sessiont és jobot megszakít**. Ezért:
+
+- **Indítás/újraindítás előtt kötelező ellenőrizni**, fut-e munka: a `state\runs.json`,
+  az aktív sessionök és a Harness job-listája. Ha bármi fut, **a felhasználó
+  engedélye nélkül tilos** újraindítani — és nem elég „megkérdezni a szövegben":
+  meg kell várni a választ.
+- **Tilos** a Harness folyamatának vagy a felügyelő láncnak (tálca → node →
+  gyermekfolyamatok) a leállítása „frissítés" céljából. A `bin\*.exe.new` csere
+  **a következő természetes indításkor** történik meg (`PendingUpdate.Apply`),
+  tehát nem kell érte semmit leállítani.
+- **MÉRT ESET (2026-11-16 ~07:06–07:08):** a WebView2-újrapróbálkozások
+  „takarítása" közben a Harness processze elhalt (a felügyelt job futása
+  megszakadt), a tálca újraindította, **3 futó munka megszakadt**, és a
+  hiba-lavina miatt a felhasználónak **Windows-t kellett újraindítania**.
+
+### 1.6 TILOS folyamatot NÉV szerint leállítani  (P0, 2026-11-16)
+
+- `Stop-Process -Name` / `taskkill /IM` **tilos** olyan névre, ami nem kizárólag a
+  miénk (`node`, `msedgewebview2`, `chrome`, `php-cgi`, …): az más alkalmazások
+  és a Harness saját folyamatait is megöli.
+- Leállítás csak **ellenőrzött PID**-del: előbb a parancssor/process-name
+  egyezését ellenőrizni kell (a gyermekfolyamatok listája, a szülő pidje), és a
+  Harness pidje (`state\harness.pid`) nem lehet a listában.
+- A WebView2 gyermekfolyamatok a **panelekhez** tartoznak: azokat csak akkor
+  szabad leállítani, ha az adott ablak/panelek mar nem kellenek, es ezt a
+  felhasznalo tudja.
+
+### 1.7 TILOS korlátlan vagy lavinát indító újrapróbáló ciklus  (P0, 2026-11-16)
+
+- Bármely újrapróbálkozás **köteles** korlátozott lenni: max. próbaszám,
+  növekvő várakozás (1 s → 2 s → 4 s → 8 s, plafon), és **globális áramköri
+  megszakító** (időablakos hibaszámláló), ami lavina esetén MINDEN további
+  próbát leállít.
+- **Tilos** olyan háttérciklus, ami folyamatot/környezetet indít (WebView2
+  environment, node, php-cgi), és a kör után is futva marad.
+- **MÉRT ESET (2026-11-16):** 6 panel × 8 próba + 10 s-os önjavítás = 43
+  profil-mappa és több tucat félig leállt böngészőfolyamat; a gép
+  használhatatlanná vált. A javítás: futásonként egy tartalék-mappa, 8 próba,
+  és `WebViewCircuit` (12 hiba / 2 perc után leáll).
+
+### 1.8 Boot-sorrend: mindig az 1. asztal legyen a látható  (2026-11-16)
+
+Minden indításnál (boot, tálca-újraindítás) a **látható** munkaablak az **1.
+asztalé**; a másik asztal csak **utána**, rejtve indulhat. A tálca ezért
+indításkor `window-desktop.txt` = 1-et ír, a „másik asztal" előindítása pedig
+csak akkor fut, ha a Harness már figyel **és** az aktív asztal ablaka él; utána
+normalizál (`ApplyDesktopAsync(1)`). **MÉRT HIBA (2026-11-16 07:08:13):** az
+előindítás feltétel nélkül futott, ezért boot után a **2. asztal** nyílt meg.
+
 ---
 
 ## 2. Helyi modell (Ollama) — memória-korlát
@@ -253,6 +304,33 @@ Kötelező:
   konfiguráció kinézete nem bizonyíték.
 
 ## 4. Változásnapló
+
+- `2026-11-16` (harmadik kör) — **a Harness futó munka közbeni újraindulása, a
+  Windows-újraindítást kiváltó hiba-lavina, és a boot-sorrend.** (1)
+  **MÉRT INCIDENS `~07:06–07:08`:** a WebView2-újrapróbálkozások „takarítása"
+  közben a Harness processze elhalt, a tálca újraindította — **3 futó munka
+  megszakadt**, és a hiba-lavina (6 panel × 8 próba + 10 s-os önjavítás, összesen
+  43 profil-mappa és több tucat félig leállt böngészőfolyamat) miatt a
+  felhasználónak **Windows-t kellett újraindítania**. Ezért **négy új P0 szabály**
+  született: **§1.5** (tilos a futó Harness-t/felügyelő láncot újraindítani; a
+  `bin\*.exe.new` csere a következő természetes indításkor történik), **§1.6**
+  (tilos folyamatot NÉV szerint leállítani — csak ellenőrzött PID-del, a Harness
+  pidje nem lehet a listában), **§1.7** (tilos korlátlan/lavinát indító
+  újrapróbáló ciklus; kötelező a korlát + növekvő várakozás + áramköri
+  megszakító, és a ciklus nem maradhat futva a kör után), **§1.8** (boot után
+  mindig az 1. asztal ablaka látszik). (2) **Boot-sorrend hiba javítva:** a
+  „másik asztal előindítása" **feltétel nélkül** futott, ezért boot után a 2.
+  asztal nyílt meg (napló: `07:08:13 munkaasztal 2 inditas` **a** `07:08:30
+  munkaasztal 1` **előtt**, a harness csak 07:08:24-re adott friss tokent).
+  Most: az előindítás csak akkor fut, ha a harness figyel **és** az aktív asztal
+  ablaka él, utána `ApplyDesktopAsync(active)` normalizál; a `StartDesktopWindow`
+  pedig elutasítja a nem aktív asztalt, ha az aktív ablaka még nincs meg. (3)
+  **`WebViewCircuit`** (12 hiba / 2 perc → minden további próba leáll) és a
+  recovery 18 → **6** próbára csökkentve: a lavina nem tud újra lefutni. (4) A
+  binárisok cseréje **folyamatleállítás nélkül** történt (a futó exe átnevezése
+  `.old-<időbélyeg>`-re, majd a `.new` a helyére), ezért a javítások a
+  **következő természetes indításkor** (ablak/tálca újraindítás vagy boot) lépnek
+  életbe — a futó sessionök érintetlenek.
 
 - `2026-11-16` (második kör) — **a „panel újraindul / eltűnik a
   munkafolyamat-lista" és a WebView2-hiba gyökere.** (1) **Hamis „kicserélték a

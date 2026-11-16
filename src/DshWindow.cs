@@ -801,8 +801,20 @@ namespace DshWindow
                 // túl rövid volt: a másik ablak WebView2 folyamatai még álltak le.
                 // Ezért 8 próba (~25 s), növekvő várakozással, és próbánként ÚJ,
                 // egyedi profil-mappa (a zárolt mappát nem lehet újra megnyitni).
+                // ÁRAMKÖRI MEGSZAKÍTÓ (2026-11-16, mért üzemzavar): a
+                // próbálkozások lavinája (6 panel × 8 próba + 10 s-os önjavítás)
+                // annyi WebView2 környezetet indított, hogy a gép használhatatlanná
+                // vált, és Windows-újraindítás kellett hozzá. Ezért 2 percen belül
+                // 12 elbukott környezet-létrehozás után MINDEN további próba leáll;
+                // a panel a hibaoldalt mutatja, és a felhasználó dönt.
                 for (int attempt = 0; attempt < MaxInitAttempts && controller == null; attempt++)
                 {
+                    if (WebViewCircuit.IsOpen())
+                    {
+                        Logger.Error("webview2: hiba-lavina (" + WebViewCircuit.FailureCount()
+                            + " hiba / 2 perc) — a további próbák leállítva (pane " + (_paneIndex + 1) + ")");
+                        break;
+                    }
                     string userDataFolder = ResolveUserDataFolder(attempt);
                     try
                     {
@@ -820,6 +832,7 @@ namespace DshWindow
                             + (_paneIndex + 1) + "): " + ex.Message);
                         environment = null;
                         controller = null;
+                        WebViewCircuit.NoteFailure();
                         if (attempt < MaxInitAttempts - 1) await System.Threading.Tasks.Task.Delay(RetryDelayMillis(attempt));
                     }
                 }
@@ -957,10 +970,18 @@ namespace DshWindow
                     return;
                 }
                 _recoveryTries++;
-                if (_recoveryTries > 18)
+                if (_recoveryTries > 6)
                 {
                     try { _recoveryTimer.Stop(); } catch { }
-                    Logger.Error("webview2 recovery feladva (pane " + (_paneIndex + 1) + ")");
+                    Logger.Error("webview2 recovery feladva (pane " + (_paneIndex + 1)
+                        + ", 6 próba) — nyisd újra az ablakot");
+                    return;
+                }
+                if (WebViewCircuit.IsOpen())
+                {
+                    try { _recoveryTimer.Stop(); } catch { }
+                    Logger.Error("webview2 recovery leállítva hiba-lavina miatt ("
+                        + WebViewCircuit.FailureCount() + " hiba / 2 perc, pane " + (_paneIndex + 1) + ")");
                     return;
                 }
                 try
@@ -985,6 +1006,7 @@ namespace DshWindow
                 }
                 catch (Exception ex)
                 {
+                    WebViewCircuit.NoteFailure();
                     Logger.Info("webview2 recovery próba " + _recoveryTries + " nem sikerült (pane "
                         + (_paneIndex + 1) + "): " + ex.Message);
                 }
@@ -3375,5 +3397,60 @@ namespace DshWindow
             if (string.IsNullOrEmpty(s)) return "";
             return s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
         }
+    }
+}
+
+/// <summary>
+/// ÁRAMKÖRI MEGSZAKÍTÓ a WebView2 inicializáláshoz.
+///
+/// MIÉRT (2026-11-16, mért üzemzavar): a panelek újrapróbálkozásai (6 panel × 8
+/// próba, majd 10 s-onként önjavítás) egy hibás WebView2 runtime mellett annyi
+/// böngészőfolyamatot és profilkönyvtárat indítottak, hogy a gép használhatatlanná
+/// vált — a felhasználónak Windows-t kellett újraindítania. Ezért a próbák
+/// száma NEM elég védelem: egy GLOBÁLIS, időablakos korlát kell, ami a
+/// folyamatok számát is korlátozza. Ha 2 percen belül 12 környezet-létrehozás
+/// bukott el, minden további próba leáll, és a panel a hibaoldalt mutatja.
+/// </summary>
+internal static class WebViewCircuit
+{
+    private const int MaxFailures = 12;
+    private const int WindowSeconds = 120;
+
+    private static readonly object Gate = new object();
+    private static DateTime _windowStart = DateTime.MinValue;
+    private static int _failures;
+
+    public static void NoteFailure()
+    {
+        lock (Gate)
+        {
+            DateTime now = DateTime.UtcNow;
+            if (_windowStart == DateTime.MinValue || (now - _windowStart).TotalSeconds > WindowSeconds)
+            {
+                _windowStart = now;
+                _failures = 0;
+            }
+            _failures++;
+        }
+    }
+
+    public static bool IsOpen()
+    {
+        lock (Gate)
+        {
+            DateTime now = DateTime.UtcNow;
+            if (_windowStart == DateTime.MinValue || (now - _windowStart).TotalSeconds > WindowSeconds)
+            {
+                _windowStart = now;
+                _failures = 0;
+                return false;
+            }
+            return _failures >= MaxFailures;
+        }
+    }
+
+    public static int FailureCount()
+    {
+        lock (Gate) { return _failures; }
     }
 }
