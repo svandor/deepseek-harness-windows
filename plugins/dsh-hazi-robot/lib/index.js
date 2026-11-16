@@ -294,6 +294,11 @@ function handleRun(req, res, url) {
     detached: true,
     stdio: 'ignore',
     cwd: BOT,
+    // AGENTS §1: a kliensről indított job NEM nyithat látható konzolablakot.
+    // MÉRT HIBA (2026-11-16 12:57): e nélkül minden job-indítás egy `node.exe`
+    // konzolablakot villantott fel. `windowsHide` nélkül a gyermek saját konzolt
+    // kap, mert a szülő Harness ablaktalan.
+    windowsHide: true,
   });
   child.unref();
   sendJson(res, 202, { ok: true, message: `${job} elindítva (pid ${child.pid})`, pid: child.pid });
