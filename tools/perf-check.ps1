@@ -94,6 +94,56 @@ if ($harnessRow) {
     Write-Host ("Harness (pid {0}): {1:N1}% CPU, {2} MB" -f $harnessPid, $harnessRow.CpuPct, $harnessRow.WsMb) -ForegroundColor Yellow
 }
 
+# --------------------------------------------- 1b. rendszerszintű top (PDH) ---
+# A `Get-Process` a SYSTEM folyamatok CPU-ját NEM tudja kiolvasni (a WmiPrvSE
+# 0,00-t ad, a StartTime üres), ezért a gép legnagyobb fogyasztója láthatatlan
+# maradna — MÉRT eset: a WMI Provider Host 20–50%-on égett, a lista mégis a
+# php/node sorokat mutatta. A PDH-számlálók ezt megkerülik (nem WMI, nem kér
+# jogot); a számlálókészlet neve viszont nyelvenként más ("Folyamat" /
+# "Process"), ezért futásidőben derítjük ki.
+Write-Head "1b) Rendszerszintű top (PDH — a SYSTEM folyamatokkal együtt)"
+try {
+    $setName = @((Get-Counter -ListSet * -ErrorAction Stop).CounterSetName) |
+        Where-Object { $_ -match '^(Folyamat|Process)$' } | Select-Object -First 1
+    if (-not $setName) { throw "nincs Process/Folyamat számlálókészlet" }
+    $set = Get-Counter -ListSet $setName -ErrorAction Stop
+    # A `(*)`-os gyűjtőútvonal ezen a gépen ingatag (PDH 800007D2 /
+    # "érvénytelen minta", ha közben processz születik vagy hal), ezért
+    # példányonként kérjük le ugyanazt a számlálót — azok külön-külön
+    # megbízhatóak —, és kötegekben hívjuk (egy PDH-gyűjtés).
+    $cpuName = @(@($set.Counter | ForEach-Object { ($_ -split '\\')[-1] }) |
+            Where-Object { $_ -match '%' -and $_ -notmatch 'felhasználói|user|védett|privileged' }) | Select-Object -First 1
+    if (-not $cpuName) { throw "nincs CPU-számláló a '$setName' készletben" }
+    $paths = @($set.PathsWithInstances | Where-Object { $_.EndsWith($cpuName) } |
+            Where-Object { $_ -notmatch '\((Idle|idle|_total|_Total)\)' })
+    if ($paths.Count -eq 0) { throw "nincsenek példány-útvonalak" }
+
+    $avg = @{}
+    for ($i = 0; $i -lt $paths.Count; $i += 40) {
+        $batch = $paths[$i..([Math]::Min($i + 39, $paths.Count - 1))]
+        try { $batchSamples = @((Get-Counter -Counter $batch -ErrorAction SilentlyContinue).CounterSamples) }
+        catch { $batchSamples = @() }
+        foreach ($s in $batchSamples) {
+            try { $v = [double]$s.CookedValue } catch { continue }
+            if ($null -eq $v -or [double]::IsNaN($v)) { continue }
+            $n = ($s.InstanceName -replace '#\d+$', '')
+            if ($avg.ContainsKey($n)) { $avg[$n] = ($avg[$n] + $v) / 2 } else { $avg[$n] = $v }
+        }
+    }
+    if ($avg.Count -eq 0) { throw "nem jött érvényes minta" }
+    $cores = [Environment]::ProcessorCount
+    $busy = (($avg.GetEnumerator() | Measure-Object Value -Sum).Sum)
+    Write-Host ("Összes CPU: {0:N0}% (0–{1}% között, {2} logikai mag) = a gép {3:N0}%-a" -f `
+            $busy, ($cores * 100), $cores, (100.0 * $busy / ($cores * 100))) -ForegroundColor Yellow
+    Write-Host ("  {0,-26} {1,7}" -f 'Folyamat', 'CPU%') -ForegroundColor DarkGray
+    $avg.GetEnumerator() |
+        ForEach-Object { [pscustomobject]@{ Process = $_.Key; CpuPct = [Math]::Round($_.Value, 1) } } |
+        Sort-Object CpuPct -Descending | Select-Object -First $Top |
+        ForEach-Object { Write-Host ("  {0,-26} {1,6:N1}%" -f $_.Process, $_.CpuPct) }
+} catch {
+    Write-Host "  (PDH nem érhető el: $($_.Exception.Message))" -ForegroundColor DarkYellow
+}
+
 # ------------------------------------------------------- 2. panel-rendererek ---
 Write-Head "2) Panel-rendererek (msedgewebview2 --type=renderer)"
 $rendererRows = @($rows | Where-Object { $_.Name -eq 'msedgewebview2' })
@@ -181,7 +231,15 @@ if ($probeRate -gt 0.5) {
     Write-Host ("Nincs poll-vihar: {0:N2} próba/s. A ritkított kliens (vagy a 15 s-os host-cache) aktív." -f $probeRate) -ForegroundColor Green
 }
 if ($harnessPct -gt 50) {
-    Write-Host ("A harness {0:N1}%-on pörög — ez a blokkoló jellegű /devadmin/state hívások miatt van." -f $harnessPct) -ForegroundColor Red
+    Write-Host ("A harness {0:N1}%-on fut — ha éppen ágens-kör fut (eszközhívások), ez a SAJÁT munkánk; a poll-vihart nem ez, hanem a fenti próba-ráta mutatja." -f $harnessPct) -ForegroundColor Yellow
+}
+$wmiPct = 0.0
+if ($avg -and $avg.ContainsKey('wmiprvse')) { $wmiPct = [double]$avg['wmiprvse'] }
+if ($wmiPct -gt 10) {
+    Write-Host ("A WMI Provider Host (wmiprvse) {0:N1}%-on pörög: ez önmagában semmit nem csinál, csak MÁS programok WMI-kéréseit szolgálja ki." -f $wmiPct) -ForegroundColor Yellow
+    Write-Host "  MÉRT ügyfelek ezen a gépen: MSI 'Sensor dev service' (Sendevsvc: MSI_CPU/MSI_VGA/MSI_AP), MSI_TraceFPS overlay," -ForegroundColor Yellow
+    Write-Host "  valamint a Windows DoSvc (Kézbesítés optimalizálása) 2 s-onként ismételt, MINDIG HIBÁZÓ adapter-statisztika lekérdezése." -ForegroundColor Yellow
+    Write-Host "  A DSH NEM WMI-fogyasztó: a pluginok CIM-hívása eseményhez kötött, a devadmin panel netstat/tasklist-et használ." -ForegroundColor Yellow
 }
 $hotPanes = @($rendererRows | Where-Object { $_.CpuPct -gt 50 })
 if ($hotPanes.Count -gt 0) {

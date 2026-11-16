@@ -348,6 +348,25 @@ Kötelező:
   olvas. A 15 s-os host-cache továbbra **nem** él (harness-újraindítás kell): a
   maradék 0,2 próba/s a régi host 30 s-os tartalék útja.
 
+  **A WMI Provider Host (wmiprvse) 20–73%-a NEM a DSH** (2026-11-16, 08:00, a
+  felhasználó kérdésére mérve): a `wmiprvse` önmagában semmit nem csinál, csak
+  más programok WMI-kéréseit szolgálja ki. MÉRT ügyfelek a
+  `Microsoft-Windows-WMI-Activity/Operational` naplóból (5858):
+  (1) **MSI „Sensor dev service"** (`Sendevsvc.exe`, `MSI NBFoundation Service`)
+  — `root\WMI`: `MSI_CPU`, `MSI_VGA`, `MSI_AP`, `MSSMBios_RawSMBiosTables`,
+  `Win32_PowerPlan` (a napló csak a HIBÁS hívásokat rögzíti, a sikeres
+  érzékelő-pollozás a folyamatos terhelés); (2) **`MSI_TraceFPS.exe`** FPS-overlay
+  (mért 7,7%); (3) a Windows **`DoSvc`** (Kézbesítés optimalizálása, svchost /
+  NETWORK SERVICE) 2 s-onként **mindig hibázó** lekérdezése:
+  `SELECT * FROM MSFT_NetAdapterStatisticsSettingData WHERE Name = 'Ethernet'`,
+  `0x80041032` — 118 hiba 07:48:04–07:49:57 között. A DSH-ban **nincs**
+  időzített WMI-hívás (csak `IPGlobalProperties` a C#-ban, és 3 eseményhez kötött
+  CIM-próba a pluginokban; a devadmin panel `netstat`/`tasklist`-et használ).
+  **A `perf-check.ps1` 1b szakasza ezért PDH-számlálókkal mér** (a `Get-Process`
+  a SYSTEM folyamatok CPU-ját 0,00-nak látja — a legnagyobb fogyasztó
+  láthatatlan volt); a `(*)`-os gyűjtőútvonal ingatag (PDH 800007D2), ezért
+  példányonként, kötegekben kérdezi le.
+
 - `2026-11-16` (negyedik kör) — **„Háttérmunkák" fül a Beszélgetés/Pálya sorban, a
   felső sor jelzőjének elrejtésével.** (1) Új nézet a `conversation.view` **slotban**
   (`dsh-ui-extras` kliens): `id: "uix-jobs"`, `order: 20`, `label` **thunk**
