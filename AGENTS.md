@@ -305,6 +305,26 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-16` (negyedik kör) — **„Háttérmunkák" fül a Beszélgetés/Pálya sorban, a
+  felső sor jelzőjének elrejtésével.** (1) Új nézet a `conversation.view` **slotban**
+  (`dsh-ui-extras` kliens): `id: "uix-jobs"`, `order: 20`, `label` **thunk**
+  (`view.jobs` → HU „Háttérmunkák" / EN „Background jobs"), ezért a címke követi a
+  nyelvet. A slot-dokumentáció szerint friss `id`-vel az elem a meglévők **mellé**
+  kerül (`replaceRisk: none`), a regisztráció alakja a hivatalos példa
+  (`{ name, id, order, label }` + komponens). A nézet adatforrása ugyanaz, amit a
+  terminál-panel használ: `GET /ui-extras/cmd?action=runs` (2 s-onként), soronként
+  állapotpötty, címke, munkaterület, `id`, indulás, „fut/kész", valamint
+  kinyitható **kimenet-tail** (utolsó 4000 karakter); a „külső" (folyamatlistából
+  felismert) bejegyzéseket kihagyja. (2) **A felső sor `job-list` jelzője
+  elrejtve** a core bejegyzés **azonos id-vel** való felülírásával
+  (`conversation.session.header.actions`, `id: "job-list"` → üres komponens) — ez
+  a dokumentált „azonos id = abba a cellába" út, CSS-hack és core-patch nélkül;
+  a core `dsh-client-ui-jobs` osztálynevei (`QsffPG_root`) buildenként változnak,
+  ezért nem azokra hivatkozunk. (3) **Nem kell harness-újraindítás:** a kiszolgált
+  bundle (458 454 byte, `rev=3c40acef4ea1`) már tartalmazza a kódot
+  (`view.jobs`, „Háttérmunkák", a felülíró regisztráció), tehát egy **panel-
+  frissítés** (fogaskerék → frissítés, vagy az ablak újranyitása) elég.
+
 - `2026-11-16` (harmadik kör) — **a Harness futó munka közbeni újraindulása, a
   Windows-újraindítást kiváltó hiba-lavina, és a boot-sorrend.** (1)
   **MÉRT INCIDENS `~07:06–07:08`:** a WebView2-újrapróbálkozások „takarítása"

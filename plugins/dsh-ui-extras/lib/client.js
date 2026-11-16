@@ -1528,7 +1528,20 @@ window.__ModuleLoader__.load({
       "approvalLogTitle": "Automatikus engedélyezések",
       "approvalClearLog": "Napló törlése",
       "approvalNoLog": "Még nem volt automatikus engedélyezés.",
-      "approvalLoadFailed": "Az engedélyek betöltése nem sikerült:"
+      "approvalLoadFailed": "Az engedélyek betöltése nem sikerült:",
+      "view.jobs": "Háttérmunkák",
+      "jobsTabHint": "A panelről indított háttérfolyamatok — ugyanaz a lista, ami eddig a felső sor jelzőjében volt.",
+      "jobsRunningCount": "{count} fut",
+      "jobsNone": "Nincs háttérmunka.",
+      "jobsNoneRunning": "Nincs futó háttérmunka — a befejezettek itt maradnak.",
+      "jobsAlive": "fut",
+      "jobsDone": "kész",
+      "jobsStarted": "indult",
+      "jobsShowOutput": "Kimenet",
+      "jobsHideOutput": "Kimenet elrejtése",
+      "jobsNoOutput": "(nincs kimenet)",
+      "jobsLoadFailed": "A háttérmunkák betöltése nem sikerült:",
+      "jobsRefresh": "Frissítés"
     };
 
     /** English strings for the same row. */
@@ -1783,7 +1796,20 @@ window.__ModuleLoader__.load({
       "approvalLogTitle": "Automatic allowances",
       "approvalClearLog": "Clear log",
       "approvalNoLog": "No automatic allowance yet.",
-      "approvalLoadFailed": "Loading the approvals failed:"
+      "approvalLoadFailed": "Loading the approvals failed:",
+      "view.jobs": "Background jobs",
+      "jobsTabHint": "Background processes started from the panel — the same list the top-row indicator used to show.",
+      "jobsRunningCount": "{count} running",
+      "jobsNone": "No background job.",
+      "jobsNoneRunning": "Nothing is running — finished jobs stay here.",
+      "jobsAlive": "running",
+      "jobsDone": "done",
+      "jobsStarted": "started",
+      "jobsShowOutput": "Output",
+      "jobsHideOutput": "Hide output",
+      "jobsNoOutput": "(no output)",
+      "jobsLoadFailed": "Loading the background jobs failed:",
+      "jobsRefresh": "Refresh"
     };
 
     /**
@@ -8346,6 +8372,140 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
     }
 
     /**
+     * „Háttérmunkák" nézet a Beszélgetés/Pálya fülsávban.
+     *
+     * MIÉRT: a háttérfolyamatok listája eddig csak a felső sor jelzőjében
+     * (core `job-list`) volt elérhető, ami helyet foglalt és mindig ott volt.
+     * A `conversation.view` slot hivatalos bővítési pont: egy új `id`-vel a
+     * meglévők MELLÉ kerül (`replaceRisk: none`), a felső sor jelzőjét pedig
+     * ugyanazzal az id-vel (`job-list`) felülírjuk — így az eltűnik onnan.
+     *
+     * Az adat ugyanaz, amit a terminál-panel használ:
+     * `GET /ui-extras/cmd?action=runs` → { ok, runs: [{ id, label, workspace,
+     * startedAt, alive, external, output, length }] }.
+     */
+    function JobsView(props) {
+      var t = props && typeof props.t === "function" ? props.t : function (key) { return key; };
+      var stateRuns = react.useState([]);
+      var runs = stateRuns[0];
+      var setRuns = stateRuns[1];
+      var stateError = react.useState("");
+      var error = stateError[0];
+      var setError = stateError[1];
+      var stateOpen = react.useState(null);
+      var openId = stateOpen[0];
+      var setOpenId = stateOpen[1];
+
+      react.useEffect(function () {
+        var alive = true;
+        function load() {
+          fetch("/ui-extras/cmd?action=runs", { headers: { Accept: "application/json" }, cache: "no-store" })
+            .then(function (response) { return response.ok ? response.json() : Promise.reject(new Error("HTTP " + response.status)); })
+            .then(function (body) {
+              if (!alive) return;
+              if (!body || body.ok !== true || !Array.isArray(body.runs)) { setError(t("jobsLoadFailed") + " ?"); return; }
+              setError("");
+              // A „külső" (folyamatlistából felismert) bejegyzés nem háttérmunka.
+              setRuns(body.runs.filter(function (run) { return run && run.external !== true; }));
+            })
+            .catch(function (failure) {
+              if (alive) setError(t("jobsLoadFailed") + " " + String(failure && failure.message ? failure.message : failure));
+            });
+        }
+        load();
+        var timer = setInterval(load, 2000);
+        return function () { alive = false; clearInterval(timer); };
+      }, []);
+
+      var live = 0;
+      for (var i = 0; i < runs.length; i++) { if (runs[i].alive === true) live++; }
+
+      function shortPath(value) {
+        var text = String(value || "");
+        var parts = text.split(/[\\/]/u).filter(function (part) { return part.length > 0; });
+        return parts.length > 0 ? parts[parts.length - 1] : text;
+      }
+
+      function clock(value) {
+        var date = value ? new Date(value) : null;
+        if (date == null || String(date) === "Invalid Date") return "";
+        function pad(n) { return n < 10 ? "0" + n : String(n); }
+        return pad(date.getHours()) + ":" + pad(date.getMinutes()) + ":" + pad(date.getSeconds());
+      }
+
+      var rows = runs.map(function (run) {
+        var isOpen = openId === run.id;
+        var output = typeof run.output === "string" ? run.output : "";
+        var tail = output.length > 4000 ? output.slice(-4000) : output;
+        return jsx.jsx("div", {
+          key: run.id,
+          style: { borderBottom: "1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.22))", padding: "8px 2px" },
+          children: [
+            jsx.jsx("div", {
+              key: "row",
+              style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" },
+              children: [
+                jsx.jsx("span", {
+                  key: "dot",
+                  title: run.alive === true ? t("jobsAlive") : t("jobsDone"),
+                  style: {
+                    width: "8px", height: "8px", borderRadius: "50%", flex: "none",
+                    background: run.alive === true ? "var(--dsw-alias-state-success-primary, #3fa66b)" : "var(--dsw-alias-label-dimmed, #777)"
+                  }
+                }),
+                jsx.jsx("span", { key: "label", style: { fontWeight: 600 }, children: String(run.label || run.id) }),
+                jsx.jsx("span", { key: "ws", style: { opacity: 0.7 }, children: shortPath(run.workspace) }),
+                jsx.jsx("span", { key: "id", style: { opacity: 0.45, fontFamily: "var(--dsw-font-mono, ui-monospace, monospace)", fontSize: "12px" }, children: String(run.id) }),
+                jsx.jsx("span", { key: "time", style: { opacity: 0.55, fontSize: "12px" }, children: clock(run.startedAt) }),
+                jsx.jsx("span", { key: "stat", style: { marginLeft: "auto", opacity: 0.75, fontSize: "12px" }, children: run.alive === true ? t("jobsAlive") : t("jobsDone") }),
+                jsx.jsx("button", {
+                  key: "toggle",
+                  type: "button",
+                  onClick: function () { setOpenId(isOpen ? null : run.id); },
+                  style: { ...HEADER_BTN, minWidth: "26px", padding: "0 8px", fontSize: "12px" },
+                  children: isOpen ? t("jobsHideOutput") : t("jobsShowOutput")
+                })
+              ]
+            }),
+            isOpen
+              ? jsx.jsx("pre", {
+                key: "out",
+                style: {
+                  margin: "8px 0 0", padding: "8px 10px", maxHeight: "220px", overflow: "auto",
+                  background: "var(--dsw-alias-bg-layer-1, rgba(127,127,127,.08))",
+                  borderRadius: "8px", fontFamily: "var(--dsw-font-mono, ui-monospace, monospace)",
+                  fontSize: "12px", whiteSpace: "pre-wrap"
+                },
+                children: tail.length > 0 ? tail : t("jobsNoOutput")
+              })
+              : null
+          ]
+        });
+      });
+
+      return jsx.jsx("div", {
+        style: { padding: "12px 16px", height: "100%", overflow: "auto", display: "flex", flexDirection: "column", gap: "8px" },
+        children: [
+          jsx.jsx("div", {
+            key: "head",
+            style: { display: "flex", alignItems: "baseline", gap: "10px" },
+            children: [
+              jsx.jsx("strong", { key: "title", children: t("view.jobs") }),
+              jsx.jsx("span", { key: "count", style: { fontSize: "12px", opacity: 0.7 }, children: t("jobsRunningCount", { count: live }) }),
+              jsx.jsx("span", { key: "hint", style: { fontSize: "12px", opacity: 0.5 }, children: t("jobsTabHint") })
+            ]
+          }),
+          error.length > 0
+            ? jsx.jsx("div", { key: "err", style: { color: "var(--dsw-alias-state-error-primary, #d33)", fontSize: "12px" }, children: error })
+            : null,
+          runs.length === 0
+            ? jsx.jsx("div", { key: "empty", style: { opacity: 0.6, fontSize: "13px" }, children: t("jobsNone") })
+            : jsx.jsx("div", { key: "rows", children: rows })
+        ]
+      });
+    }
+
+    /**
      * Register the extended row below the composer card, the corner controls,
      * hide the built-in pills, and publish the dictionaries.
      */
@@ -8415,6 +8575,41 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       ctx.effect(function () {
         return ctx.locale.register(NS, { hu: hu, en: en });
       }, "ui-extras: dictionaries");
+
+      // ------------------------------------------------- háttérmunkák fül
+      //
+      // (1) ÚJ NÉZET a Beszélgetés/Pálya fülsávban. A `conversation.view` slot
+      //     hivatalos bővítési pontja: friss `id`-vel a meglévők MELLÉ kerül
+      //     (`replaceRisk: none`), a `label` thunk, ezért a HU/EN váltást követi.
+      // (2) A FELSŐ SOR jelzőjének elrejtése: a core `job-list` bejegyzését
+      //     UGYANAZZAL az id-vel regisztráljuk felül egy üres komponenssel
+      //     (a slot-dokumentáció szerint az azonos id „abba a cellába" tesz, és
+      //     lecseréli a gyári elemet). Így nincs CSS-hack, és nem törik el, ha a
+      //     core osztálynevei változnak.
+      safeRun("jobs view inject", function () {
+        var tJobs = ctx.locale.bind(NS);
+        ctx.slots.inject("conversation.view", function () {
+          return ctx.slots.register({
+            name: "conversation.view",
+            id: "uix-jobs",
+            order: 20,
+            locale: NS,
+            label: function () { return tJobs("view.jobs"); },
+            inject: function () { return { t: tJobs }; }
+          }, JobsView);
+        });
+      });
+
+      safeRun("hide core job chip", function () {
+        ctx.slots.inject("conversation.session.header.actions", function () {
+          return ctx.slots.register({
+            name: "conversation.session.header.actions",
+            id: "job-list",
+            order: 20,
+            locale: NS
+          }, function HiddenJobChip() { return null; });
+        });
+      });
 
       // Ask for the host's working directory ONCE, at boot, instead of leaving it
       // to the first terminal panel: the last-resort fallback has to be in hand

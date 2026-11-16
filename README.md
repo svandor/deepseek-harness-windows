@@ -237,6 +237,24 @@ Beállítás és használat a tálcáról:
 > (tálcaikon → *Kilépés*, majd az asztali ikon). A tálca kilépése **nem zárja be
 > a munkaablakokat**: azok önálló folyamatok, és a következő tálca átveszi őket.
 
+### „Háttérmunkák" fül a Beszélgetés/Pálya sorban
+
+A panelről indított háttérfolyamatok **saját fület** kaptak a fülsávban
+(`conversation.view`, id `uix-jobs`), a Beszélgetés és a Pálya **mellé** — a
+címke a nyelvet követi (HU: „Háttérmunkák", EN: „Background jobs"). A fül
+másodpercenként frissül, soronként mutatja az állapotot (fut/kész), a címkét, a
+munkaterületet, a futás azonosítóját és az indulás idejét, a **kimenet** pedig
+kinyitható (az utolsó ~4000 karakter).
+
+A felső sor eddigi jelzője (`job-list`) **eltűnt**: ugyanazzal az id-vel
+regisztráljuk felül egy üres komponenssel — ez a slot-dokumentált „azonos id =
+abba a cellába" mechanizmus, CSS-hack és core-patch nélkül. Ha vissza szeretnéd,
+a `plugins\dsh-ui-extras\lib\client.js` `hide core job chip` blokkja törölhető.
+
+> A kliens-csomag a **panel újratöltésekor** (ablak újranyitása vagy a
+> fogaskerék-panel *frissítés*) lép életbe; a háttérben futó sessionök nem
+> állnak meg hozzá.
+
 ### Egy tálcaikon: AppUserModelID + újraindítási parancs
 
 A kitűzött indító és a futó ablak **egy** tálcagombot ad, ha a parancsikon
