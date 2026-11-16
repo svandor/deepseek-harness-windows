@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-auto-continue",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "description": "Boot utáni automatikus folytatás: a harness leállása miatt megszakadt beszélgetés-kört magától folytatja.",
   "type": "module",
