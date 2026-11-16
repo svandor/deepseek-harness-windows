@@ -305,6 +305,29 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-16` (ötödik kör) — **a „minden lassú / valami zabál" gyökere: a
+  `/devadmin/state` poll-vihar.** MÉRVE: `/devadmin/state` **2794–3044 ms**,
+  miközben `/ui-extras/harness-url` 2–4 ms; a dev oldal access logjában az utolsó
+  3000 kérésből **2995 `GET /`**, mind `127.0.0.1`, **`user-agent: dsh-devadmin`**,
+  a log 13 MB-ra hízott, **14 php-cgi munkás 5–10% CPU**-n pörgött, a node
+  (harness) 147%-on, három `msedgewebview2` renderer 110–115%-on. OK: a
+  `handleState` **minden hívásnál HTTP-próbát indít a dev oldalakra**
+  (Laravel-indítás, site-onként) + port-tulajdonosokat kérdez, a fejléc pedig
+  **2 s-onként, minden panelből** hívta (6 panel → ~3 hívás/s → ~6 Laravel-render/s).
+  Ez blokkolta a harness eseményciklusát (a Git panel lassú betöltése) és a
+  kattintás `/devadmin/desktop` kérését is sorba állította → **1 perc fölötti
+  asztalváltás**. JAVÍTÁS: (1) a state válasz **15 s-ig cache-elt** (`?fresh=1`
+  megkerüli); (2) új, **olcsó olvasó végpont**: `GET /devadmin/desktop` `n`
+  nélkül → `{ok, desktop, desktopCount}` (két fájlolvasás, hálózat nélkül; a
+  meglévő `?n=` írás változatlan); (3) a fejléc-váltó **öntempózó**: olcsó
+  végpontnál 5 s, a régi host 404-jénél **30 s** tartalék, **rejtett panel nem
+  polloz**, kattintás után 600 ms/2 s egyszeri újraolvasás; (4) az Admin panel
+  5 s → **15 s**, rejtve nem frissít. **Mérve:** közvetlen hívással
+  `{"ok":true,"desktop":1,"desktopCount":2}` (nincs próba), a devadmin tesztjei
+  **11/11**. Kiadás: **v0.2.5**. A host-cache csak **harness-újraindítás** után
+  él (§1.5 — a felhasználó engedélye kell), a kliens-oldali ritkítás pedig
+  **panel-újratöltés** után.
+
 - `2026-11-16` (negyedik kör) — **„Háttérmunkák" fül a Beszélgetés/Pálya sorban, a
   felső sor jelzőjének elrejtésével.** (1) Új nézet a `conversation.view` **slotban**
   (`dsh-ui-extras` kliens): `id: "uix-jobs"`, `order: 20`, `label` **thunk**
