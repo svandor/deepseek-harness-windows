@@ -232,6 +232,14 @@ const routes = [
     const id = url.searchParams.get("id") ?? "";
     const confirm = url.searchParams.get("confirm") === "1";
     const forceLarge = url.searchParams.get("forceLarge") === "1";
+    // A megerősítést MÉG A VÁLASZ ELŐTT ellenőrizzük: különben a hívó „elindult”
+    // választ kapna, a hiba pedig csak aszinkron, a státuszfájlban jelenne meg.
+    if (!confirm) {
+      return fail(res, Object.assign(new Error("A feltöltéshez megerősítés kell (confirm=1)."), { code: "NEED_CONFIRM" }));
+    }
+    if (runner.busy()) {
+      return fail(res, Object.assign(new Error("Már fut egy FTP-művelet — várd meg a végét."), { code: "FTP_BUSY" }));
+    }
     // A művelet a háttérben fut; a válasz azonnal jön, az állapotot a /ftp/status adja.
     void runner
       .start("push", id, (onProgress) => deploy.push({ profileId: id, confirm, forceLarge, onProgress }))
@@ -246,6 +254,12 @@ const routes = [
     const id = url.searchParams.get("id") ?? "";
     const confirm = url.searchParams.get("confirm") === "1";
     const forceLarge = url.searchParams.get("forceLarge") === "1";
+    if (!confirm) {
+      return fail(res, Object.assign(new Error("A feltöltéshez megerősítés kell (confirm=1)."), { code: "NEED_CONFIRM" }));
+    }
+    if (runner.busy()) {
+      return fail(res, Object.assign(new Error("Már fut egy FTP-művelet — várd meg a végét."), { code: "FTP_BUSY" }));
+    }
     void runner
       .start("push-extra", id, (onProgress) => deploy.pushExtra({ profileId: id, confirm, forceLarge, onProgress }))
       .catch(() => {});
@@ -257,6 +271,9 @@ const routes = [
     const id = url.searchParams.get("id") ?? "";
     const mode = url.searchParams.get("mode") === "code" ? "code" : "full";
     const dest = url.searchParams.get("dest") ?? "";
+    if (runner.busy()) {
+      return fail(res, Object.assign(new Error("Már fut egy FTP-művelet — várd meg a végét."), { code: "FTP_BUSY" }));
+    }
     void runner
       .start("backup", id, (onProgress) => deploy.backup({ profileId: id, destDir: dest, mode, onProgress }))
       .catch(() => {});
