@@ -367,6 +367,28 @@ Kötelező:
   láthatatlan volt); a `(*)`-os gyűjtőútvonal ingatag (PDH 800007D2), ezért
   példányonként, kötegekben kérdezi le.
 
+  **A „73% a Task Managerben, 35% az MSI Centerben" NEM ellentmondás — két
+  különböző CPU-mutató** (2026-11-16, ugyanabban a percben mérve):
+  `\Processzorinformációk(_Total)\Üresjárat` → mag-idő szerint **29–33%**, a
+  frekvencia-súlyozott („% Processor Utility") érték **46–83%**. A **Task Manager
+  a frekvencia-súlyozottat** mutatja (turbo 4,02 GHz mellett ez a nagyobb), a
+  legtöbb más eszköz (MSI Center, PDH `Processzor` készlet, `Get-Counter`
+  `Processzor kihasználtsága`) az **idő-alapút**. A hő és a fogyasztás a
+  frekvencia-súlyozottal korrelál (mért 89 °C CPU-hőmérséklet valós terhelés
+  mellett). Ezért a `perf-check.ps1` mindkettőt kiírja, és a folyamat-összeget
+  **alsó becslésnek** jelöli (a PDH a közben változó példányokat kihagyja —
+  MÉRT hiba: a régi verzió az azonos nevű példányokat ÁTLAGOLTA, ezért a gépet
+  8%-nak mutatta ~30% helyett). A tényleges fogyasztók ekkor: 3 panel-renderer
+  (~3 mag), `msi.centralserver` (~1 mag, a nyitott MSI Center Hardware Monitoring
+  fül), `memory compression` (~1,6 mag, 22,6/31,4 GB RAM), `WmiPrvSE` (0,5–0,7),
+  Intel `esrv_svc` (Energy Server, ~0,9), `system`+`dwm`. A WMI-csillapítás
+  egykattintásos eszköze: **`tools\wmi-calm.ps1` + `wmi-calm.cmd`** (emelt jog
+  kell, a szkript magát emeli; `-Report` csak mér, `-StopOnly` nem írja át az
+  indítási típust) — leállítja az MSI Sendevsvc/Center/Companion/Foundation
+  szolgáltatást, a TraceFPS/CentralServer folyamatokat (ellenőrzött útvonal
+  alapján) és a DoSvc hibás adapter-ciklusát, `Manual` indítási típusra állít,
+  és **előtte/utána méri a wmiprvse CPU-ját**.
+
 - `2026-11-16` (negyedik kör) — **„Háttérmunkák" fül a Beszélgetés/Pálya sorban, a
   felső sor jelzőjének elrejtésével.** (1) Új nézet a `conversation.view` **slotban**
   (`dsh-ui-extras` kliens): `id: "uix-jobs"`, `order: 20`, `label` **thunk**
