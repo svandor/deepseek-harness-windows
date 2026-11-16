@@ -8,6 +8,7 @@ import { collectPreviewFiles, currentHead } from "./gitdiff.js";
 import { collectTreeFiles } from "./tree.js";
 import { createLog } from "./log.js";
 import { ensureFtpDirs, ftpPaths } from "./paths.js";
+import { realpathSync } from "node:fs";
 import {
   deleteProfile,
   getProfile,
@@ -26,6 +27,19 @@ import { deletePassword, getPassword, hasPassword, setPassword } from "./secrets
 /** Ennyi fájl fölött a felület második megerősítést kér (és a motor is). */
 export const LARGE_FILE_LIMIT = 80;
 
+/**
+ * A profil helyi gyökerének VALÓDI útvonala (junction-feloldással).
+ * Ha nem oldható fel (pl. hálózati út), a saját értékét adja vissza — a hívó
+ * ezt csak összehasonlításra használja, ezért a hiba nem végzetes.
+ */
+function realLocalRoot(localRoot) {
+  try {
+    return realpathSync.native ? realpathSync.native(localRoot) : realpathSync(localRoot);
+  } catch {
+    return localRoot;
+  }
+}
+
 export function createDeploy({ repoRoot }) {
   const paths = ftpPaths(repoRoot);
   ensureFtpDirs(paths);
@@ -37,6 +51,12 @@ export function createDeploy({ repoRoot }) {
   function list() {
     return listProfiles(paths.profilesPath).map((p) => ({
       ...p,
+      // A junction (pl. C:\Herd -> D:\Herd) miatt a felület `props.root`-ja és a
+      // profil `localRoot`-ja KÜLÖNBÖZŐ alakban jöhet; ezért a valódi útvonalat
+      // is átadjuk. MÉRT HIBA (2026-11-16): a L12 panelján a Git panel
+      // `D:\Herd\...`-t látott, a profil `C:\Herd\...`-t írt, ezért nem találta
+      // a profilt és a gomb „FTP beállítás" maradt.
+      localRootReal: realLocalRoot(p.localRoot),
       hasPassword: hasPassword(secretOf(p.id)),
     }));
   }

@@ -1484,6 +1484,20 @@ window.__ModuleLoader__.load({
       "gitFtpFailed": "FTP hiba: {error}",
       "gitFtpIdle": "FTP: nincs futó művelet.",
       "gitFtpTimeout": "FTP: az állapot 20 perc után sem érkezett meg — nézd meg az FTP fül naplóját.",
+      "commonLoading": "Betöltés…",
+      "gitFtpBlockTitle": "FTP deploy — kiválasztott profil",
+      "gitFtpRefreshPreview": "Előnézet",
+      "gitFtpPreviewError": "Az előnézet nem érkezett meg: {error}",
+      "gitFtpNeedBaselineShort": "Ehhez a profilhoz még nincs kiindulópont — előbb állítsd be, hogy a mostani állapot már fent van.",
+      "gitFtpSetBaseline": "A mostani git állapot már fent van",
+      "gitFtpBaselineDone": "Kiindulópont beállítva: {sha}",
+      "gitFtpUploadCount": "{n} fájl megy fel",
+      "gitFtpDeleteCount": "{n} törlődik",
+      "gitFtpSizeCount": "{size}",
+      "gitFtpBlockedCount": "{n} kizárt fájl (tiltó minta)",
+      "gitFtpUploadLabel": "feltöltés",
+      "gitFtpDeleteLabel": "törlés",
+      "gitFtpMoreFiles": "… +{n} további fájl",
       "gitCommitPlaceholder": "Commit üzenet (üresen automatikus)",
       "gitAheadBehindHint": "↑ = hány commit vár feltolásra (Push), ↓ = hány commit van a távoli ágon, ami nálad még nincs meg. Ez commitok száma, nem fájloké.",
       "gitCommitFiles": "commitra:",
@@ -1793,6 +1807,20 @@ window.__ModuleLoader__.load({
       "gitFtpFailed": "FTP error: {error}",
       "gitFtpIdle": "FTP: no running action.",
       "gitFtpTimeout": "FTP: no status after 20 minutes — check the log in the FTP tab.",
+      "commonLoading": "Loading…",
+      "gitFtpBlockTitle": "FTP deploy — selected profile",
+      "gitFtpRefreshPreview": "Preview",
+      "gitFtpPreviewError": "The preview did not arrive: {error}",
+      "gitFtpNeedBaselineShort": "This profile has no baseline yet — first mark the current state as ALREADY deployed.",
+      "gitFtpSetBaseline": "The current git state is already deployed",
+      "gitFtpBaselineDone": "Baseline set: {sha}",
+      "gitFtpUploadCount": "{n} file(s) to upload",
+      "gitFtpDeleteCount": "{n} to delete",
+      "gitFtpSizeCount": "{size}",
+      "gitFtpBlockedCount": "{n} blocked file(s) (deny list)",
+      "gitFtpUploadLabel": "upload",
+      "gitFtpDeleteLabel": "delete",
+      "gitFtpMoreFiles": "… +{n} more file(s)",
       "gitCommitPlaceholder": "Commit message (empty = automatic)",
       "gitAheadBehindHint": "↑ = how many commits are waiting to be pushed (Push), ↓ = how many commits exist on the remote branch that you do not have yet. These count commits, not files.",
       "gitCommitFiles": "to commit:",
@@ -4854,6 +4882,11 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       var ftpConfirmState = react.useState(false);
       var ftpConfirmLarge = ftpConfirmState[0];
       var setFtpConfirmLarge = ftpConfirmState[1];
+      // A kiválasztott profil ELŐNÉZETE a Git panelben (felpuffantós blokk:
+      // feltöltendő/törlendő fájlok száma és listája) — hogy ne vakon töltsön.
+      var ftpPreviewState = react.useState(null);
+      var ftpPreview = ftpPreviewState[0];
+      var setFtpPreview = ftpPreviewState[1];
 
       // The picked repository is remembered on the HOST, so reopening the panel
       // — or restarting the window, which mints a fresh browser profile — does
@@ -5060,15 +5093,76 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
 
       react.useEffect(function () { loadFtpProfiles(); }, [props.root]);
 
+      // Ha van profil ehhez a munkaterülethez, a blokk előnézete is betölt.
+      react.useEffect(function () {
+        var profile = ftpProfileFor(props.root);
+        if (profile) loadFtpPreview(profile.id);
+        else setFtpPreview(null);
+      }, [ftpData, props.root]);
+
       /** A munkaterülethez tartozó FTP-profil (a `localRoot` egyezése alapján). */
       function ftpProfileFor(root) {
         var target = normalizeFsPath(root);
         if (!target) return null;
         var list = ftpData.profiles || [];
         for (var i = 0; i < list.length; i += 1) {
-          if (normalizeFsPath(list[i].localRoot) === target) return list[i];
+          // A junction miatt a `localRoot` (pl. C:\Herd\…) és a panel
+          // munkaterülete (D:\Herd\…) eltérhet. Sorrend: a host által feloldott
+          // `localRootReal` (ha a futó host már adja) → pontos egyezés → a
+          // junction-alak (minden szegmens egyezik a meghajtó betűjén kívül).
+          if (sameFsPath(list[i].localRootReal, target)) return list[i];
+          if (sameFsPath(list[i].localRoot, target)) return list[i];
         }
         return null;
+      }
+
+      /**
+       * Két útvonal összevetése junction-toleránsan: egyezik, vagy minden
+       * szegmens egyezik az ELSŐ (meghajtó) kivételével — pl.
+       * `C:\Herd\projekt` ≙ `D:\Herd\projekt`. Ez a gyakorlatban a junction
+       * esete; két különböző, azonos nevű projekt elvi ütközése vállalt kockázat
+       * (a host `localRootReal` mezője pontos, ha a host már friss).
+       */
+      function sameFsPath(a, b) {
+        var left = normalizeFsPath(a);
+        var right = normalizeFsPath(b);
+        if (!left || !right) return false;
+        if (left === right) return true;
+        var la = left.split("/");
+        var lb = right.split("/");
+        if (la.length !== lb.length || la.length < 2) return false;
+        for (var i = 1; i < la.length; i += 1) {
+          if (la[i] !== lb[i]) return false;
+        }
+        return true;
+      }
+
+      /** A profil előnézete a Git panel blokkjához. */
+      function loadFtpPreview(profileId) {
+        if (!profileId) return;
+        setFtpPreview(null);
+        fetch("/ftp/preview?id=" + encodeURIComponent(profileId), { headers: { Accept: "application/json" } })
+          .then(function (response) { return response.json(); })
+          .then(function (body) { setFtpPreview(body && typeof body === "object" ? body : { ok: false, error: "?" }); })
+          .catch(function (error) { setFtpPreview({ ok: false, error: String(error && error.message ? error.message : error) }); });
+      }
+
+      /** „A mostani git állapot már fent van" — a baseline beállítása a panelből. */
+      function runFtpBaseline(profileId) {
+        if (!profileId) return;
+        fetch("/ftp/baseline?id=" + encodeURIComponent(profileId), { method: "POST", headers: { Accept: "application/json" } })
+          .then(function (response) { return response.json(); })
+          .then(function (body) {
+            if (body && body.ok === true) {
+              loadFtpProfiles();
+              loadFtpPreview(profileId);
+              loadGit();
+              setAction({ status: "done", message: t("gitFtpBaselineDone", { sha: String(body.lastDeploySha || "").slice(0, 7) }) });
+            } else {
+              setAction({ status: "error", message: (body && body.error) || "?" });
+            }
+          })
+          .catch(function (error) { setAction({ status: "error", message: String(error && error.message ? error.message : error) }); });
       }
 
       function ftpSize(value) {
@@ -5109,6 +5203,9 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                     size: ftpSize(r.bytes)
                   })
                 });
+                // A feltöltés után az előnézet már üres: frissítjük a blokkot.
+                var afterDeploy = ftpProfileFor(props.root);
+                if (afterDeploy) loadFtpPreview(afterDeploy.id);
               } else if (body.state === "failed") {
                 setAction({ status: "error", message: t("gitFtpFailed", { error: body.error || "?" }) });
               } else {
@@ -5495,6 +5592,84 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
               ]
             }, repository.path);
           }),
+          // ------------------------------------------------------- FTP blokk
+          // A KIVÁLASZTOTT FTP-profil a repó alatt, előnézettel — ugyanaz, amit
+          // a Felpuffantóban megszoktál: mennyi fájl megy fel, mennyi törlődik,
+          // és pontosan melyek. Így nem vakon kell feltölteni.
+          ftpProfile
+            ? (function () {
+              var pending = ftpPreview && ftpPreview.ok === true && Array.isArray(ftpPreview.files) ? ftpPreview.files : null;
+              var blockedCount = ftpPreview && ftpPreview.ok === true && Array.isArray(ftpPreview.blocked) ? ftpPreview.blocked.length : 0;
+              var uploads = pending ? pending.filter(function (file) { return file.action !== "delete"; }) : [];
+              var deletes = pending ? pending.filter(function (file) { return file.action === "delete"; }) : [];
+              var totalBytes = pending ? pending.reduce(function (sum, file) { return sum + (Number(file.size) || 0); }, 0) : 0;
+              return jsx.jsxs("div", {
+                style: { marginTop: "12px", paddingTop: "8px", borderTop: "1px solid var(--dsw-alias-border-l2, rgba(255,255,255,0.14))" },
+                children: [
+                  jsx.jsxs("div", {
+                    style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" },
+                    children: [
+                      jsx.jsx("strong", { children: t("gitFtpBlockTitle") }),
+                      jsx.jsx("span", { style: { opacity: 0.85, fontSize: "12px" }, children: ftpProfile.name || ftpProfile.id }),
+                      jsx.jsx("code", { style: { opacity: 0.8, fontSize: "12px" }, children: (ftpProfile.user ? ftpProfile.user + "@" : "") + ftpProfile.host + ":" + ftpProfile.port }),
+                      jsx.jsx("span", { style: { opacity: 0.75, fontSize: "12px" }, children: "→ " + ftpProfile.remoteRoot }),
+                      jsx.jsx("button", {
+                        type: "button",
+                        onClick: function () { loadFtpPreview(ftpProfile.id); },
+                        style: { border: "1px solid var(--dsw-alias-border-l2, rgba(255,255,255,0.2))", borderRadius: "7px", background: "transparent", color: "inherit", cursor: "pointer", font: "inherit", padding: "1px 8px" },
+                        children: "⟳ " + t("gitFtpRefreshPreview")
+                      })
+                    ]
+                  }),
+                  ftpPreview === null
+                    ? jsx.jsx("div", { style: { marginTop: "4px", opacity: 0.7 }, children: t("commonLoading") })
+                    : ftpPreview.ok !== true
+                      ? jsx.jsx("div", { style: { marginTop: "4px", color: "#ffb4ab" }, children: t("gitFtpPreviewError", { error: String(ftpPreview.error || "?") }) })
+                      : ftpPreview.needsBaseline === true
+                        ? jsx.jsxs("div", { style: { marginTop: "4px" }, children: [
+                          jsx.jsx("div", { style: { opacity: 0.85 }, children: t("gitFtpNeedBaselineShort") }),
+                          jsx.jsx("button", {
+                            type: "button",
+                            onClick: function () { runFtpBaseline(ftpProfile.id); },
+                            style: { marginTop: "6px", border: "1px solid var(--dsw-alias-border-l3, rgba(255,255,255,0.25))", borderRadius: "7px", background: "var(--dsw-alias-interactive-bg-hover-solid, rgba(255,255,255,0.08))", color: "inherit", cursor: "pointer", font: "inherit", padding: "2px 10px" },
+                            children: t("gitFtpSetBaseline")
+                          })
+                        ] })
+                        : jsx.jsxs("div", { style: { marginTop: "4px" }, children: [
+                          jsx.jsxs("div", { style: { display: "flex", gap: "12px", flexWrap: "wrap", opacity: 0.9, fontSize: "12px" }, children: [
+                            jsx.jsx("span", { children: t("gitFtpUploadCount", { n: uploads.length }) }),
+                            jsx.jsx("span", { children: t("gitFtpDeleteCount", { n: deletes.length }) }),
+                            jsx.jsx("span", { children: t("gitFtpSizeCount", { size: ftpSize(totalBytes) }) }),
+                            blockedCount > 0
+                              ? jsx.jsx("span", { style: { opacity: 0.7 }, children: t("gitFtpBlockedCount", { n: blockedCount }) })
+                              : null
+                          ] }),
+                          pending.length === 0
+                            ? jsx.jsx("div", { style: { marginTop: "2px", opacity: 0.7 }, children: t("gitFtpNothing") })
+                            : jsx.jsx("ul", {
+                              style: { margin: "4px 0 0", padding: 0, listStyle: "none", maxHeight: "180px", overflow: "auto", fontSize: "12px" },
+                              children: pending.slice(0, 200).map(function (file, index) {
+                                return jsx.jsxs("li", {
+                                  style: { display: "flex", gap: "6px", alignItems: "baseline" },
+                                  children: [
+                                    jsx.jsx("span", {
+                                      style: { width: "62px", flex: "none", opacity: 0.75, color: file.action === "delete" ? "#fca5a5" : "inherit" },
+                                      children: file.action === "delete" ? t("gitFtpDeleteLabel") : t("gitFtpUploadLabel")
+                                    }),
+                                    jsx.jsx("code", { style: { wordBreak: "break-all" }, children: file.path }),
+                                    jsx.jsx("span", { style: { marginLeft: "auto", flex: "none", opacity: 0.6 }, children: file.size ? ftpSize(file.size) : "" })
+                                  ]
+                                }, String(file.path) + "#" + index);
+                              })
+                            }),
+                          pending.length > 200
+                            ? jsx.jsx("div", { style: { marginTop: "2px", opacity: 0.6, fontSize: "12px" }, children: t("gitFtpMoreFiles", { n: pending.length - 200 }) })
+                            : null
+                        ] })
+                ]
+              });
+            })()
+            : null,
           // ---------------------------------------------------------- GitHub
           jsx.jsxs("div", {
             style: { marginTop: "12px", paddingTop: "8px", borderTop: "1px solid var(--dsw-alias-border-l2, rgba(255,255,255,0.14))" },
