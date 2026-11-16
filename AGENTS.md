@@ -305,6 +305,33 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-16` (nyolcadik kör) — **a „Kiadás" gomb teljes értékűvé tétele + v0.2.6
+  kiadva.** (1) **A lánc ellenőrzése és ÉLES futtatása:** a gomb a
+  `/ui-extras/github-action?action=release` végpontot hívja, a host pedig
+  `powershell … tools\release.ps1 -Yes` folyamatot indít **leválasztva**
+  (`detached`, `stdio: ignore`). Ugyanezt a parancsot kézzel futtatva a **v0.2.6**
+  kiadás elkészült és **közzé lett téve** (portable ZIP 2,36 MB + telepítő EXE
+  2,39 MB, `isDraft:false`), a push `8a4d021..9925d48`. (2) **Két hiányosság
+  javítva:** (a) a `gh release create --generate-notes` ebben a repóban csak a
+  „Full Changelog" sort adta — mostantól a szkript a **commitokból** írja a
+  jegyzetet (telepítési linkekkel, a kiadás-commit és a build generálta
+  bináris-frissítés kihagyásával), a v0.2.6 jegyzetét utólag is kicseréltük;
+  (b) a gomb eddig **nyomtalan** volt (a kimenet a leválasztott folyamatban
+  elveszett) — mostantól a szkript `Start-Transcript`-tel **`state\release-log.txt`**
+  naplót ír (2 MB fölött rotál), a `Fail` pedig lezárja. (3) **A gomb valódi
+  állapot-visszajelzést kapott:** a host új `action=release-status` végpontja a
+  `state\release-status.json`-t adja vissza (állapot, pid, tag, url, hiba,
+  napló-tail, `alive`), a panel 2 s-onként pollozza **legfeljebb 10 percig**
+  (kötött ciklus, §1.7), és kiírja: „Kiadás fut…" → „Kész: vX — <link>", illetve
+  hiba esetén a **napló utolsó soraival**; a gomb futás közben **letiltott**, a
+  host pedig **elutasítja a második kiadást**, amíg az előző folyamata él.
+  MÉRVE: a hibás-verziós próba (`-Version 1.2`) `state\release-status.json`-ba
+  `{"state":"failed", … "error":"érvénytelen verzió…"}`-t írt. **Érvénybe lépés:**
+  a szkript-oldal azonnal él, a host-oldali végpont/gombhoz **harness-újraindítás**
+  kell (§1.5 — felhasználói engedély), a kliens-oldali pollozáshoz **panel-újratöltés**
+  (a harness-újraindítás a pid-váltással ezt is elvégzi). Nyitva: a panel még nem
+  mutatja a teljes naplót (csak a hiba utolsó sorait) — igény esetén bővíthető.
+
 - `2026-11-16` (hetedik kör) — **az ablakok maximalizált indulása (felhasználói kérés)
   + az alügynök-fül.** (1) **Miért kellett kézzel kinagyítani minden indításnál:** a
   `DshWindow` a geometriát a `RestoreBounds`-ból menti (hogy maximalizált ablakból
