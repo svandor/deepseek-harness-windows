@@ -616,6 +616,17 @@ namespace DshTray
                 // összeomlást tévesen "felhasználói bezárásnak" minősítenénk, és
                 // nem állna helyre az ablak.
                 if (File.Exists(_cfg.WindowClosedMarker)) ClearCloseMarker();
+                // MERT HIBA (2026-11-16): ha fut ablak, de EGY SEM LATHATO (az
+                // asztalvaltas elrejtette az utolsot), a regi kod itt visszatert,
+                // es az ablak soha nem jott vissza. Ilyenkor allitsuk helyre.
+                if (!AnyVisibleDshWindow())
+                {
+                    int curDesktop = ReadDesktop();
+                    StartDesktopWindow(curDesktop);
+                    HealDesktopPidFromRunningWindow();
+                    ShowDesktopWindow(curDesktop);
+                    Log.Info("lathato ablak helyreallitasa (asztal " + curDesktop + ")");
+                }
                 return;
             }
             if (!Listening(_cfg.Port)) return;
