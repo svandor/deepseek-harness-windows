@@ -5374,6 +5374,12 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       var repositories = data.status === "ready" ? data.body.repositories : [];
       var githubBody = github.status === "ready" ? github.body : null;
       var githubRepos = githubBody && githubBody.repositories ? githubBody.repositories : [];
+      // A munkaterülethez tartozó FTP-profil — a render TÖBB helyén kell (a
+      // gyorsgomb az akciósorban és az FTP blokk a repók alatt), ezért a render
+      // szintjén egyszer számoljuk. MÉRT HIBA (2026-11-16): a blokk az
+      // akciósor IIFE-jében deklarált változóra hivatkozott → „ftpProfile is not
+      // defined", a Git panel elszállt (a hibahatár ki is írta).
+      var ftpProfile = ftpProfileFor(props.root);
 
       return jsx.jsxs("div", {
         "data-dsh-ui-extras": "git-panel",
@@ -5454,8 +5460,7 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                 if (releaseSubject) releasedTag = releaseSubject[1];
               }
               var releaseDisabled = busy || releaseFlying || releasedTag !== "";
-              // FTP-profil ehhez a munkaterülethez (a `localRoot` egyezése alapján).
-              var ftpProfile = ftpProfileFor(props.root);
+              // Az `ftpProfile` a render szintjén számolódik (a blokk is használja).
               var releaseTitle = releaseFlying
                 ? t("gitReleaseBusy")
                 : releasedTag !== ""
@@ -10139,6 +10144,10 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
     exports.CornerControls = CornerControls;
     exports.ApprovalCard = ApprovalCard;
     exports.PermissionsPanel = PermissionsPanel;
+    // A Git panelt a teszt (plugins\dsh-ui-extras\test) rendereli, hogy egy
+    // scope-hiba (pl. „ftpProfile is not defined") már a panel betöltése ELŐTT
+    // kiderüljön — MÉRT HIBA 2026-11-16, a panel elszállt.
+    exports.GitPanel = GitPanel;
     // The locale readers are exported so tools/check-plugin.mjs can pin them
     // against the real `getLocale()` snapshot shape: reading a snapshot as a
     // plain id is what made the language button start on the wrong branch.
