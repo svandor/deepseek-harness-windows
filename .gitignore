@@ -101,3 +101,12 @@ $RECYCLE.BIN/
 # --- futasideju proba-maradvanyok (ne keruljenek a repoba) ----------------------
 providers/tmp-*
 providers/*.out.txt
+
+# --- kiszurt fejlesztoi hulladekok (2026-11-16) --------------------------------
+# Ezek egyszeri, gepenkénti kutatas/dump fájlok voltak a repóban (helyi abszolút
+# útvonalakkal); a tartalmuk nem publikus és nem is kell a fordításhoz.
+lib_report.txt
+deepseek-ai-package-files.txt
+analysis.txt
+output.txt
+XMBC_research_report.md

@@ -21,7 +21,7 @@ Identification of `deepseek41flash`: the `deepseek-official` provider's `deepsee
 
 ## 2. Timeline — the actual freeze
 
-Source: `C:\Users\info\.dsh\sessions\--C-Szerver-Raider--\session-dfaea1e0-2e40-42cb-82f6-c70f195aa3f3\session.v3.jsonl.zstd`, `turn 10`, `step 5`.
+Source: `%USERPROFILE%\.dsh\sessions\--C-Szerver-Raider--\session-dfaea1e0-2e40-42cb-82f6-c70f195aa3f3\session.v3.jsonl.zstd`, `turn 10`, `step 5`.
 
 | Time | Record | Content |
 |---|---|---|
@@ -166,7 +166,7 @@ with Python 3.14+ (`from compression import zstd`):
 ```python
 import json, datetime, glob, os
 from compression import zstd
-p = r"C:\Users\info\.dsh\sessions\--C-Szerver-Raider--\session-dfaea1e0-…\session.v3.jsonl.zstd"
+p = r"%USERPROFILE%\.dsh\sessions\--C-Szerver-Raider--\session-dfaea1e0-…\session.v3.jsonl.zstd"
 for l in zstd.decompress(open(p,'rb').read()).decode('utf-8','replace').splitlines():
     r = json.loads(l)
     if r.get('type') in ('llm/retry','turn/end','assistant/attempt'):

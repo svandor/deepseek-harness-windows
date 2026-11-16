@@ -51,6 +51,9 @@ extends it.
 | **Remote-friendly operations** | A tray icon that starts, stops and restarts everything, a **pinnable launcher**, and a restart path that cannot be cut in half: every restart is handed to the tray, the one process outside the Harness process tree. |
 | **Connection watchdog** | Reloads the page when the server was replaced, so the interface never gets stuck on "Reconnecting…". |
 | **Light and dark theme** | Follows the Harness theme across **all** panes, including the robot panel, which runs on a different origin and is synchronised through the host. |
+| **Up to six panes, two work windows** | The configured pane count is the *total*: 4–6 panes open **two separate windows** (4 → 2+2, 5 → 3+2, 6 → 3+3). Only one window is visible at a time; the other is hidden at window level with its WebView2 panes still alive, so switching (header **1/2** icons or the tray's *Desktop* menu) takes **0.15–0.25 s** and loses no state. A fresh start always opens desktop 1 and pre-starts the other one hidden. |
+| **Per-pane, per-desktop profiles** | Every pane runs its own WebView2 profile (`state\webview2\pane-N`, and `pane-N-d2` for desktop 2), so it keeps its own workspace, selected session and drafts — and two windows never fight over one profile directory (that caused blank panes before). Measured cost for 6 panes: WebView2 ~3.7–4.3 GB in 48 processes, window chrome ~0.25 GB, background GUI ~2.2 GB. |
+| **One taskbar icon** | The pinned launcher and the running window share one taskbar button through a single explicit AppUserModelID (`DeepSeek.Harness`) plus a `RelaunchCommand` on the shortcut — without the latter, Windows reports "This item is not openable" once the window is closed. `tools\set-pinned-aumid.ps1` sets both; pinning itself is a single manual step from the Start menu, because Windows 11 removed the "Pin to taskbar" verb. |
 
 ### Install
 

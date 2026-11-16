@@ -278,33 +278,26 @@ namespace DshWindow
             int paneCount = Math.Max(1, Math.Min(MaxPanes, opts.Panes));
             double[] paneRatios = PaneLayout.Load(paneCount);
             var hosts = new List<DshWebViewHost>(paneCount);
-            // ── munkaasztalok (2026-11-15, dokumentált WebView2-minta) ────
-            // Asztalonként KÜLÖN Grid, ugyanabban a cellában EGYMÁSRA fektetve:
-            // így minden panel valódi méretet kap (nincs 0 széles oszlop), a
-            // váltás pedig a WebView2 dokumentált IsVisible kapcsolójával megy —
-            // a Collapsed/0 méret megszünteti a felületet és fehér panelt ad.
-            const int PanesPerDesktop = 3;
-            int desktopCount = (paneCount + PanesPerDesktop - 1) / PanesPerDesktop;
+            // ── panelek ────────────────────────────────────────────────────
+            // A MUNKAASZTALOK KÜLÖN ABLAKOK (2026-11-16): a tálca asztalonként
+            // indít egy-egy DshWindow-t (legfeljebb 3 panellel), és a nem aktív
+            // ablakot ablakszinten rejti el.
+            //
+            // MÉRT HIBA (2026-11-16): a korábbi "asztalonként külön Grid, egymásra
+            // fektetve" minta --panes 6 esetén KÉT rácsot rakott egymásra, és
+            // mivel az asztalváltás nem nyúlhat a WebView2-panelekhez (az
+            // befagyasztotta az ablakot), a felső rács takarta az alsót: 3 panel
+            // láthatatlanul élt, 3 WebView2-t fogyasztva (~3,3 GB), a fejléc
+            // pedig 6 paneles ablakot jelölt "2. asztal"-ként.
             var content = new Grid { Background = DarkBackground };
-            var desktopGrids = new Grid[desktopCount];
-            for (int d = 0; d < desktopCount; d++)
-            {
-                var grid = new Grid { Background = DarkBackground };
-                desktopGrids[d] = grid;
-                content.Children.Add(grid);
-            }
-
             for (int i = 0; i < paneCount; i++)
             {
-                var grid = desktopGrids[i / PanesPerDesktop];
-                int local = i % PanesPerDesktop;
-
-                if (local > 0)
+                if (i > 0)
                 {
-                    grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(SplitterWidth) });
+                    content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(SplitterWidth) });
                 }
 
-                grid.ColumnDefinitions.Add(new ColumnDefinition
+                content.ColumnDefinitions.Add(new ColumnDefinition
                 {
                     Width = new GridLength(paneRatios[i], GridUnitType.Star),
                     MinWidth = 320
@@ -327,10 +320,10 @@ namespace DshWindow
                 hosts.Add(pane);
                 FocusKeeper.RegisterPane(i, pane);
                 if (opts.FocusProbe) Probe.RegisterPane(i, pane);
-                Grid.SetColumn(pane, local * 2);
-                grid.Children.Add(pane);
+                Grid.SetColumn(pane, i * 2);
+                content.Children.Add(pane);
 
-                if (local > 0)
+                if (i > 0)
                 {
                     var splitter = new GridSplitter
                     {
@@ -343,8 +336,8 @@ namespace DshWindow
                         Background = SplitterBrush,
                         Cursor = System.Windows.Input.Cursors.SizeWE
                     };
-                    Grid.SetColumn(splitter, local * 2 - 1);
-                    grid.Children.Add(splitter);
+                    Grid.SetColumn(splitter, i * 2 - 1);
+                    content.Children.Add(splitter);
                 }
             }
 
@@ -353,15 +346,11 @@ namespace DshWindow
                 Logger.Info("panes: " + paneCount + " (each pane has its own WebView2 profile)");
             }
 
-            int activeDesktop = Math.Max(1, Math.Min(desktopCount, opts.Desktop));
-            Action<int> applyDesktop = d =>
-            {
-                // BIZTONSAGI OK (2026-11-15): az IsVisible/overlay-es valtas ezen a
-                // WebView2-hoston BEFAGYASZTOTTA az ablakot (tobbszori meresi hiba).
-                // Amig nincs kulon ablakos megoldas, a valtas NEM nyul a panelekhez:
-                // csak naplozzuk, igy az ablak sosem fagy be.
-                Logger.Info("desktop " + d + "/" + desktopCount);
-            };
+            // A munkaasztal-váltást a TÁLCA végzi (asztalonként külön ablak,
+            // ablakszintű rejtéssel). Az ablak a saját asztalát csak naplózza,
+            // és a saját pid-fájljába írja — a panelekhez nem nyúl.
+            int activeDesktop = opts.Desktop <= 0 ? 1 : opts.Desktop;
+            Logger.Info("desktop " + activeDesktop + " (kulon ablak mod)");
 
             // Remember the last position/size: every new window opens where the
             // previous one was left (important on a 32:9 desktop, where the
@@ -384,7 +373,20 @@ namespace DshWindow
                 ShowInTaskbar = true   // a rejtett ablakot a ShowWindow(SW_HIDE) veszi le a taskbarrol; a lathatonak mindig kell gomb
             };
 
-            applyDesktop(activeDesktop);
+            // A saját pid-fájl (state\window-desktop<N>.pid): a tálca ebből tudja,
+            // MELYIK ablak melyik asztalé. Korábban minden ablak az 1-es fájlba
+            // íródott, ezért a 2. asztal ablaka "1. asztalként" jelent meg.
+            string desktopPidFile = null;
+            try
+            {
+                string stateDir = Path.GetDirectoryName(opts.LogFile ?? ".") ?? ".";
+                desktopPidFile = Path.Combine(
+                    stateDir, "window-desktop" + activeDesktop.ToString(CultureInfo.InvariantCulture) + ".pid");
+                File.WriteAllText(desktopPidFile,
+                    Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture));
+                Logger.Info("desktop pid file: " + desktopPidFile);
+            }
+            catch (Exception ex) { Logger.Info("desktop pid file: " + ex.Message); }
 
             // INDULASI MERET-SZINKRON (2026-11-16): a panelek neha 0 merettel
             // jonnek letre (Explorer/DPI valtas, ujraindítás), ezert az ablak
@@ -406,34 +408,23 @@ namespace DshWindow
             resync2.Tick += (sR2, eR2) => { resync2.Stop(); resyncAll(); };
             resync2.Start();
 
-            // ÉLŐ asztalváltás: a webes fejléc 1/2 ikonjai (és a tálca) a
-            // state\window-desktop.txt-t írják; az ablak 500 ms-onként figyeli.
-            var desktopWatch = new System.Windows.Threading.DispatcherTimer
+            // REJTETT -> LÁTHATÓ váltás: a tálca a nem aktív asztal ablakát
+            // ShowWindow(SW_HIDE)-dal rejti el; visszatéréskor a WebView2
+            // vezérlők néha 0 mérettel maradnak, ezért ilyenkor is újra
+            // rákényszerítjük a valódi méretet (a panelekhez nem nyúlunk).
+            window.IsVisibleChanged += (sV, eV) =>
             {
-                Interval = TimeSpan.FromMilliseconds(500)
-            };
-            string desktopFile = Path.Combine(
-                Path.GetDirectoryName(opts.LogFile ?? ".") ?? ".",
-                "window-desktop.txt");
-            int seenDesktop = activeDesktop;
-            desktopWatch.Tick += (s4, e4) =>
-            {
-                try
+                if (!(bool)eV.NewValue) return;
+                var showSync = new System.Windows.Threading.DispatcherTimer
                 {
-                    if (!File.Exists(desktopFile)) return;
-                    int wanted;
-                    if (!int.TryParse(File.ReadAllText(desktopFile).Trim(), out wanted)) return;
-                    wanted = Math.Max(1, Math.Min(desktopCount, wanted));
-                    if (wanted == seenDesktop) return;
-                    seenDesktop = wanted;
-                    applyDesktop(wanted);
-                }
-                catch (Exception ex)
-                {
-                    Logger.Info("desktop watch: " + ex.Message);
-                }
+                    Interval = TimeSpan.FromMilliseconds(250)
+                };
+                showSync.Tick += (sS, eS) => { showSync.Stop(); resyncAll(); };
+                showSync.Start();
             };
-            desktopWatch.Start();
+
+            // A tálca asztalváltása külön ablakokkal megy (ablakszintű rejtés),
+            // ezért itt nincs asztal-figyelő: az ablak a saját asztalát mutatja.
 
             if (restoreGeometry)
             {
@@ -456,6 +447,17 @@ namespace DshWindow
             bool geometrySaved = false;
             window.Closing += (s, e) =>
             {
+                // A saját pid-fájl törlése — de csak ha tényleg a miénk, hogy egy
+                // közben indult új ablak fájlját ne töröljük ki.
+                try
+                {
+                    if (!string.IsNullOrEmpty(desktopPidFile) && File.Exists(desktopPidFile))
+                    {
+                        string mine = Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture);
+                        if (File.ReadAllText(desktopPidFile).Trim() == mine) File.Delete(desktopPidFile);
+                    }
+                }
+                catch { }
                 if (geometrySaved) return;
                 geometrySaved = true;
                 // A tálca felügyelete 20 másodpercenként visszaindítaná az
@@ -920,6 +922,17 @@ namespace DshWindow
             }
 
             folder = Path.Combine(folder, "pane-" + (_paneIndex + 1).ToString(CultureInfo.InvariantCulture));
+
+            // KÉT ABLAK + EGY PROFILMAPPA = 0x800700AA (2026-11-16): a 2. asztal
+            // ablaka ugyanazokat a pane-N mappákat akarta megnyitni, amelyeket az
+            // 1. asztal ablaka tart — ezért MINDEN panel első próbálkozása
+            // „A kért erőforrás használatban van" hibával bukott el, a tartalék
+            // időbélyeges mappa miatt pedig ~6 s-ig fehér/üres panel látszott.
+            // Ezért a profil asztalonként külön: pane-<N>-d<asztal>.
+            if (_opts.Desktop > 1)
+            {
+                folder += "-d" + _opts.Desktop.ToString(CultureInfo.InvariantCulture);
+            }
 
             // A profile another (killed) window still holds open cannot be taken
             // over; a timestamped sibling starts anyway and the locked folder is

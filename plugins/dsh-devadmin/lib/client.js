@@ -679,17 +679,25 @@ window.__ModuleLoader__.load({
         let alive = true;
         const read = () => {
           getJson("/devadmin/state")
-            .then(() => {
+            .then((state) => {
               if (!alive) return;
-              // az aktív asztal a tray-config-ból nem látszik innen: a fájlt a
-              // host endpoint jelzi vissza, ezért csak a saját kattintást
-              // jelezzük (a vizuális visszajelzés a kattintás után azonnal van)
+              // MÉRT HIBA (2026-11-16): ez a függvény korábban ELDOBTA a választ,
+              // ezért a fejléc csak a saját kattintást jelezte — a váltás után
+              // (és a másik ablakban) NEM az aktív asztal volt kiemelve, amit a
+              // felhasználó „az egyes van aktív színnel" jelenségként látott.
+              // Mostantól a gombok a tényleges állapotot mutatják (2 s-enként).
+              const value = Number(state && state.desktop);
+              if (Number.isFinite(value) && value > 0) setActive(value);
+              const count = Number(state && state.desktopCount);
+              if (Number.isFinite(count) && count > 0) setDesktopCount(count);
             })
             .catch(() => {});
         };
         read();
+        const timer = window.setInterval(read, 2000);
         return () => {
           alive = false;
+          window.clearInterval(timer);
         };
       }, []);
       // NINCS elrejto feltetel: a felhasznalo kérése, hogy az 1/2 gomb MINDIG

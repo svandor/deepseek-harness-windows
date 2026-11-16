@@ -29,7 +29,7 @@ a `model: "deepseek-flash"`, a `provider: "deepseek-official"` szerepel.
 
 ## 2. Idővonal — a tényleges lefagyás
 
-Forrás: `C:\Users\info\.dsh\sessions\--C-Szerver-Raider--\session-dfaea1e0-2e40-42cb-82f6-c70f195aa3f3\session.v3.jsonl.zstd`,
+Forrás: `%USERPROFILE%\.dsh\sessions\--C-Szerver-Raider--\session-dfaea1e0-2e40-42cb-82f6-c70f195aa3f3\session.v3.jsonl.zstd`,
 `turn 10`, `step 5`.
 
 | Idő | Rekord | Tartalom |
@@ -212,7 +212,7 @@ Python 3.14-ggyel (`from compression import zstd`):
 ```python
 import json, datetime, glob, os
 from compression import zstd
-p = r"C:\Users\info\.dsh\sessions\--C-Szerver-Raider--\session-dfaea1e0-…\session.v3.jsonl.zstd"
+p = r"%USERPROFILE%\.dsh\sessions\--C-Szerver-Raider--\session-dfaea1e0-…\session.v3.jsonl.zstd"
 for l in zstd.decompress(open(p,'rb').read()).decode('utf-8','replace').splitlines():
     r = json.loads(l)
     if r.get('type') in ('llm/retry','turn/end','assistant/attempt'):

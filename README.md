@@ -171,10 +171,10 @@ Hasznos kapcsolók (kézi indításhoz):
 .\bin\DshWindow.exe --close-after 10             # teszt: 10s után bezár
 ```
 
-### Panelos felosztás — több munkaterület egy ablakban
+### Paneles felosztás — akár 6 panel, két munkaablakkal
 
 Az ablak `--panes N` kapcsolóval **N egymás melletti panelre** osztható
-(1–4; alapérték a tálcánál 2). Nem egy beszélgetés látszik több panelen, hanem
+(1–6; alapérték a tálcánál 3). Nem egy beszélgetés látszik több panelen, hanem
 **panelenként egy-egy teljes kliens**, saját WebView2 profillal:
 
 - Minden panel a saját profiljából fut (`state\webview2\pane-1`, `pane-2`, …),
@@ -190,21 +190,72 @@ Az ablak `--panes N` kapcsolóval **N egymás melletti panelre** osztható
   fákon: a panelek ezért munkaterületre valók, nem ugyanazon munkaterület
   duplikálására.
 
+#### Két munkaasztal: 4–6 panel = 3 + 3
+
+A beállított panelszám a **teljes** panelszám. Ha **3 fölött** van (4–6), a
+program **két külön ablakot** indít, asztalonként legfeljebb 3 panellel:
+
+| Beállítás | Eredmény |
+|---|---|
+| 1–3 panel | egy asztal, egy ablak |
+| 4 panel | 2 + 2 panel, két ablak |
+| 5 panel | 3 + 2 panel, két ablak |
+| 6 panel | 3 + 3 panel, két ablak |
+
+- Egyszerre **pontosan egy** ablak látszik; a másik ablakszinten rejtett, a
+  panelei életben maradnak (nincs újratöltés, nincs állapotvesztés).
+- A fejléc **1 / 2** ikonjai (és a tálca *Munkaasztal* menüje) váltanak;
+  a váltás mért ideje **0,15–0,25 s**, és a cél-ablak fókuszba is kerül.
+- Asztalonként **külön WebView2 profil** (`state\webview2\pane-N-d2`), ezért a
+  két asztal panelei **külön munkamenetet** jegyeznek meg — és nem ütköznek a
+  profilmappán (ez okozta korábban a fehér paneleket).
+- **Indításkor mindig az 1. asztal nyílik**; a másik asztal ablaka néhány
+  másodperc múlva, rejtve előkészül, hogy a váltás azonnali legyen.
+- A tálca kilépése **nem zárja be** a munkaablakokat: azok önálló folyamatok.
+
+Memóriaigény (mért, 6 panel = 2 ablak × 3 panel): WebView2 folyamatok
+**~3,7–4,3 GB** (48 folyamat), a két ablak kerete ~0,25 GB, a háttér-GUI
+(node) ~2,2 GB. 3 paneles módban ~1,1 GB/panel.
+
 Beállítás és használat a tálcáról:
 
-1. Tálcaikon → **Ablak felosztása** → `1` / `2` / `3` panel (a `state\tray-config.json`
-   `panes` értékét írja).
-2. Ha épp nyitva van ablak, a program megkérdezi, hogy újraindítsa-e; a panelek
+1. Tálcaikon → **Ablak felosztása** → `1`–`6` panel (a `state\tray-config.json`
+   `panes` értékét írja). 4–6 panelnál két ablak jön létre (lásd fent).
+2. Tálcaikon → **Munkaasztal** → `1.` / `2.` asztal — ugyanaz, mint a fejléc
+   1/2 ikonja.
+3. Ha épp nyitva van ablak, a program megkérdezi, hogy újraindítsa-e; a panelek
    a saját profiljukból visszatöltenek.
-3. Külön menüpont: **Ablak bezárása** (a háttér-GUI futva marad).
-4. Az állapotablak (`Állapot…`) mutatja az éppen beállított felosztást.
+4. Külön menüpont: **Ablak bezárása** (a háttér-GUI futva marad).
+5. Az állapotablak (`Állapot…`) mutatja az éppen beállított felosztást.
 
 > A paneleket külön kliensként a háttér-GUI szolgálja ki; a szervert nem kell
 > hozzá újraindítani, és a panelek száma a szervert nem érinti.
 
-> A `tray\dsh-tray.ps1` módosítása után a **futó tálcát újra kell indítani**
-> (tálcaikon → *Kilépés*, majd az asztali ikon), különben a régi, memóriában futó
-> szkript nyitja az ablakot — panel nélkül.
+> A tálcát érintő módosítás után a **futó tálcát újra kell indítani**
+> (tálcaikon → *Kilépés*, majd az asztali ikon). A tálca kilépése **nem zárja be
+> a munkaablakokat**: azok önálló folyamatok, és a következő tálca átveszi őket.
+
+### Egy tálcaikon: AppUserModelID + újraindítási parancs
+
+A kitűzött indító és a futó ablak **egy** tálcagombot ad, ha a parancsikon
+`System.AppUserModel.ID` tulajdonsága ugyanaz (`DeepSeek.Harness`), amit a
+program futásidőben is beállít. Emellett a parancsikonon
+`System.AppUserModel.RelaunchCommand` is kell — **enélkül** az ablak bezárása
+után a tálcaelem „Nem nyitható meg az elem" hibát ad, mert a Windows nem tudja,
+mit indítson.
+
+Ezt állítja be a `tools\set-pinned-aumid.ps1` (`-Check` / `-Apply`):
+
+```powershell
+.\tools\set-pinned-aumid.ps1 -Check     # mit lát most a hivatkozás
+.\tools\set-pinned-aumid.ps1 -Apply     # AUMID + RelaunchCommand beállítása
+```
+
+> **A kitűzést nem lehet scriptből létrehozni:** a Windows 11 kivette a
+> „Csatolás a tálcához" műveletet a parancsikonokról. A támogatott út a
+> **Start-menü**: `.\pin-to-taskbar.ps1` létrehozza a Start-menü bejegyzést,
+> ott jobb klikk → *Kitűzés a tálcára*. (A régi, közvetlen ablak-pin
+> — `DshWindow.lnk` — rossz: az ablak-exe paraméterek nélkül indul.)
 
 ## Miért volt szükség erre a könyvtárra
 
@@ -278,8 +329,10 @@ A tálca beállításait a `state\tray-config.json` tárolja:
 A `dshBin` üresen hagyva a program a legfrissebb elérhető dsh-t választja
 (npx cache → globális npm → helyi `node_modules` → PATH).
 
-A `panes` a natív ablak paneljeinek száma (1–4). A tálcáról az
-**Ablak felosztása** menüben állítható; a `--panes` kapcsoló felülírja.
+A `panes` a **teljes** panelszám (1–6). 4–6 között a program két munkaablakot
+indít (3 + 3), lásd [Két munkaasztal](#két-munkaasztal-4–6-panel--3--3). A
+tálcáról az **Ablak felosztása** menüben állítható; a `--panes` kapcsoló
+felülírja.
 
 ## Automatikus indítás bejelentkezéskor (opcionális)
 

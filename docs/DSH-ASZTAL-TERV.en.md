@@ -1,94 +1,128 @@
-# DSH desktop model (2 desktops, 3+3 panes) — implementation plan
+# DSH desktop model — IMPLEMENTED (two separate windows, 3+3 panes)
 
-Status: **plan** (2026-11-14). The tray already offers a 1–6 split; the window
-does not build six panes yet, and the switch button between the two desktops
-belongs in the header row.
+Status: **implemented and measured** (2026-11-16). This file replaces the older
+"switch desktops inside one window" plan — that approach did not work on this
+WebView2 host.
 
-## Goal
+## The model
 
-- One or two desktops, **max 3 panes each** (a pane count above 3 goes to the
-  second desktop: `panes 4/5/6` → 3 + 1/2/3).
-- The switch button sits **in the header, before the minimize icon**, as text
-  ("1. desktop" / "2. desktop").
-- Panes of the inactive desktop are **suspended**
-  (`CoreWebView2Controller.TrySuspendAsync` + `CoreWebView2.MemoryUsageTargetLevel.Low`)
-  so memory does not grow with the pane count. Measured baseline: 3 panes =
-  3.33 GB of WebView2, about 1.1 GB per pane.
-- The robot pane's desktop is selectable (`robotDesktop`).
+- The user sets a **total pane count** (1–6) in the tray / settings.
+- `panes ≤ 3` → **one** desktop, one window with that many panes.
+- `panes > 3` → **two** desktops, **one separate `DshWindow.exe` process per
+  desktop**, at most 3 panes each: `4 → 2+2`, `5 → 3+2`, `6 → 3+3`.
+- Exactly **one** window is visible at a time; the other is hidden at window
+  level (`ShowWindow(SW_HIDE)`). Switching never touches the panes, the WebView2
+  controllers or the column widths.
+- Both windows use the same AppUserModelID (`DeepSeek.Harness`), so the taskbar
+  shows **one** grouped button; a hidden window has no button at all.
 
-## Where to change
+## Responsibilities
 
-| File | Change |
+| Role | Responsibility |
 |---|---|
-| `src\DshWindow.cs` | `Options`: `--desktops N` (1–2), `--desktop N` (1–2). `MaxPanes = 6` already there. Split the pane grid of `ShowWindow()` into desktops (below). Header strip (WPF `Grid` row 0, 30 px) with the two text buttons, only when there are 2 desktops. `DshWebViewHost`: `SetSuspended(bool)` wrapper. |
-| `src\DshTray.cs` | `WindowConfig`: `Desktops`, `Desktop`, `RobotDesktop` keys (the `TinyJson` writer only touches its own keys). Menu: "Desktops: 1 / 2", the 1–6 split stays, and "desktop: 1/2" next to the robot pane. `RestartWindowForLayout()` must pass `--desktops`/`--desktop`. |
-| `state\tray-config.json` | `desktops`, `desktop`, `robotDesktop` (written by the tray, read by the window). |
-| `tools\build-window.ps1` | unchanged (renames the running exe, then compiles). |
+| `src\DshTray.cs` | Desktop switching, window start, visibility. The single switch signal is `state\window-desktop.txt`; the tray polls it every 700 ms and only **applies** it (writing it back caused an endless loop). |
+| `src\DshWindow.cs` | Renders its own desktop's panes in ONE grid and writes its own pid file (`state\window-desktop<N>.pid`). It does not switch desktops. |
+| Web header (plugin) | The 1/2 icon writes `window-desktop.txt`; it only appears with 4–6 panes. |
 
-## Grid layout (DshWindow)
+State files: `state\window-desktop.txt` (active desktop),
+`state\window-desktop1.pid` / `window-desktop2.pid` (which process belongs to
+which desktop), `state\tray.pid`, `state\tray-config.json` (`panes` = total).
 
-```
-Window.Content
-└─ Grid (2 rows)
-   ├─ row 0 (30 px): header strip — "1. desktop" | "2. desktop" (only when desktops=2)
-   └─ row 1: Grid (desktops)
-      ├─ Desktop1 Grid (1–3 columns + GridSplitter)   Visibility = Collapsed when inactive
-      └─ Desktop2 Grid (1–3 columns + GridSplitter)   Visibility = Visible when active
-```
+## Measured pitfalls (do not retry these)
 
-- Panes are created exactly as today (`DshWebViewHost`), only into a different
-  parent grid. `PaneLayout` (column widths) must be per desktop:
-  `state\pane-layout-<desktop>.json`, otherwise the two desktops overwrite each
-  other's widths.
-- On a switch: the old desktop `Visibility = Collapsed` + `SetSuspended(true)`
-  for each of its panes; the new one `Visible` + `SetSuspended(false)`. A
-  collapsed pane's WebView2 stays alive (state preserved), it just stops
-  drawing.
+1. **Switching desktops inside one window** — `Collapsed`, a zero-width column or
+   toggling `CoreWebView2Controller.IsVisible` produced white panes or a frozen
+   window. Stacking two grids also left the lower desktop's panes occluded: with
+   `--panes 6`, **3 panes lived invisibly and burned 3 WebView2 instances
+   (~3.3 GB)**.
+2. **Tray exit killed the windows.** `ExitApp()` called `StopDesktopWindows()`, so
+   a tray upgrade or "Exit" **closed every work window** (measured 2026-11-16
+   04:53:29). Exit now **leaves** the windows running.
+3. **Helper windows hijacked show/hide.** `CiceroUIWndFrame`,
+   `SystemResourceNotifyWindow` and `MediaContextNotificationWindow` are also
+   top-level, titled, `HwndWrapper[...]` windows; the old finder picked them, so
+   `ShowWindow` hid/showed a **helper** window and left the real one invisible
+   (measured: **both windows hidden**, empty desktop, "I had to start it
+   manually"). The finder therefore **prefers the exact product title**
+   (`DeepSeek Harness`).
+4. **`Process.MainWindowHandle` is 0 for hidden windows** and unreliable for WPF
+   windows (it returns the IME window) — use `EnumWindows` +
+   `GetWindowThreadProcessId` + `GetClassName`/`GetWindowText`.
+5. **The pid file cannot be shared:** every window used to write desktop 1's
+   file, so the desktop-2 window appeared as "desktop 1" and switching did not
+   start a new window.
 
-## Suspend API (WebView2)
+## Taskbar: why the pinned launcher and the running window cannot merge
 
-```csharp
-// DshWebViewHost
-internal async void SetSuspended(bool suspended)
-{
-    try
-    {
-        CoreWebView2Controller c = _controller;
-        if (c == null || c.CoreWebView2 == null) return;
-        if (suspended)
-        {
-            c.CoreWebView2.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Low;
-            await c.TrySuspendAsync();
-        }
-        else
-        {
-            c.CoreWebView2.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Normal;
-            // focus or any input wakes it; if it does not, the pane reloads
-        }
-    }
-    catch (Exception ex) { Logger.Info("suspend: " + ex.Message); }
-}
-```
+Windows groups taskbar buttons by **AppUserModelID (AUMID)**, not by process or
+shortcut:
 
-If the installed `Microsoft.Web.WebView2.Core.dll` does not know
-`TrySuspendAsync`, keep **only `MemoryUsageTargetLevel`** (still a reduction)
-and rely on the `Visibility` switch.
+- Each process sets the identity of **its windows** with
+  `SetCurrentProcessExplicitAppUserModelID("DeepSeek.Harness")` — both
+  `DshWindow.exe` and `DshTray.exe` do this, so the **two work windows share one**
+  grouped button.
+- The **pinned icon is a shortcut (`.lnk`)**, not a window. Windows can merge the
+  running window into it only if the shortcut's `System.AppUserModel.ID` property
+  **equals** `DeepSeek.Harness`. When that property is absent, the shortcut's
+  identity is derived from the **target path** (`bin\DshLauncher.exe`) — a
+  different identity, so the taskbar shows **two items**: the pinned launcher and
+  the group of running windows.
+- The launcher process (`DshLauncher.exe`) **exits** after starting the tray, so
+  it can never own a window — the two icons are not caused by having two
+  processes but by their **identities differing**.
+- The correct fix is therefore to set `System.AppUserModel.ID` = `DeepSeek.Harness`
+  on the pinned shortcut and **re-pin** it (the stale taskbar-item cache sometimes
+  needs an `explorer.exe` restart — that is what produced the earlier
+  "This item is not openable" error).
 
-## Acceptance criteria
+### Implemented (2026-11-16)
 
-1. `--panes 6 --desktops 2` → six WebView2s, three visible at a time, the switch
-   button works, both desktops keep their own column widths.
-2. The inactive desktop's panes are suspended: their processes live on, their
-   memory is measurably smaller (`Get-Process msedgewebview2` sum before/after).
-3. The robot pane appears on the selected desktop.
-4. The tray's 1–6 split and the "Desktops: 1/2" entry write the same state the
-   window reads (one source of truth: `state\tray-config.json`).
+- `tools\set-pinned-aumid.ps1` — `-Check` / `-Apply` / `-RemoveBogusPin`: sets
+  `System.AppUserModel.ID` plus `System.AppUserModel.RelaunchCommand` /
+  `RelaunchDisplayNameResource` / `RelaunchIconResource` on the shortcuts
+  (`IPropertyStore`; backup under `D:\Szerver\DSH-backup\pins-<timestamp>\`) and
+  removes the bogus pin that pointed straight at the window exe.
+- **Without `RelaunchCommand` the pin cannot relaunch:** once the window closes,
+  the taskbar item shows "This item is not openable" (measured). The AUMID alone
+  only provides grouping; relaunching a non-running app needs the relaunch
+  properties.
+- Applied to the pinned-folder, desktop and Start-menu shortcuts; the bogus pin
+  was deleted (the stale, dead taskbar icon is gone).
+- **Creating a pin is not scriptable on this build:** Windows 11 removed the
+  "Pin to taskbar" verb from Explorer's verbs (only "Unpin" exists),
+  `InvokeVerb('taskbarpin')` is a silent no-op, and the `User Pinned\TaskBar`
+  folder is **not** a source: after clearing `Taskband\Favorites`, Explorer did
+  **not** rebuild the pins from it — they were **lost** (63 pins; restored from
+  the backup, `state\taskband-values.json` + registry write). Pinning is
+  therefore **one manual step**: Start menu → right-click → "Pin to taskbar", or
+  drag the desktop icon onto the taskbar. With the properties set, that gives
+  **one** icon and it launches even with the window closed.
+- **Measured pitfalls:** `IPersistFile::Load` needs **`STGM_READWRITE` (2)**,
+  otherwise `Save` returns `STG_E_ACCESSDENIED` (0x80030005); `PROPVARIANT` is
+  **24 bytes** on x64 (the 16-byte version corrupts the stack and the value reads
+  back as empty); a half-failed `Save` can **truncate the `.lnk` to 0 bytes**
+  (restored from the backup).
 
-## Measurement used to prove it
+Source: `src\DshTray.cs` / `src\DshWindow.cs`
+(`SetCurrentProcessExplicitAppUserModelID`), `tools\set-pinned-aumid.ps1`.
 
-```
-# total WebView2 memory (before and after a switch)
-Get-Process msedgewebview2 | Measure-Object WorkingSet64 -Sum
-# pane count per boot, from the log:
-Get-Content state\window.log -Tail 20   # "panes: N (desktop 1/2)"
-```
+## Measurements (2026-11-16, this machine)
+
+- 8 simulated clicks (1→2→1→2→2→1→2→1): **all within 0.2–0.8 s**, and after
+  every switch exactly **one** window was visible (log:
+  `asztalvaltas kesz: aktiv=N (lathato=igen)`).
+- Switch that starts a new window: **1.1 s** (the WebView2 panes load
+  afterwards).
+- Automatic recovery of a hidden (not closed) window: **3.1 s** — supervision
+  notices that no window is visible and shows the active desktop's window.
+- Memory with 6 panes (2 windows × 3 panes): WebView2 ~3.7–4.3 GB (48
+  processes), `DshWindow` ~0.25 GB, harness node ~2.2 GB.
+
+## Forbidden
+
+- Do not start `DshWindow.exe` by hand (duplicate taskbar button, missing pid
+  file) — the tray owns window creation.
+- Do not collapse panes, zero a column, toggle `IsVisible`, or modify the native
+  window frame (each measurably broke the window).
+- Tray upgrades use **force-kill** (`Stop-Process -Force`) so that `ExitApp()`
+  never runs and the windows survive.

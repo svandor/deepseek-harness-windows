@@ -210,6 +210,37 @@ namespace DshTray
             }
 
             LoadConfig();
+            // A tálca saját pid-je: a telepítő/ellenőrző eszközök ezt olvassák.
+            // MÉRT HIBA (2026-11-16): a fájlban elavult pid maradt (61112),
+            // miközben a futó tálca 31156 volt, ezért a "fut-e a tálca" kérdésre
+            // a fájl hamis választ adott.
+            try
+            {
+                Directory.CreateDirectory(_cfg.StateDir);
+                File.WriteAllText(
+                    Path.Combine(_cfg.StateDir, "tray.pid"),
+                    Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture),
+                    new UTF8Encoding(false));
+            }
+            catch (Exception ex) { Log.Error("tray.pid írás: " + ex.Message); }
+            // FRISS INDÍTÁS (felhasználói kérés, 2026-11-16): ha a tálca
+            // indulásakor EGYETLEN munkaablak sem fut, az **1. asztallal**
+            // kezdünk. Korábban a fájlban maradt érték (pl. 2) nyitotta az első
+            // ablakot, ezért indítás után a 2. asztal jött be.
+            try
+            {
+                if (Process.GetProcessesByName("DshWindow").Length == 0)
+                {
+                    File.WriteAllText(
+                        Path.Combine(_cfg.StateDir, "window-desktop.txt"), "1", new UTF8Encoding(false));
+                    for (int d = 1; d <= 2; d++)
+                    {
+                        try { if (File.Exists(DesktopPidPath(d))) File.Delete(DesktopPidPath(d)); } catch { }
+                    }
+                    Log.Info("friss indítás: az 1. munkaasztal nyílik");
+                }
+            }
+            catch (Exception ex) { Log.Error("friss indítás: " + ex.Message); }
             BuildIcon();
             // Új tálca-session (bejelentkezés, frissítés): az ablak a megszokott
             // módon megnyílik. A bezárás-jelölő csak az adott sessionre szól,
@@ -221,15 +252,57 @@ namespace DshTray
             _schedule = new System.Threading.Timer(_ => Scheduled(), null, 5000, 60000);
 
             // Munkaasztal-figyelo: a webes fejlec 1/2 gombja a
-            // state\window-desktop.txt-t irja; 700 ms-onkent figyeljuk, es
+            // state\window-desktop.txt-t irja; 200 ms-onkent figyeljuk, es
             // valtozasra atvaltunk (4-6 panel eseten ket kulon ablak).
+            // A 700 ms-os ciklus volt a valtas lassu resze (a kattintas es az
+            // ablak megjelenese kozott akar 0,7 s is eltelt); a fajl apro, a
+            // surubb olvasas merheto terhelese nulla.
             _desktop = ReadDesktop();
-            _desktopWatch = new System.Windows.Forms.Timer { Interval = 700 };
+            // A figyelő csak VÁLTOZÁSRA tüzeljen: a kiinduló írásidőt is
+            // megjegyezzük, különben a legelső tick (700 ms) "változásnak" látja
+            // a MinValue-t, és feleslegesen indít még egy ablakot (mért eset
+            // 2026-11-16: két ablak ugyanarra az asztalra).
+            try
+            {
+                string desktopPath = Path.Combine(_cfg.StateDir, "window-desktop.txt");
+                if (File.Exists(desktopPath)) _desktopStamp = File.GetLastWriteTimeUtc(desktopPath);
+            }
+            catch { }
+            _desktopWatch = new System.Windows.Forms.Timer { Interval = 200 };
             _desktopWatch.Tick += (s, e) => DesktopWatchTick();
             _desktopWatch.Start();
-            Log.Info("munkaasztal-figyelo elindult (700 ms)");
+            Log.Info("munkaasztal-figyelo elindult (200 ms)");
             Log.Info("felügyelet elindult (20 s), ütemező elindult (60 s)");
             HealDesktopPidFromRunningWindow();
+            EnsureOtherDesktopWindows(4000);
+        }
+
+        /// <summary>
+        /// A MÁSIK asztal ablakát is előre elindítja (rejtve), hogy a váltás
+        /// azonnali legyen. Enélkül az első váltás új ablakot indított, a panelek
+        /// betöltése pedig néhány másodpercig fehér felületet adott (mért hiba).
+        /// </summary>
+        private void EnsureOtherDesktopWindows(int delayMs)
+        {
+            var preparer = new Thread(() =>
+            {
+                try
+                {
+                    Thread.Sleep(delayMs);
+                    int active = Math.Max(1, Math.Min(DesktopCount(), ReadDesktop()));
+                    for (int d = 1; d <= DesktopCount(); d++)
+                    {
+                        if (d == active) continue;
+                        if (RunningDesktopWindow(d) != 0) continue;
+                        if (string.IsNullOrEmpty(CurrentUrl())) return;
+                        StartDesktopWindow(d);       // nem aktiv asztalt maga rejti el
+                        Log.Info("asztal " + d + " elore elinditva (rejtve)");
+                    }
+                }
+                catch (Exception ex) { Log.Error("asztal elore inditas: " + ex.Message); }
+            });
+            preparer.IsBackground = true;
+            preparer.Start();
         }
 
         // ── konfiguráció ───────────────────────────────────────────────────
@@ -687,61 +760,15 @@ namespace DshTray
             catch (Exception ex) { Log.Error("bezárás-jelölő törlése: " + ex.Message); }
         }
 
+        /// <summary>
+        /// A jelenlegi munkaasztal ablakának indítása. MINDEN indítási útvonal
+        /// ezen megy át (tálcaikon, "Ablak megnyitása", felügyelet, asztalváltás),
+        /// hogy az ablak panel-száma és a pid-fájlja mindig az adott asztalhoz
+        /// tartozzon.
+        /// </summary>
         private void StartWindow()
         {
-            string url = CurrentUrl();
-            if (string.IsNullOrEmpty(url))
-            {
-                // A token még nem készült el: a következő körben újra próbáljuk.
-                Log.Info("ablak indítás halasztva: még nincs token URL");
-                return;
-            }
-            // Robot felület: a PS-tálca `--pane-url "<panes>=<url>"` alakban adta
-            // át, a DshWindow ezt értelmezi a 4. (utolsó) panelként.
-            // MÉRT HIBA (2026-11-15): itt még a régi 3-as plafon állt, ezért a
-            // tálcán beállított 6 panelből 3-at indított (`window.log: panes: 3`).
-            int paneCount = Math.Max(1, Math.Min(6, _cfg.Panes));
-            bool robotPane = _cfg.RobotPane || _cfg.RobotOnly;
-            if (_cfg.RobotOnly) paneCount = 1;
-
-            string args = "--port " + _cfg.Port
-                + " --panes " + paneCount
-                + " --desktop " + ReadDesktop()
-                + " --no-boot --width " + _cfg.Width.ToString(CultureInfo.InvariantCulture)
-                + " --height " + _cfg.Height.ToString(CultureInfo.InvariantCulture)
-                + " --log \"" + _cfg.WindowLog + "\""
-                + " --icon \"" + _cfg.IconFile + "\""
-                + " --dsh-home \"" + _cfg.DshHome + "\""
-                + " --dsh-bin \"" + _cfg.DshBin + "\""
-                + " --url \"" + url + "\" --restart-if-stale";
-            if (robotPane)
-            {
-                args += " --pane-url \"" + paneCount + "=" + _cfg.RobotUrl + "\"";
-                Log.Info("robot felület: a " + paneCount + ". panel tolti be (" + _cfg.RobotUrl + ")"
-                    + (_cfg.RobotOnly ? " [CSAK ROBOT MOD]" : string.Empty));
-            }
-
-            // Az induló ablak "nyitva van": a korábbi bezárás jelölője nem élhet tovább.
-            ClearCloseMarker();
-            try
-            {
-                Log.Info("ablak indítás");
-                Process proc = Process.Start(new ProcessStartInfo
-                {
-                    FileName = _cfg.WindowExe,
-                    Arguments = args,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    WindowStyle = ProcessWindowStyle.Hidden,
-                    WorkingDirectory = _cfg.Root
-                });
-                if (proc != null)
-                {
-                    File.WriteAllText(DesktopPidPath(1), proc.Id.ToString(CultureInfo.InvariantCulture), new UTF8Encoding(false));
-                    Log.Info("foablak pid=" + proc.Id + " (munkaasztal 1)");
-                }
-            }
-            catch (Exception ex) { Log.Error("ablak indítás: " + ex.Message); }
+            StartDesktopWindow(Math.Max(1, Math.Min(2, ReadDesktop())));
         }
 
         /// <summary>A token URL a state\harness.url-ből, vagy a harness.log utolsó sora.</summary>
@@ -846,22 +873,27 @@ namespace DshTray
             {
                 // Kifejezett nyitási kérés: a korábbi bezárás nem tilt tovább.
                 ClearCloseMarker();
-                Process[] panes = Process.GetProcessesByName("DshWindow");
-                if (panes.Length > 0)
+                int desktop = Math.Max(1, Math.Min(DesktopCount(), ReadDesktop()));
+                if (Process.GetProcessesByName("DshWindow").Length > 0)
                 {
-                    foreach (Process p in panes)
+                    // MÉRT HIBA (2026-11-16): itt az ÖSSZES DshWindow-t megjelenítette,
+                    // ezért a kitűzött ikonra kattintva a rejtett munkaasztal-ablak is
+                    // előjött (két ablak egyszerre). Csak az AKTÍV asztalét mutatjuk.
+                    IntPtr h = WindowHandleOf(desktop);
+                    if (h == IntPtr.Zero)
                     {
-                        try
-                        {
-                            IntPtr hwnd = p.MainWindowHandle;
-                            if (hwnd != IntPtr.Zero)
-                            {
-                                NativeMethods.ShowWindow(hwnd, NativeMethods.SW_RESTORE);
-                                NativeMethods.SetForegroundWindow(hwnd);
-                            }
-                        }
-                        catch { }
+                        StartDesktopWindow(desktop);
+                        HealDesktopPidFromRunningWindow();
+                        ShowDesktopWindow(desktop);
+                        h = WindowHandleOf(desktop);
                     }
+                    else
+                    {
+                        if (NativeMethods.IsIconic(h)) NativeMethods.ShowWindow(h, NativeMethods.SW_RESTORE);
+                        else NativeMethods.ShowWindow(h, NativeMethods.SW_SHOW);
+                        NativeMethods.SetForegroundWindow(h);
+                    }
+                    HideOtherDesktopWindows(desktop, h);
                     return;
                 }
                 StartWindow();
@@ -911,29 +943,50 @@ namespace DshTray
                 return 1;
             }
         }
+        /// <summary>
+        /// Hány munkaasztal él: 4-6 panel esetén kettő, egyébként egy. A webes
+        /// fejléc 1/2 ikonja ugyanezt a szabályt használja (devadmin: panes > 3).
+        /// </summary>
+        private int DesktopCount()
+        {
+            int total = Math.Max(1, Math.Min(6, _cfg.Panes));
+            return total > 3 ? 2 : 1;
+        }
+
+        /// <summary>
+        /// EGY munkaasztal-ablak paneljeinek a száma. A beállított panelszám a
+        /// TELJES panelszám: 4 -> 2+2, 5 -> 3+2, 6 -> 3+3.
+        /// MÉRT HIBA (2026-11-16): a főablak indítási útvonala a teljes 6-ot adta
+        /// át egy ablaknak, miközben az ablak a paneleket asztalonként rakta
+        /// egymásra: 3 panel takarásban élt és 3 WebView2-t fogyasztott (~3,3 GB),
+        /// a fejléc pedig "2. asztal"-ként jelölte a 6 paneles ablakot.
+        /// </summary>
+        private int PanesForDesktop(int desktop)
+        {
+            int total = Math.Max(1, Math.Min(6, _cfg.Panes));
+            if (_cfg.RobotOnly) return 1;
+            if (total <= 3) return total;
+            int first = (total + 1) / 2;            // 4 -> 2, 5 -> 3, 6 -> 3
+            int panes = desktop <= 1 ? first : total - first;
+            return Math.Max(1, Math.Min(3, panes));
+        }
+
         /// <summary>Munkaasztal váltása: a state\window-desktop.txt-be ír.</summary>
         private void SetDesktop(int desktop)
         {
             try
             {
-                int clamped = Math.Max(1, Math.Min(2, desktop));
+                // A plafon a BEÁLLÍTOTT panelszámból jön: 1-3 panelnél nincs
+                // második asztal, ezért a 2-es kérés sem írhat 2-t a fájlba
+                // (különben a fejléc "2. asztalt" jelölne egyetlen ablak mellett).
+                int clamped = Math.Max(1, Math.Min(DesktopCount(), desktop));
                 string directory = Path.GetDirectoryName(_cfg.WindowLog);
                 if (string.IsNullOrEmpty(directory)) return;
                 File.WriteAllText(
                     Path.Combine(directory, "window-desktop.txt"),
                     clamped.ToString(CultureInfo.InvariantCulture));
                 Log.Info("munkaasztal: " + clamped);
-                // 4-6 panel eseten ket kulon ablak van: a kivalasztottat
-                // eloterbe hozzuk, es ha meg nem fut, elinditjuk. 1-3 panelnel
-                // a regi viselkedes marad: csak a fajlt irjuk.
-                if (true)
-                {
-                    StartDesktopWindow(clamped);
-                    ShowDesktopWindow(clamped);
-                    IntPtr activeHandle = WindowHandleOf(clamped);
-                    HideOtherDesktopWindows(clamped, activeHandle);
-                    if (!AnyVisibleDshWindow()) ShowDesktopWindow(clamped);
-                }
+                ApplyDesktopAsync(clamped);
             }
             catch (Exception ex)
             {
@@ -971,37 +1024,39 @@ namespace DshTray
         }
 
         /// <summary>
-        /// If the desktop-1 pid file is missing or stale but a DshWindow process
-        /// is actually running, point the file at the newest such process.
+        /// Ha EGYETLEN pid-fájl sem mutat élő ablakra, de pontosan egy DshWindow
+        /// fut, akkor azt az AKTÍV asztalhoz rendeljük.
+        /// MÉRT HIBA (2026-11-16): a régi változat minden futó ablakot az 1-es
+        /// asztalhoz írt, ezért a 2. asztal ablaka "1. asztalként" szerepelt, és a
+        /// váltás nem indított új ablakot (a két asztal ugyanarra a pid-re mutatott).
         /// </summary>
         private void HealDesktopPidFromRunningWindow()
         {
-            if (RunningDesktopWindow(1) != 0) return;
             try
             {
-                Process newest = null;
-                foreach (Process p in Process.GetProcessesByName("DshWindow"))
+                for (int d = 1; d <= DesktopCount(); d++)
                 {
-                    try
-                    {
-                        if (newest == null || p.StartTime > newest.StartTime) newest = p;
-                    }
-                    catch { }
+                    if (RunningDesktopWindow(d) != 0) return;   // van érvényes rekord
                 }
-                if (newest == null) return;
-                File.WriteAllText(DesktopPidPath(1), newest.Id.ToString(CultureInfo.InvariantCulture), new UTF8Encoding(false));
-                Log.Info("pid fajl potolva: " + newest.Id);
+                Process[] running = Process.GetProcessesByName("DshWindow");
+                if (running.Length != 1) return;                // több ablaknál nem tudjuk, melyik melyik
+                int desktop = Math.Max(1, Math.Min(DesktopCount(), ReadDesktop()));
+                File.WriteAllText(DesktopPidPath(desktop),
+                    running[0].Id.ToString(CultureInfo.InvariantCulture), new UTF8Encoding(false));
+                Log.Info("pid fajl potolva (asztal " + desktop + "): " + running[0].Id);
             }
             catch (Exception ex) { Log.Error("pid potlas: " + ex.Message); }
         }
 
         /// <summary>
-        /// Egy munkaasztal-ablak elinditasa: sajat DshWindow.exe --panes 3
-        /// folyamat. Ha az adott asztal mar fut, nem inditunk masodikat; az
-        /// indulas pid-jet a pid-fajlba irjuk.
+        /// Egy munkaasztal-ablak elinditasa: sajat DshWindow.exe folyamat,
+        /// asztalonkent PanesForDesktop() panellel. Ha az adott asztal mar fut,
+        /// nem inditunk masodikat; az indulas pid-jet a sajat asztal pid-fajljaba
+        /// irjuk (es a DshWindow is elmenti a sajat pid-jet).
         /// </summary>
         private void StartDesktopWindow(int desktop)
         {
+            desktop = Math.Max(1, Math.Min(DesktopCount(), desktop));
             if (RunningDesktopWindow(desktop) != 0) return;
             string url = CurrentUrl();
             if (string.IsNullOrEmpty(url))
@@ -1009,8 +1064,10 @@ namespace DshTray
                 Log.Info("munkaasztal " + desktop + " inditas halasztva: meg nincs token URL");
                 return;
             }
+            int paneCount = PanesForDesktop(desktop);
+            bool robotPane = _cfg.RobotPane || _cfg.RobotOnly;
             string args = "--port " + _cfg.Port
-                + " --panes 3"
+                + " --panes " + paneCount
                 + " --desktop " + desktop
                 + " --no-boot --width " + _cfg.Width.ToString(CultureInfo.InvariantCulture)
                 + " --height " + _cfg.Height.ToString(CultureInfo.InvariantCulture)
@@ -1019,9 +1076,18 @@ namespace DshTray
                 + " --dsh-home \"" + _cfg.DshHome + "\""
                 + " --dsh-bin \"" + _cfg.DshBin + "\""
                 + " --url \"" + url + "\" --restart-if-stale";
+            if (robotPane)
+            {
+                args += " --pane-url \"" + paneCount + "=" + _cfg.RobotUrl + "\"";
+                Log.Info("robot felület: a " + paneCount + ". panel tolti be (" + _cfg.RobotUrl + ")"
+                    + (_cfg.RobotOnly ? " [CSAK ROBOT MOD]" : string.Empty));
+            }
+
+            // Az indulo ablak "nyitva van": a korabbi bezaras jeloloje nem elhet tovabb.
+            ClearCloseMarker();
             try
             {
-                Log.Info("munkaasztal " + desktop + " inditas (3 panel)");
+                Log.Info("munkaasztal " + desktop + " inditas (" + paneCount + " panel)");
                 Process proc = Process.Start(new ProcessStartInfo
                 {
                     FileName = _cfg.WindowExe,
@@ -1031,26 +1097,67 @@ namespace DshTray
                     WindowStyle = ProcessWindowStyle.Hidden,
                     WorkingDirectory = _cfg.Root
                 });
-                if (proc != null)
+                if (proc == null) return;
+                File.WriteAllText(DesktopPidPath(desktop), proc.Id.ToString(CultureInfo.InvariantCulture), new UTF8Encoding(false));
+                Log.Info("munkaasztal " + desktop + " pid=" + proc.Id);
+                // A NEM aktiv asztal ablaka rejtve maradjon: kulonben ket ablak
+                // lathato egyszerre. A rejtést csak a WebView2-k inicializalasa
+                // UTAN vegezzuk (addig a rejtett ablak 0 meretu paneleket adna),
+                // ezert a hatterben megvarjuk a fogantyut.
+                if (desktop != Math.Max(1, Math.Min(DesktopCount(), ReadDesktop())))
                 {
-                    File.WriteAllText(DesktopPidPath(desktop), proc.Id.ToString(CultureInfo.InvariantCulture), new UTF8Encoding(false));
-                    Log.Info("munkaasztal " + desktop + " pid=" + proc.Id);
+                    int pid = proc.Id;
+                    var hider = new Thread(() => HideWhenReady(pid, desktop));
+                    hider.IsBackground = true;
+                    hider.Start();
                 }
             }
             catch (Exception ex) { Log.Error("munkaasztal " + desktop + " inditas: " + ex.Message); }
         }
 
+        /// <summary>
+        /// A nem aktiv asztal ablakat a inicializalas utan elrejti. Addig var, amig
+        /// a folyamatnak van top-level ablaka ES a naploban meg nem jelent meg a
+        /// pane-airas (max ~15 s), hogy a WebView2 panelek valodi merettel jöjjenek
+        /// letre; utana ShowWindow(SW_HIDE) — a panelekhez nem nyulunk.
+        /// </summary>
+        private void HideWhenReady(int pid, int desktop)
+        {
+            try
+            {
+                IntPtr h = IntPtr.Zero;
+                for (int i = 0; i < 150; i++)
+                {
+                    Thread.Sleep(100);
+                    try
+                    {
+                        Process p = Process.GetProcessById(pid);
+                        if (p.HasExited) return;
+                    }
+                    catch { return; }
+                    h = FindWindowForProcess(pid);
+                    if (h != IntPtr.Zero && i >= 60) break;  // legalabb 6 s inicializalas
+                }
+                if (h == IntPtr.Zero) return;
+                // Ha kozben ezt valasztotta a felhasznalo, ne rejtsuk el.
+                if (desktop == Math.Max(1, Math.Min(DesktopCount(), ReadDesktop()))) return;
+                NativeMethods.ShowWindow(h, NativeMethods.SW_HIDE);
+                Log.Info("munkaasztal " + desktop + " elrejtve (nem aktiv)");
+            }
+            catch (Exception ex) { Log.Error("munkaasztal " + desktop + " elrejtes: " + ex.Message); }
+        }
+
         /// <summary>A kivalasztott munkaasztal ablakenak eloterbe hozasa.</summary>
         private void BringToFront(int desktop)
         {
-            int pid = RunningDesktopWindow(desktop);
-            if (pid == 0) return;
+            // A Process.MainWindowHandle rejtett ablaknal IntPtr.Zero, ezert az
+            // EnumWindows-alapu keresest hasznaljuk (WindowHandleOf).
+            IntPtr hwnd = WindowHandleOf(desktop);
+            if (hwnd == IntPtr.Zero) return;
             try
             {
-                Process proc = Process.GetProcessById(pid);
-                proc.Refresh();
-                IntPtr hwnd = proc.MainWindowHandle;
-                if (hwnd != IntPtr.Zero) NativeMethods.SetForegroundWindow(hwnd);
+                if (NativeMethods.IsIconic(hwnd)) NativeMethods.ShowWindow(hwnd, NativeMethods.SW_RESTORE);
+                NativeMethods.SetForegroundWindow(hwnd);
             }
             catch (Exception ex) { Log.Error("munkaasztal " + desktop + " eloterbe hozas: " + ex.Message); }
         }
@@ -1071,18 +1178,34 @@ namespace DshTray
                 return true;
             }, IntPtr.Zero);
             if (windows.Count == 0) return IntPtr.Zero;
-            IntPtr lastCandidate = IntPtr.Zero, strict = IntPtr.Zero, lastText = IntPtr.Zero;
-            int candidates = 0;
+
+            // MÉRT HIBA (2026-11-16): a WPF/IME segédablakok is top-level, címzett
+            // ablakok (CiceroUIWndFrame, SystemResourceNotifyWindow,
+            // MediaContextNotificationWindow) ÉS ugyanúgy "HwndWrapper[...]" az
+            // osztályuk, ezért bármelyik osztály/cím-alapú szűrő melléfoghatott:
+            // a tálca a segédablakot mutatta/rejtette a valódi ablak helyett.
+            // Mért következmény: mindkét munkaablak ablakszinten rejtve maradt
+            // (a felhasználó üres asztalt látott), miközben a folyamatok éltek.
+            // Ezért ELSŐBBSÉGET élvez a pontos termékcím; a többi csak tartalék.
+            IntPtr byTitle = IntPtr.Zero, byTitleVisible = IntPtr.Zero;
+            IntPtr byClass = IntPtr.Zero, lastText = IntPtr.Zero;
             foreach (IntPtr h in windows)
             {
                 if (NativeMethods.GetWindowTextLength(h) > 0) lastText = h;
-                bool topLevelText = NativeMethods.GetWindow(h, NativeMethods.GW_OWNER) == IntPtr.Zero
-                    && NativeMethods.GetWindowTextLength(h) > 0;
-                if (topLevelText) { candidates++; lastCandidate = h; }
-                if (topLevelText && NativeMethods.IsWindowVisible(h)) strict = h;
+                if (NativeMethods.GetWindow(h, NativeMethods.GW_OWNER) != IntPtr.Zero) continue;
+                string title = NativeMethods.GetWindowTextString(h);
+                string cls = NativeMethods.GetClassNameString(h);
+                if (string.Equals(title, "DeepSeek Harness", StringComparison.Ordinal))
+                {
+                    byTitle = h;
+                    if (NativeMethods.IsWindowVisible(h)) byTitleVisible = h;
+                    continue;
+                }
+                if (cls.StartsWith("HwndWrapper", StringComparison.Ordinal)) byClass = h;
             }
-            if (candidates == 1) return lastCandidate;
-            if (strict != IntPtr.Zero) return strict;
+            if (byTitleVisible != IntPtr.Zero) return byTitleVisible;
+            if (byTitle != IntPtr.Zero) return byTitle;
+            if (byClass != IntPtr.Zero) return byClass;
             return lastText != IntPtr.Zero ? lastText : windows[0];
         }
 
@@ -1112,14 +1235,58 @@ namespace DshTray
             }
         }
 
-        /// <summary>A munkaasztal-ablak megjelenitese es eloterbe hozasa.</summary>
+        /// <summary>
+        /// A munkaasztal-ablak megjelenitese es ELOTERBE hozasa.
+        ///
+        /// MÉRT HIBA (2026-11-16): a `SetForegroundWindow` a háttérben futó
+        /// tálcából a Windows foreground-lock miatt NEM adja át a fókuszt, ezért
+        /// az új ablak „a háttérben nyílt meg". A SetForegroundWindow után
+        /// ellenőrizzük a GetForegroundWindow-ot, és ha nem sikerült, a
+        /// SwitchToThisWindow-nal (legacy, de működik) kényszerítjük ki.
+        /// </summary>
         private void ShowDesktopWindow(int desktop)
         {
             IntPtr h = WindowHandleOf(desktop);
             if (h == IntPtr.Zero) return;
-            if (NativeMethods.IsIconic(h)) NativeMethods.ShowWindow(h, NativeMethods.SW_RESTORE);
-            else NativeMethods.ShowWindow(h, NativeMethods.SW_SHOW);
-            NativeMethods.SetForegroundWindow(h);
+            Activate(h);
+        }
+
+        private static void Activate(IntPtr h)
+        {
+            try
+            {
+                if (NativeMethods.IsIconic(h)) NativeMethods.ShowWindow(h, NativeMethods.SW_RESTORE);
+                else NativeMethods.ShowWindow(h, NativeMethods.SW_SHOW);
+                NativeMethods.BringWindowToTop(h);
+                NativeMethods.SetForegroundWindow(h);
+                if (NativeMethods.GetForegroundWindow() == h) return;
+
+                // A Windows foreground-lock miatt a háttérben futó tálca
+                // SetForegroundWindow hívása hatástalan. A dokumentált trükk:
+                // az előtér-szál bemeneti sorához csatlakozunk, átadjuk a
+                // fókuszt, majd leválunk.
+                // MÉRT HIBA (2026-11-16): előbb a SwitchToThisWindow-t használtam,
+                // de az Alt+Tab-szerűen viselkedik, és a felhasználónál MÁS
+                // programot hozott előtérbe — ezt kivettem.
+                IntPtr foreground = NativeMethods.GetForegroundWindow();
+                if (foreground == IntPtr.Zero) return;
+                uint fgThread = NativeMethods.GetWindowThreadProcessId(foreground, out uint _);
+                uint myThread = NativeMethods.GetCurrentThreadId();
+                if (fgThread == 0 || fgThread == myThread) return;
+                if (NativeMethods.AttachThreadInput(fgThread, myThread, true))
+                {
+                    try
+                    {
+                        NativeMethods.BringWindowToTop(h);
+                        NativeMethods.SetForegroundWindow(h);
+                    }
+                    finally
+                    {
+                        NativeMethods.AttachThreadInput(fgThread, myThread, false);
+                    }
+                }
+            }
+            catch (Exception ex) { Log.Error("ablak eloterbe hozas: " + ex.Message); }
         }
 
         /// <summary>A munkaasztal-ablak elrejtese ablakszinten (a paneleket nem bantjuk).</summary>
@@ -1151,16 +1318,25 @@ namespace DshTray
         /// </summary>
         private static bool AnyVisibleDshWindow()
         {
+            return VisibleDesktopWindows().Count > 0;
+        }
+
+        /// <summary>A LÁTHATÓ munkaablakok pid-jei (ellenőrzéshez és naplóhoz).</summary>
+        private static List<string> VisibleDesktopWindows()
+        {
+            var pids = new List<string>();
             foreach (Process p in Process.GetProcessesByName("DshWindow"))
             {
                 try
                 {
                     IntPtr h = FindWindowForProcess(p.Id);
-                    if (h != IntPtr.Zero && NativeMethods.IsWindowVisible(h)) return true;
+                    if (h != IntPtr.Zero && NativeMethods.IsWindowVisible(h))
+                        pids.Add(p.Id.ToString(CultureInfo.InvariantCulture));
                 }
                 catch { }
             }
-            return false;
+            pids.Sort(StringComparer.Ordinal);
+            return pids;
         }
 
         /// <summary>
@@ -1172,7 +1348,7 @@ namespace DshTray
             if (_stopping) return;
             try
             {
-                int current = ReadDesktop();
+                int current = Math.Max(1, Math.Min(DesktopCount(), ReadDesktop()));
                 // Nem csak az ERTEK valtozasa szamit: ha a felulet ugyanazt a
                 // szamot irja ujra (pl. 2 -> 2), a valtasnak akkor is meg kell
                 // tortennie. Ezert a fajl irasidejet is figyeljuk.
@@ -1191,14 +1367,96 @@ namespace DshTray
                     // window-desktop.txt-t -> az irasido valtozik -> a figyelo
                     // ujra tuzel -> vegtelen ciklus (mert hibaja, 2026-11-15).
                     // A figyelo csak ALKALMAZZA a valasztast.
-                    StartDesktopWindow(current);
-                    ShowDesktopWindow(current);
-                    IntPtr activeHandle = WindowHandleOf(current);
-                    HideOtherDesktopWindows(current, activeHandle);
-                    if (!AnyVisibleDshWindow()) ShowDesktopWindow(current);
+                    ApplyDesktopAsync(current);
                 }
             }
             catch (Exception ex) { Log.Error("munkaasztal-figyelo: " + ex.Message); }
+        }
+
+        // ── munkaasztal-váltás: ellenőrzött, háttérszálas végrehajtás ──────
+        //
+        // MÉRT HIBA (2026-11-16): a váltás egyetlen, nem ellenőrzött lépés volt
+        // (Start + Show + Hide egy menetben). Ha a cél-ablak éppen indult, a
+        // fogantyúja még nem létezett, ezért a „mutatás" és a „rejtés" is
+        // elmaradt: a felhasználó néhány kattintásig nem látott változást, majd
+        // a régi ablak eltűnt és az új „a háttérben" jelent meg. Ezért a váltás
+        // mostantól: (1) megvárja a cél-ablak fogantyúját, (2) megjeleníti és
+        // fókuszba hozza, (3) csak UTÁNA rejti el a többit, (4) ellenőrzi az
+        // eredményt, és ha nem stimmel, egyszer megismétli.
+        private readonly object _applyGate = new object();
+        private int _applyTarget;
+        private bool _applyRunning;
+
+        private void ApplyDesktopAsync(int target)
+        {
+            target = Math.Max(1, Math.Min(DesktopCount(), target));
+            lock (_applyGate)
+            {
+                _applyTarget = target;
+                if (_applyRunning) return;      // a futó szál a legfrissebb célt veszi fel
+                _applyRunning = true;
+            }
+            var worker = new Thread(() =>
+            {
+                try
+                {
+                    while (true)
+                    {
+                        int want;
+                        lock (_applyGate) { want = _applyTarget; }
+                        ApplyDesktopOnce(want);
+                        lock (_applyGate)
+                        {
+                            if (_applyTarget == want) { _applyRunning = false; return; }
+                        }
+                    }
+                }
+                catch (Exception ex) { Log.Error("asztalvaltas: " + ex.Message); }
+                finally { lock (_applyGate) { _applyRunning = false; } }
+            });
+            worker.IsBackground = true;
+            worker.Start();
+        }
+
+        /// <summary>Egy asztalváltás végrehajtása és ellenőrzése (max ~15 s).</summary>
+        private void ApplyDesktopOnce(int target)
+        {
+            Log.Info("asztalvaltas -> " + target);
+            bool shown = false;
+            for (int i = 0; i < 100; i++)
+            {
+                if (RunningDesktopWindow(target) == 0 && i % 10 == 0) StartDesktopWindow(target);
+                IntPtr h = WindowHandleOf(target);
+                if (h != IntPtr.Zero)
+                {
+                    Activate(h);
+                    shown = NativeMethods.IsWindowVisible(h);
+                    if (shown) break;
+                }
+                Thread.Sleep(150);
+            }
+            if (!shown)
+            {
+                Log.Error("asztalvaltas: a(z) " + target + ". asztal ablaka nem jelent meg");
+                return;
+            }
+            // A régi ablak rejtése CSAK a cél megjelenése után, hogy a képernyő
+            // ne maradjon üresen (ez volt a „bezár, aztán kinyit" élmény).
+            IntPtr activeHandle = WindowHandleOf(target);
+            HideOtherDesktopWindows(target, activeHandle);
+            // ELLENŐRZÉS (2026-11-16): a felhasználó két ablakot látott egyszerre,
+            // mert a régi ablak rejtése elmaradhatott. Ezért megszámoljuk a
+            // látható munkaablakokat, és ha nem pontosan egy van, megismételjük.
+            List<string> visible = VisibleDesktopWindows();
+            if (visible.Count != 1 || !NativeMethods.IsWindowVisible(activeHandle))
+            {
+                HideOtherDesktopWindows(target, activeHandle);
+                Thread.Sleep(150);
+                if (activeHandle != IntPtr.Zero && !NativeMethods.IsWindowVisible(activeHandle)) Activate(activeHandle);
+                visible = VisibleDesktopWindows();
+            }
+            Log.Info("asztalvaltas kesz: aktiv=" + target
+                + " lathato=[" + string.Join(",", visible.ToArray()) + "]");
         }
 
         private void SetPanes(int panes)
@@ -1238,10 +1496,36 @@ namespace DshTray
         {
             try
             {
-                foreach (Process p in Process.GetProcessesByName("DshWindow")) { try { p.Kill(); } catch { } }
-                Thread.Sleep(600);
+                // CSAK az aktiv asztal ablakát zárjuk be: a másik asztal ablaka
+                // érintetlen marad (korábban az összes DshWindow-t ölte, tehát egy
+                // panelszám-váltás a másik asztalt is elvitte).
+                int desktop = Math.Max(1, Math.Min(DesktopCount(), ReadDesktop()));
+                var victims = new List<Process>();
+                int pid = RunningDesktopWindow(desktop);
+                if (pid != 0)
+                {
+                    try { victims.Add(Process.GetProcessById(pid)); } catch { }
+                }
+                if (victims.Count == 0)
+                {
+                    Process newest = null;
+                    foreach (Process p in Process.GetProcessesByName("DshWindow"))
+                    {
+                        try { if (newest == null || p.StartTime > newest.StartTime) newest = p; } catch { }
+                    }
+                    if (newest != null) victims.Add(newest);
+                }
+                foreach (Process p in victims) { try { p.Kill(); } catch { } }
+                for (int i = 0; i < 30; i++)
+                {
+                    bool any = false;
+                    foreach (Process p in victims) { try { if (!p.HasExited) any = true; } catch { } }
+                    if (!any) break;
+                    Thread.Sleep(100);
+                }
+                try { if (File.Exists(DesktopPidPath(desktop))) File.Delete(DesktopPidPath(desktop)); } catch { }
                 ClearCloseMarker();
-                StartWindow();
+                StartDesktopWindow(desktop);
             }
             catch (Exception ex) { Log.Error("ablak újranyitás: " + ex.Message); }
         }
@@ -1400,7 +1684,18 @@ namespace DshTray
         {
             Log.Info("tálca kilépés");
             _stopping = true;
-            StopDesktopWindows();
+            // FONTOS (2026-11-16, mért hiba): itt korábban StopDesktopWindows()
+            // állt, ezért a tálca leállítása (frissítés, "Kilépés") MINDEN
+            // munkaablakot megölt — a felhasználó ezt "minden bezárult"-ként élte
+            // meg. A munkaablakok önálló folyamatok: a tálca kilépése nem zárja be
+            // őket, és a következő tálca a pid-fájlokból (illetve a futó
+            // folyamatokból) átveszi őket.
+            try
+            {
+                int alive = Process.GetProcessesByName("DshWindow").Length;
+                if (alive > 0) Log.Info("a munkaablakok nyitva maradnak (" + alive + " ablak)");
+            }
+            catch { }
             try { if (_supervise != null) _supervise.Dispose(); } catch { }
             try { if (_schedule != null) _schedule.Dispose(); } catch { }
             try { if (_desktopWatch != null) { _desktopWatch.Stop(); _desktopWatch.Dispose(); } } catch { }
@@ -1429,6 +1724,30 @@ namespace DshTray
         public static extern bool SetForegroundWindow(IntPtr hWnd);
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern IntPtr GetForegroundWindow();
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern bool BringWindowToTop(IntPtr hWnd);
+
+        /// <summary>
+        /// Legacy (dokumentálatlan) API, de ez az egyetlen, ami háttérfolyamatból
+        /// is át tudja venni a fókuszt a Windows foreground-lock ellenére.
+        /// NEM használjuk: Alt+Tab-szerűen viselkedik, és MÁS programot hozhat
+        /// előtérbe (mért hiba 2026-11-16) — helyette AttachThreadInput.
+        /// </summary>
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern void SwitchToThisWindow(IntPtr hWnd, bool altTab);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        public static extern uint GetCurrentThreadId();
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
         public static extern bool IsWindowVisible(IntPtr hWnd);
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -1451,6 +1770,28 @@ namespace DshTray
 
         [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
         internal static extern int GetWindowTextLength(IntPtr hWnd);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        internal static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        internal static extern int GetClassName(IntPtr hWnd, StringBuilder name, int maxCount);
+
+        /// <summary>Az ablak címe — a WPF-főablak és a segédablakok megkülönböztetéséhez.</summary>
+        internal static string GetWindowTextString(IntPtr hWnd)
+        {
+            var text = new StringBuilder(512);
+            GetWindowText(hWnd, text, text.Capacity);
+            return text.ToString();
+        }
+
+        /// <summary>Az ablak osztályneve ("HwndWrapper[...]" = WPF-főablak).</summary>
+        internal static string GetClassNameString(IntPtr hWnd)
+        {
+            var name = new StringBuilder(512);
+            GetClassName(hWnd, name, name.Capacity);
+            return name.ToString();
+        }
 
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
         internal static extern int SetCurrentProcessExplicitAppUserModelID(string appID);

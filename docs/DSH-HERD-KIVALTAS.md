@@ -17,8 +17,8 @@ módjával. A munka a DSH repóban folyik; a Herd addig marad, amíg az
 | Herd folyamatok | 5 × `Herd.exe`, 1 × `HerdHelper`, **25 × `nginx.exe`**, **5 × `php-cgi.exe`** |
 | 80/443 | `127.0.0.1:80` több nginx-példány által foglalt (TLS a 443-on) |
 | hosts | Herd által írt `.test` sorok: `database.herd.test`, `herd-studio.test`, `jelentkezes-redirect.test`, `termeszetgyogyaszoktatas-l12.test`, valamint egy hashelt aldomain (`3aa9ca55…`) |
-| PHP | **`C:\Users\info\.config\herd\bin\php.bat` → PHP 8.4.27** (NTS, VC++ 2022 x64) |
-| Composer | `C:\Users\info\.config\herd\bin\composer.bat` (**szintén Herd alól**) |
+| PHP | **`%USERPROFILE%\.config\herd\bin\php.bat` → PHP 8.4.27** (NTS, VC++ 2022 x64) |
+| Composer | `%USERPROFILE%\.config\herd\bin\composer.bat` (**szintén Herd alól**) |
 | Caddy / mkcert / nginx a PATH-ban | **nincs** |
 | Node / npm | `C:\Program Files\nodejs\node.exe`, `npm.ps1` |
 | Projekt | `D:\Herd\termeszetgyogyaszoktatas-L12`: `artisan`, `public/index.php`, `.env` megvan, **`.dsh\dev.yaml` nincs** |

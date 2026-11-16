@@ -254,6 +254,99 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-16` — **a munkaasztal két külön ablakra állt át, és a „minden
+  bezárult" hiba okai javítva.** (1) **A tálca kilépése megölte az ablakokat:**
+  `ExitApp()` → `StopDesktopWindows()` miatt egy tálca-frissítés („Kilépés",
+  telepítés) MINDEN munkaablakot bezárt — mért eset `04:53:29`; a felhasználó ezt
+  „minden bezárult"-ként élte meg, miközben a harness (`pid 28304`) és a
+  sessionök végig éltek. A kilépés mostantól **otthagyja** az ablakokat
+  (`a munkaablakok nyitva maradnak (N ablak)`), a frissítés pedig force-killel
+  megy (`Stop-Process -Force`), hogy az `ExitApp()` le se fusson. (2) **A
+  segédablakok elrabolták a mutatást/rejtést:** a `CiceroUIWndFrame`,
+  `SystemResourceNotifyWindow` és `MediaContextNotificationWindow` is top-level,
+  címzett, `HwndWrapper[...]` osztályú ablak, ezért a `FindWindowForProcess`
+  ezeket választotta, a `ShowWindow` a segédablakon hatott, a valódi ablak viszont
+  **rejtve maradt** — mért következmény: mindkét munkaablak `hidden`, üres
+  asztal, „kézzel kellett indítani". A kereső most **elsőbbséget ad a pontos
+  termékcímnek** (`DeepSeek Harness`); `Process.MainWindowHandle` rejtett/WPF
+  ablakra használhatatlan (0, illetve az IME ablak). (3) **Panel-osztás
+  asztalonként:** a beállított panelszám a TELJES szám; `>3` esetén két ablak,
+  `4 → 2+2`, `5 → 3+2`, `6 → 3+3` (`PanesForDesktop()`). Korábban a főablak a
+  teljes 6-ot kapta, a `DshWindow` pedig asztalonkénti rácsokat rakott egymásra,
+  ezért 3 panel takarásban élt és 3 WebView2-t fogyasztott (~3,3 GB); mostantól
+  a `DshWindow` EGY rácsot épít, asztalonként egy ablak van. (4) **Pid-fájl
+  asztalonként:** a `DshWindow` a saját `state\window-desktop<N>.pid`-jét írja
+  (kilépéskor törli), a tálca csak akkor pótol, ha EGYETLEN pid-fájl sem érvényes
+  és pontosan egy ablak fut (korábban minden ablakot az 1-es asztalhoz írt,
+  ezért a 2. asztal ablaka „1. asztalként" jelent meg, és a váltás nem indított
+  új ablakot). (5) A `RestartWindowForLayout()` **csak az aktív asztal** ablakát
+  zárja be, a `ShowWindow()` (tálcaikon, kitűzött ikon) csak az aktív asztalét
+  mutatja, a nem aktív asztal új ablaka pedig az inicializálás után rejtve marad
+  (`HideWhenReady`); a 700 ms-os figyelő a kiinduló írásidőt is megjegyzi, ezért
+  a legelső tick nem indít felesleges második ablakot. (6) **A váltás
+  ellenőrzött, háttérszálas végrehajtású** (`ApplyDesktopAsync`): megvárja a
+  cél-ablak fogantyúját (max ~15 s), megjeleníti, fókuszba hozza
+  (`SetForegroundWindow`, majd ha nem sikerült, `AttachThreadInput` az előtér
+  szálához — a háttérben futó tálcából a Windows foreground-lock miatt a sima
+  `SetForegroundWindow` NEM ad fókuszt; a `SwitchToThisWindow` Alt+Tab-szerűen
+  MÁS programot hozott előtérbe, ezért kivéve), és **csak utána** rejti el a
+  többit (ez volt a „bezár, aztán kinyit" élmény), végül **ellenőrzi, hogy
+  pontosan egy ablak látható**, és naplózza a látható pid-eket
+  (`asztalvaltas kesz: aktiv=N lathato=[pid]`). A fejléc 1/2 gombja eddig
+  **eldobta** a `/devadmin/state` válaszát, ezért csak a saját kattintását
+  jelezte — váltás után nem az aktív asztal volt kiemelve („az egyes van aktív
+  színnel"); mostantól 2 s-enként a tényleges állapotot mutatja (ez a
+  kliens-csomag miatt csak harness-újraindítás után él). A tálca induláskor a
+  MÁSIK
+  asztal ablakát is előre elindítja rejtve (`EnsureOtherDesktopWindows`), hogy a
+  váltás ne új ablak indításával kezdődjön. A két ablak WebView2-profilja
+  **asztalonként külön** (`pane-N-d2`): a közös profilmappa miatt minden panel
+  első próbálkozása `0x800700AA`-val bukott el, és ~6 s-ig fehér panel látszott.
+  **Mért eredmény
+  (2026-11-16):** 8 szimulált kattintás (1→2→1→2→2→1→2→1) mindegyike
+  **0,2–0,8 s** alatt ért célba, minden váltás után **pontosan egy** látható
+  ablak („asztalvaltas kesz: aktiv=N (lathato=igen)"); új ablak indításakor
+  `0x800700AA` **0 db**. (7) **Friss indításnál az 1. asztal nyílik**
+  (felhasználói kérés): ha a tálca indulásakor **egyetlen** `DshWindow` sem fut,
+  a `window-desktop.txt` 1-re áll, a pid-fájlok törlődnek, és az első ablak az
+  1. asztalé (a 2. asztal 4 s múlva, rejtve előindul). (8) **A váltás
+  gyorsabb:** a figyelő ciklusa 700 → **200 ms**, és a mérés szerint a kattintás
+  és a „cél látható + fókuszált" között **154–252 ms** telik el (medián 245 ms;
+  a láthatóvá válás önmagában 31–130 ms). A maradék idő a 200 ms-os poll és a
+  fókusz-átvétel (~100 ms); esemény-alapú jelzéssel (FileSystemWatcher vagy neves
+  esemény) ~50–100 ms lenne elérhető. (9) **Tálcaikon: AUMID + `RelaunchCommand`,
+  a kitűzés viszont NEM scriptelhető.** Új eszköz
+  `tools\set-pinned-aumid.ps1` (`-Check` / `-Apply` / `-RemoveBogusPin`)
+  beállítja a hivatkozások `System.AppUserModel.ID`-ját (`DeepSeek.Harness`) **és**
+  a `RelaunchCommand` / `RelaunchDisplayNameResource` / `RelaunchIconResource`
+  értékét a kitűzött, az asztali és a Start-menü hivatkozáson, és törli a rossz,
+  közvetlen ablak-pint (`DshWindow.lnk` → `DshWindow.exe`). Mentés:
+  `D:\Szerver\DSH-backup\pins-<időbélyeg>\`. **A `RelaunchCommand` nélkül a pin
+  nem indítható újra:** az ablak bezárása után a tálcaelem „Nem nyitható meg az
+  elem" hibát ad (mért hiba) — az AUMID csak a csoportosítást adja. **A kitűzés
+  létrehozása ezen a builden nem megy scriptből:** a Windows 11 kivette a
+  „Csatolás a tálcához" igét (a „Levétel a tálcáról" megvan),
+  `InvokeVerb('taskbarpin')` csendben hatástalan, és a `User Pinned\TaskBar`
+  mappa nem forrás: a `Taskband\Favorites` törlése után az Explorer **nem**
+  abból épített újjá, hanem **elvesztek a pinek** (63 db; mentésből
+  visszaállítva: `state\taskband-values.json` + registry-írás, a
+  `Favorites`/`FavoritesResolve` bináris értékek, majd Explorer-újraindítás).
+  Ezért a kitűzés **egy kézi lépés** (Start-menü → jobb klikk → Csatolás a
+  tálcához, vagy az asztali ikon tálcára húzása) — utána a beállított
+  tulajdonságok miatt egy ikon lesz, és becsukott ablak mellett is indít.
+  **Mért buktatók:** az `IPersistFile::Load`-hoz **`STGM_READWRITE` (2)** kell
+  (különben `STG_E_ACCESSDENIED`), a `PROPVARIANT` x64-en **24 byte** (a 16
+  byte-os változatnál a beállított érték visszaolvasáskor üresnek látszik), és
+  egy félresikerült `Save` **0 byte-ra csonkíthatja** a `.lnk`-et (a mentésből
+  visszaállítva). Explorer-újraindítás
+  után a panelek hibamentesek (0 `[ERROR]`, 48 WebView2 folyamat).
+  Váltás új ablakkal = 1,1 s, elrejtett ablak
+  automatikus visszahozása = 3,1 s, 6 panel = 2 ablak × 3 panel (WebView2
+  ~3,7–4,3 GB / 48 folyamat, `DshWindow` ~0,25 GB, node ~2,2 GB). A webes fejléc
+  (fogaskerék-panel, 1/2 ikon, magyar címkék) ellenőrzése **harness-újraindítás**
+  után esedékes, mert a kliens-csomag boot-időben kap rev-hash-t. Részletek:
+  `docs\DSH-ASZTAL-TERV.md`.
+
 - `2026-11-15` — **a „kis adagokban készülő fejlesztés" okának mérése, és két
   beállítás ennek ellenére.** (1) **MÉRVE: a harness NEM korlátozza a
   munkafolyamat hosszát.** A `dsh-agent-loop`-ban nincs `maxSteps`/`maxTurns`

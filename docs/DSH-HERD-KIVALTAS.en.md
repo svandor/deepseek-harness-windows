@@ -16,8 +16,8 @@ Herd stays until all 5 criteria are met.
 | Herd processes | 5 × `Herd.exe`, 1 × `HerdHelper`, **25 × `nginx.exe`**, **5 × `php-cgi.exe`** |
 | 80/443 | `127.0.0.1:80` held by several nginx instances (TLS on 443) |
 | hosts | Herd-written `.test` lines: `database.herd.test`, `herd-studio.test`, `jelentkezes-redirect.test`, `termeszetgyogyaszoktatas-l12.test`, plus a hashed subdomain (`3aa9ca55…`) |
-| PHP | **`C:\Users\info\.config\herd\bin\php.bat` → PHP 8.4.27** (NTS, VC++ 2022 x64) |
-| Composer | `C:\Users\info\.config\herd\bin\composer.bat` (**also from Herd**) |
+| PHP | **`%USERPROFILE%\.config\herd\bin\php.bat` → PHP 8.4.27** (NTS, VC++ 2022 x64) |
+| Composer | `%USERPROFILE%\.config\herd\bin\composer.bat` (**also from Herd**) |
 | Caddy / mkcert / nginx on PATH | **none** |
 | Node / npm | `C:\Program Files\nodejs\node.exe`, `npm.ps1` |
 | Project | `D:\Herd\termeszetgyogyaszoktatas-L12`: `artisan`, `public/index.php`, `.env` present, **no `.dsh\dev.yaml`** |
