@@ -305,6 +305,36 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-16` (hatodik kör) — **a „Háttérmunkák" fül befejezése: a slot-szabály, az
+  üres nézet és a két fantom-háttérmunka.** (1) **A gyári jelző elrejtése CSAK
+  priority-vel megy:** a kliens-napló (`state\ui-extras-client.log`) kimondta, hogy
+  az azonos id-jű, AZONOS prioritású újraregisztrálás **nem cserél, hanem dob** —
+  `list slot "conversation.session.header.actions" already has an entry with id
+  "job-list" at priority 0 … register at a different priority to shadow it (lowest
+  renders)` (a szabály a `dsh-web-frontend` bundle-ben: a duplikáció-ellenőrzés
+  `(id, priority)` párra megy). Ezért a `job-list` bejegyzést `priority: -100`-zal
+  regisztráljuk felül (a legalacsonyabb renderel) — a korábbi, azonos prioritású
+  próbálkozás dobott, ezért maradt látszólag a jelző. (2) **Az üres fül oka: rossz
+  adatforrás.** A nézet a terminál-panel futásait kérte le
+  (`/ui-extras/cmd?action=runs`), miközben a jelző a **session** munkáit számolja
+  (`useSessions(state => state.jobsBySession[sessionId])`) — ezért tűnt üresnek.
+  Mostantól a nézet a session-munkákat mutatja (a gyári jelző pontos adatforrása),
+  külön szakaszban a panel-futásokat, és **hiba esetén is ír ki szöveget** (a
+  láthatatlan tartalom a legrosszabb diagnózis). A gyári chip-et árnyékoló
+  komponens `null`-t ad, a fül címkéje változatlanul HU/EN. (3) **A „2 beragadt
+  háttérfolyamat" valójában két fantom-rekord**: `job_list` →
+  `recovered-27820 [recovered] running — process (pid 27820)` és
+  `recovered-28304 … (pid 28304)`. A pid-ek NEM munkafolyamatok, hanem a tálca
+  két gyermeke (CIM-mel ellenőrizve): `27820` = a **harness** (`bin.js web --port
+  3080`), `28304` = az **LLM-proxy** (`providers\proxy.mjs --port 4123`), mindkettő
+  `ParentProcessId 9528` (DshTray). A helyreállítási logika tehát a spawner-pideket
+  „process" munkaként vette fel → **ezeket TILOS `job_kill`-elni** (a harness/proxy
+  halálát okozná); a rekordot a mag állítja elő, ez nyitott upstream kérdés.
+  (4) **A kliens-hibák naplója a diagnózis eszköze:**
+  a `state\ui-extras-client.log` a böngésző összes `window.error` /
+  `unhandledrejection` / init-hiba eseményét host-oldalon rögzíti — itt derült ki a
+  slot-hiba is.
+
 - `2026-11-16` (ötödik kör) — **a „minden lassú / valami zabál" gyökere: a
   `/devadmin/state` poll-vihar.** MÉRVE: `/devadmin/state` **2794–3044 ms**,
   miközben `/ui-extras/harness-url` 2–4 ms; a dev oldal access logjában az utolsó
