@@ -1549,7 +1549,15 @@ window.__ModuleLoader__.load({
       "jobsRecoveredNote": "újraindítás után helyreállított rekord — a folyamat már nem feltétlenül él",
       "jobsStatusRunning": "fut",
       "jobsStatusStopping": "leállítás alatt",
-      "jobsStatusDone": "kész"
+      "jobsStatusDone": "kész",
+      "view.subagents": "Alügynökök",
+      "subagentsHint": "A beszélgetés alügynökei — ugyanaz a lista, ami eddig a fejléc „N alügynök” sorában volt.",
+      "subagentsCount": "{count} alügynök",
+      "subagentsEmpty": "Ebben a beszélgetésben nincs alügynök.",
+      "subagentsLoading": "Alügynökök betöltése…",
+      "subagentsRefresh": "Frissítés",
+      "subagentsOpen": "Megnyitás a beszélgetésben",
+      "subagentsLoadFailed": "Az alügynökök betöltése nem sikerült:"
     };
 
     /** English strings for the same row. */
@@ -1825,7 +1833,15 @@ window.__ModuleLoader__.load({
       "jobsRecoveredNote": "record recovered after a restart — the process need not be alive any more",
       "jobsStatusRunning": "running",
       "jobsStatusStopping": "stopping",
-      "jobsStatusDone": "done"
+      "jobsStatusDone": "done",
+      "view.subagents": "Subagents",
+      "subagentsHint": "This conversation's subagents — the same list the header's “N subagents” row used to show.",
+      "subagentsCount": "{count} subagents",
+      "subagentsEmpty": "This conversation has no subagent.",
+      "subagentsLoading": "Loading subagents…",
+      "subagentsRefresh": "Refresh",
+      "subagentsOpen": "Open in the conversation",
+      "subagentsLoadFailed": "Loading the subagents failed:"
     };
 
     /**
@@ -5733,6 +5749,15 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
     var themeServiceRef = { current: null };
 
     /**
+     * A session-szolgáltatás, `apply(ctx)`-ben publikálva.
+     *
+     * Az alügynök-fül innen hívja a `openSubagent(address)` /
+     * `refreshSubagents(parentSessionId)` metódusokat — ez a gyári
+     * `dsh-client-ui-subagent` által használt hivatalos út.
+     */
+    var sessionsServiceRef = { current: null };
+
+    /**
      * Which colour scheme the app is painting right now.
      *
      * The DOM is asked first, because it is the thing being corrected: the theme
@@ -8530,6 +8555,7 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       // service which scheme to paint; the module-level ref is how a component
       // defined outside this function can reach it.
       themeServiceRef.current = ctx.theme || null;
+      sessionsServiceRef.current = ctx.sessions || null;
 
       // Any uncaught error inside this bundle lands in the host log, so a broken
       // client build is diagnosable without opening DevTools. Installed once.
@@ -8591,6 +8617,201 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       ctx.effect(function () {
         return ctx.locale.register(NS, { hu: hu, en: en });
       }, "ui-extras: dictionaries");
+
+      // ------------------------------------------------- alügynökök fül
+      //
+      // UGYANAZ AZ ADAT, amit a fejléc „N alügynök ⌄" sora mutat
+      // (`useSessions(state => state.subagentsByParent[sessionId])` katalógus +
+      // `state.byId` session-összegzések) — csak fülön, teljes listával,
+      // kattintható sorokkal. A fejléc-sort a
+      // `conversation.session.header.lineage` (single) slot ALACSONYABB
+      // prioritású árnyékolása rejti el (a legalacsonyabb prioritás renderel).
+      var SUBAGENTS_EMPTY = [];
+
+      /** Alügynök-gyerekek a session-összegzésekből (a katalógus tartaléka). */
+      function subagentChildren(summaries, parentId) {
+        var rows = [];
+        if (summaries === null || parentId === null) return rows;
+        var keys = Object.keys(summaries);
+        for (var i = 0; i < keys.length; i++) {
+          var summary = summaries[keys[i]];
+          if (!summary || summary.origin !== "subagent") continue;
+          if (summary.parentId !== parentId) continue;
+          rows.push(summary);
+        }
+        return rows;
+      }
+
+      function subagentTokens(summary) {
+        var usage = summary && summary.projectionValues ? summary.projectionValues.tokenUsage : null;
+        if (usage === null || usage === void 0) return "";
+        var total = typeof usage.total === "number" ? usage.total : (Number(usage.input) || 0) + (Number(usage.output) || 0);
+        if (!(total > 0)) return "";
+        return total.toLocaleString("hu-HU") + " token";
+      }
+
+      function subagentLabel(entry, summary) {
+        if (entry && typeof entry.label === "string" && entry.label !== "") return entry.label;
+        if (summary && typeof summary.title === "string" && summary.title !== "") return summary.title;
+        var id = entry && entry.id ? String(entry.id) : (summary && summary.id ? String(summary.id) : "?");
+        return id.length > 18 ? id.slice(0, 8) + "…" + id.slice(-4) : id;
+      }
+
+      function openSubagent(address) {
+        try {
+          var service = sessionsServiceRef.current;
+          if (service && typeof service.openSubagent === "function") service.openSubagent(address);
+        } catch (error) {
+          reportToHost("open subagent failed", String(error && error.message ? error.message : error));
+        }
+      }
+
+      function refreshSubagents(sessionId) {
+        try {
+          var service = sessionsServiceRef.current;
+          if (service && typeof service.refreshSubagents === "function" && sessionId !== null) {
+            service.refreshSubagents(sessionId);
+          }
+        } catch (error) {
+          reportToHost("refresh subagents failed", String(error && error.message ? error.message : error));
+        }
+      }
+
+      /**
+       * Az alügynök-fül tartalma.
+       *
+       * Adat: `subagentsByParent[sessionId]` (a gyári katalógus) — ha az még nem
+       * töltődött, a `byId` session-összegzésekből állítjuk elő ugyanazt a listát,
+       * hogy a fül SOHA ne legyen üres, ha vannak alügynökök.
+       */
+      function SubagentsView(props) {
+        var t = props && typeof props.t === "function" ? props.t : function (key) { return key; };
+        var sessionId = props && props.sessionId !== void 0 && props.sessionId !== null ? props.sessionId : null;
+        var useSessions = props && typeof props.useSessions === "function" ? props.useSessions : null;
+
+        var catalogs = useSessions !== null
+          ? useSessions(function (state) { return state && state.subagentsByParent ? state.subagentsByParent : null; })
+          : null;
+        var summaries = useSessions !== null
+          ? useSessions(function (state) { return state && state.byId ? state.byId : null; })
+          : null;
+
+        var catalog = catalogs !== null && sessionId !== null ? catalogs[sessionId] : null;
+        var declared = [];
+        if (catalog && Array.isArray(catalog.entries)) {
+          for (var i = 0; i < catalog.entries.length; i++) {
+            var entry = catalog.entries[i];
+            if (entry && entry.kind === "child") declared.push(entry);
+          }
+        }
+        var fallback = subagentChildren(summaries, sessionId);
+        var useDeclared = declared.length > 0;
+        var count = useDeclared ? declared.length : fallback.length;
+        var catalogState = catalog && typeof catalog.state === "string" ? catalog.state : "";
+        var errorText = catalog && catalog.state === "error" && catalog.error && catalog.error.message
+          ? String(catalog.error.message)
+          : "";
+
+        var rows = [];
+        for (var s = 0; s < (useDeclared ? declared.length : fallback.length); s++) {
+          var source = useDeclared ? declared[s] : fallback[s];
+          var childId = useDeclared ? source.id : source.id;
+          var summary = summaries !== null && childId !== void 0 ? summaries[childId] : null;
+          var label = useDeclared ? subagentLabel(source, summary) : subagentLabel(null, source);
+          var mode = source && typeof source.mode === "string" ? source.mode : "";
+          var status = summary && typeof summary.status === "string" ? summary.status : "";
+          var fullId = String(childId === void 0 ? "" : childId);
+          var address = { parentSessionId: sessionId, childSessionId: childId };
+          if (mode !== "") address.mode = mode;
+          rows.push(jsx.jsx("div", {
+            key: "sa-" + fullId + "-" + String(s),
+            title: t("subagentsOpen"),
+            onClick: function (clickedAddress) {
+              return function () { openSubagent(clickedAddress); };
+            }(address),
+            style: {
+              display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap",
+              padding: "7px 4px", cursor: "pointer",
+              borderBottom: "1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.22))"
+            },
+            children: [
+              jsx.jsx("span", {
+                key: "dot",
+                style: { fontSize: "11px", color: status === "running" ? "var(--dsw-alias-state-success-primary, #2a2)" : "var(--dsw-alias-label-tertiary, #888)" },
+                children: status === "running" ? "\u25CF" : "\u25CB"
+              }),
+              jsx.jsx("span", {
+                key: "label",
+                style: { fontSize: "12px", flex: "1 1 200px", minWidth: "0px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+                children: label
+              }),
+              mode !== ""
+                ? jsx.jsx("code", { key: "mode", style: { fontSize: "11px", padding: "0 6px", borderRadius: "5px", background: "var(--dsw-alias-fill-l2, rgba(127,127,127,.16))" }, children: mode })
+                : null,
+              jsx.jsx("span", { key: "tokens", style: { fontSize: "11px", opacity: 0.65, fontVariantNumeric: "tabular-nums" }, children: subagentTokens(summary) }),
+              status !== ""
+                ? jsx.jsx("span", { key: "status", style: { fontSize: "11px", opacity: 0.8 }, children: status })
+                : null
+            ]
+          }));
+        }
+
+        return jsx.jsx("div", {
+          style: { padding: "12px 16px", height: "100%", overflow: "auto", display: "flex", flexDirection: "column", gap: "8px" },
+          children: [
+            jsx.jsx("div", {
+              key: "head",
+              style: { display: "flex", alignItems: "baseline", gap: "10px", flexWrap: "wrap" },
+              children: [
+                jsx.jsx("strong", { key: "title", children: t("view.subagents") }),
+                jsx.jsx("span", { key: "count", style: { fontSize: "12px", opacity: 0.7 }, children: t("subagentsCount", { count: count }) }),
+                jsx.jsx("span", { key: "hint", style: { fontSize: "12px", opacity: 0.5 }, children: t("subagentsHint") }),
+                jsx.jsx("button", {
+                  key: "refresh",
+                  type: "button",
+                  onClick: function () { refreshSubagents(sessionId); },
+                  style: { marginLeft: "auto", fontSize: "11px", padding: "2px 8px", borderRadius: "6px", cursor: "pointer", background: "var(--dsw-alias-fill-l2, rgba(127,127,127,.16))", border: "0", color: "inherit" },
+                  children: t("subagentsRefresh")
+                })
+              ]
+            }),
+            errorText !== ""
+              ? jsx.jsx("div", { key: "err", style: { color: "var(--dsw-alias-state-error-primary, #d33)", fontSize: "12px" }, children: t("subagentsLoadFailed") + " " + errorText })
+              : null,
+            rows.length > 0
+              ? jsx.jsx("div", { key: "rows", children: rows })
+              : jsx.jsx("div", { key: "empty", style: { opacity: 0.6, fontSize: "13px" }, children: catalogState === "loading" ? t("subagentsLoading") : t("subagentsEmpty") })
+          ]
+        });
+      }
+
+      safeRun("subagents view inject", function () {
+        var tSub = ctx.locale.bind(NS);
+        ctx.slots.inject("conversation.view", function () {
+          return ctx.slots.register({
+            name: "conversation.view",
+            id: "uix-subagents",
+            order: 30,
+            locale: NS,
+            label: function () { return tSub("view.subagents"); },
+            inject: function () { return { t: tSub }; }
+          }, SubagentsView);
+        });
+      });
+
+      // A fejléc „N alügynök ⌄" sora: a `conversation.session.header.lineage`
+      // SINGLE slot, ezért (az id nélküli single szabály szerint) a
+      // duplikáció-ellenőrzés a prioritáson megy — alacsonyabb prioritással
+      // árnyékoljuk, és a legalacsonyabb renderel.
+      safeRun("hide header subagent lineage", function () {
+        ctx.slots.inject("conversation.session.header.lineage", function () {
+          return ctx.slots.register({
+            name: "conversation.session.header.lineage",
+            priority: -100,
+            locale: NS
+          }, function HiddenLineage() { return null; });
+        });
+      });
 
       // ------------------------------------------------- háttérmunkák fül
       //
