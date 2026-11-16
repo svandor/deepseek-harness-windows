@@ -305,6 +305,43 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-16` (tizenegyedik kör) — **FTP deploy: panel + gyorsgomb, a Felpuffantó
+  motorjával.** (1) **Új plugin `plugins\dsh-ftp-deploy`** (host + kliens): a
+  `src\engine\*.ts` (Felpuffantó 0.1.5, `bcf25fd`) **portja** JS-re —
+  `ftp.js` (feltöltés/törlés/ZIP/mappa-lista), `gitdiff.js` (`simple-git`
+  helyett a host `execFile("git")`), `tree.js`, `deny.js`, `remoteDirs.js`,
+  `profiles.js`, `secrets.js` (DPAPI), `deploy.js` (vezérlés), `log.js`,
+  `runner.js`. A mért viselkedés megmaradt: **3 próba `[3 s, 8 s]`** csak
+  átmeneti hibára (`530`/`550`/`552`/`553` azonnal áll), fázis-napló + távoli IP
+  a hibaszövegben, `RemoteDirIndex` (a `basic-ftp` vakon MKD-zott: ~84 `550` sor
+  egy 12 fájlos pushnál), **80 fájl** felett megerősítés. (2) **Függőségek
+  beágyazva:** `basic-ftp` 5.3.1 + `yazl` 3.3.1 + `buffer-crc32` 1.0.0 (MIT) a
+  `plugins\dsh-ftp-deploy\vendor\node_modules` alatt — nincs `npm install` a
+  felhasználónál, a telepítő offline is működik. (3) **ÉLŐ, CSAK OLVASÓ
+  ellenőrzés** (a felpuffantós `%APPDATA%\Felpuffanto\profiles.json` +
+  `secrets\*.dpapi` importja után, 3 élő profil: `TGYO-L12`, `jelentkezes-redirect`,
+  `atoktatas-redirect`): kapcsolat-teszt `cwd=/` **OK**; távoli lista
+  `/web/laravel12` → app, bootstrap, config, database, home, lang, packages,
+  public, resources, routes, storage, vendor; előnézet mindhárom profilra
+  **0 fájl** (a baseline == HEAD, tehát minden fent van); ZIP-mentés próba a
+  `public\build`-ra: **82 fájl, 13,3 MB → 3,58 MB ZIP**, érvényes `PK` fejléc.
+  ÉLES FELTÖLTÉS eddig **nem** történt (az csak a felhasználó kattintására megy).
+  (4) **Két port-hiba javítva:** a `git rev-parse` (a simple-git `revparse()`
+  API-ja mögött ezt rejtette → a `revparse` parancs nem létezik, ezért a HEAD
+  `null` volt és az előnézet hamis „0 fájl”-t adott), és az `isSafeRelPath`
+  (a `posixRel` leveszi a `/`-t, ezért az abszolút út átcsúszott — most a
+  normalizálás ELŐTT utasítja el). (5) **Kliens:** „FTP deploy" fül a jobb
+  oldalsávban (profil, jelszó, előnézet, deploy, extra, távoli mappa, ZIP-mentés,
+  napló) + `⤴ FTP` fejléc-ikon; a **Git panel `FTP deploy` gyorsgombja a `Kiadás`
+  ELŐTT** áll, profil nélkül `FTP beállítás` felirattal az FTP fület nyitja
+  (`ftpOpenRef` a `dsh-ui-extras`-ban), futás közben inaktív. (6) **Tesztek:
+  36/36** (`node --test`, hálózat nélkül: deny/allow, `RemoteDirIndex` fake
+  klienssel, git-diff valódi temp repóval, profil-tár BOM-mal, DPAPI oda-vissza,
+  retry-osztályozás, ZIP-név). Telepítés megtörtént (`install.ps1`: junction +
+  `- insert:`), `-Check` zöld; a **host végpontok a következő harness-indításnál**
+  élnek (§1.5), a fül/gomb panel-újratöltéssel. Részletek: `docs\FTP-DEPLOY.md`,
+  `docs\FTP-DEPLOY-TERV.md`.
+
 - `2026-11-16` (tizedik kör) — **a Kiadás gomb némítása, ha a legújabb commit már
   kiadott.** (1) **A panel-szintű szabály:** ha a legfrissebb commiton kiadási tag
   van (`releaseTag` a git-snapshotban), VAGY a legfrissebb commit maga a

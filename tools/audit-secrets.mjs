@@ -54,6 +54,12 @@ const ALLOW = [
   // példái. Új kivételt INDOKLÁSSAL vegyél fel.
   { path: /^tools\/audit-secrets\.mjs$/u, ids: ["*"] },
   { path: /^\.gitignore$/u, ids: ["*"] },
+  // Beágyazott (vendored) harmadik féltől származó csomagok: a `yazl` egyik
+  // méret-konstansa 9 jegyű szám (100000000), amit a TAJ-minta elkap. Ez NEM a
+  // mi adatunk, hanem a feltöltött csomag forrása (a `vendor\README.md` és a
+  // plugin `-Check` a verziót ellenőrzi); a kivétel szándékosan csak a
+  // `plugins\*\vendor\` fájlokra érvényes.
+  { path: /^plugins\/[^/]+\/vendor\//u, ids: ["TAJ-szám"] },
 ];
 
 function git(args) {

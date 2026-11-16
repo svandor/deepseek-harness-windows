@@ -1471,6 +1471,19 @@ window.__ModuleLoader__.load({
       "gitReleaseTagged": "Kiadva",
       "gitReleaseAlready": "A legújabb commit már kiadva: {tag}. Új kiadás csak ÚJ commit után készíthető — ezért a gomb inaktív.",
       "gitReleasePending": "a legutóbbi kiadás ({last}) óta {n} commit vár kiadásra",
+      "gitFtp": "FTP deploy",
+      "gitFtpSetup": "FTP beállítás",
+      "gitFtpHint": "FTP deploy: a munkaterülethez tartozó profillal feltölti a változásokat a tárhelyre (előnézet után). Részletek az FTP fülön.",
+      "gitFtpSetupHint": "Ehhez a munkaterülethez még nincs FTP-profil — kattintásra megnyílik az FTP fül, ahol felveheted.",
+      "gitFtpChecking": "FTP: előnézet…",
+      "gitFtpRunning": "FTP deploy fut…",
+      "gitFtpDone": "FTP kész: {uploaded} feltöltve, {deleted} törölve, {size}.",
+      "gitFtpNothing": "FTP: nincs mit feltölteni — minden fent van.",
+      "gitFtpNeedBaseline": "FTP: nincs kiindulópont — előbb állítsd be az FTP fülön, hogy a mostani állapot már fent van.",
+      "gitFtpConfirmLarge": "FTP: {n} fájl ({size}) — kattints újra a feltöltéshez.",
+      "gitFtpFailed": "FTP hiba: {error}",
+      "gitFtpIdle": "FTP: nincs futó művelet.",
+      "gitFtpTimeout": "FTP: az állapot 20 perc után sem érkezett meg — nézd meg az FTP fül naplóját.",
       "gitCommitPlaceholder": "Commit üzenet (üresen automatikus)",
       "gitAheadBehindHint": "↑ = hány commit vár feltolásra (Push), ↓ = hány commit van a távoli ágon, ami nálad még nincs meg. Ez commitok száma, nem fájloké.",
       "gitCommitFiles": "commitra:",
@@ -1767,6 +1780,19 @@ window.__ModuleLoader__.load({
       "gitReleaseTagged": "Released",
       "gitReleaseAlready": "The latest commit is already released: {tag}. A new release needs a NEW commit — that is why the button is disabled.",
       "gitReleasePending": "{n} commit(s) unreleased since {last}",
+      "gitFtp": "FTP deploy",
+      "gitFtpSetup": "FTP setup",
+      "gitFtpHint": "FTP deploy: uploads the changes of this workspace to the host with its FTP profile (after a preview). Details in the FTP tab.",
+      "gitFtpSetupHint": "No FTP profile for this workspace yet — click to open the FTP tab and add one.",
+      "gitFtpChecking": "FTP: preview…",
+      "gitFtpRunning": "FTP deploy running…",
+      "gitFtpDone": "FTP done: {uploaded} uploaded, {deleted} deleted, {size}.",
+      "gitFtpNothing": "FTP: nothing to upload — everything is up to date.",
+      "gitFtpNeedBaseline": "FTP: no baseline — set it in the FTP tab first (current state = already deployed).",
+      "gitFtpConfirmLarge": "FTP: {n} files ({size}) — click again to upload.",
+      "gitFtpFailed": "FTP error: {error}",
+      "gitFtpIdle": "FTP: no running action.",
+      "gitFtpTimeout": "FTP: no status after 20 minutes — check the log in the FTP tab.",
       "gitCommitPlaceholder": "Commit message (empty = automatic)",
       "gitAheadBehindHint": "↑ = how many commits are waiting to be pushed (Push), ↓ = how many commits exist on the remote branch that you do not have yet. These count commits, not files.",
       "gitCommitFiles": "to commit:",
@@ -4790,6 +4816,13 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
     // Memoized: the corner controls re-render on every statistics tick, and a
     // fresh element identity would remount the panel and drop the picked
     // repository. Memo keeps the component (and its local state) alive.
+    /**
+     * Az „FTP" fül megnyitója. A `dsh-ftp-deploy` plugin regisztrálja ezt a fület
+     * (`sidebarRightTabs`), itt viszont nincs rá közvetlen hozzáférésünk, ezért
+     * az `apply(ctx)` tölti fel (`ctx.sidebarRight.openTab("ftp")`).
+     */
+    var ftpOpenRef = { current: null };
+
     var GitPanel = react.memo(function GitPanel(props) {
       var t = props.t;
       var state = react.useState({ status: "loading" });
@@ -4812,6 +4845,15 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       var releaseState = react.useState(false);
       var releaseFlying = releaseState[0];
       var setReleaseFlying = releaseState[1];
+
+      // FTP gyorsgomb: a munkaterülethez tartozó profilt keressük a host
+      // `/ftp/profiles` listájából (a profil `localRoot`-ja dönti el).
+      var ftpState = react.useState({ status: "loading", profiles: [] });
+      var ftpData = ftpState[0];
+      var setFtpData = ftpState[1];
+      var ftpConfirmState = react.useState(false);
+      var ftpConfirmLarge = ftpConfirmState[0];
+      var setFtpConfirmLarge = ftpConfirmState[1];
 
       // The picked repository is remembered on the HOST, so reopening the panel
       // — or restarting the window, which mints a fresh browser profile — does
@@ -4995,6 +5037,149 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
 
       react.useEffect(function () { probeRelease(); }, []);
 
+      // ─── FTP gyorsgomb ─────────────────────────────────────────────────
+      function openFtpTab() {
+        if (ftpOpenRef.current) ftpOpenRef.current();
+      }
+
+      function normalizeFsPath(value) {
+        return String(value || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+      }
+
+      function loadFtpProfiles() {
+        fetch("/ftp/profiles", { headers: { Accept: "application/json" } })
+          .then(function (response) { return response.json(); })
+          .then(function (body) {
+            setFtpData({
+              status: body && body.ok === true ? "ready" : "error",
+              profiles: (body && body.profiles) || []
+            });
+          })
+          .catch(function () { setFtpData({ status: "error", profiles: [] }); });
+      }
+
+      react.useEffect(function () { loadFtpProfiles(); }, [props.root]);
+
+      /** A munkaterülethez tartozó FTP-profil (a `localRoot` egyezése alapján). */
+      function ftpProfileFor(root) {
+        var target = normalizeFsPath(root);
+        if (!target) return null;
+        var list = ftpData.profiles || [];
+        for (var i = 0; i < list.length; i += 1) {
+          if (normalizeFsPath(list[i].localRoot) === target) return list[i];
+        }
+        return null;
+      }
+
+      function ftpSize(value) {
+        var n = Number(value) || 0;
+        if (n < 1024) return n + " B";
+        if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+        return (n / 1048576).toFixed(2) + " MB";
+      }
+
+      /** A futó FTP-művelet követése (2 s), a végén frissítjük a git-snapshotot. */
+      function pollFtp(tick) {
+        if (tick > 600) {
+          setAction({ status: "error", message: t("gitFtpTimeout") });
+          loadFtpProfiles();
+          loadGit();
+          return;
+        }
+        setTimeout(function () {
+          fetch("/ftp/status", { headers: { Accept: "application/json" } })
+            .then(function (response) { return response.json(); })
+            .then(function (body) {
+              if (!body || body.ok !== true) { pollFtp(tick + 1); return; }
+              if (body.state === "running") {
+                setAction({
+                  status: "working",
+                  message: t("gitFtpRunning") + (body.total ? " (" + (body.done || 0) + "/" + body.total + ")" : "")
+                });
+                pollFtp(tick + 1);
+                return;
+              }
+              if (body.state === "done" && body.result) {
+                var r = body.result;
+                setAction({
+                  status: "done",
+                  message: t("gitFtpDone", {
+                    uploaded: r.uploaded ?? 0,
+                    deleted: r.deleted ?? 0,
+                    size: ftpSize(r.bytes)
+                  })
+                });
+              } else if (body.state === "failed") {
+                setAction({ status: "error", message: t("gitFtpFailed", { error: body.error || "?" }) });
+              } else {
+                setAction({ status: "done", message: t("gitFtpIdle") });
+              }
+              loadFtpProfiles();
+              loadGit();
+            })
+            .catch(function () { pollFtp(tick + 1); });
+        }, 2000);
+      }
+
+      /**
+       * FTP deploy a munkaterülethez tartozó profillal: előnézet -> (nagy esetén
+       * második kattintás) -> push. Profil nélkül az FTP fület nyitja meg.
+       */
+      function runFtpDeploy() {
+        var profile = ftpProfileFor(props.root);
+        if (!profile) { openFtpTab(); return; }
+        setAction({ status: "working", message: t("gitFtpChecking") });
+        fetch("/ftp/preview?id=" + encodeURIComponent(profile.id), { headers: { Accept: "application/json" } })
+          .then(function (response) { return response.json(); })
+          .then(function (body) {
+            if (!body || body.ok !== true) {
+              setAction({ status: "error", message: (body && body.error) || "?" });
+              return;
+            }
+            if (body.needsBaseline) {
+              setAction({ status: "error", message: t("gitFtpNeedBaseline") });
+              openFtpTab();
+              return;
+            }
+            var files = body.files || [];
+            if (files.length === 0) {
+              setFtpConfirmLarge(false);
+              setAction({ status: "done", message: t("gitFtpNothing") });
+              return;
+            }
+            var large = body.large === true;
+            if (large && !ftpConfirmLarge) {
+              var total = files.reduce(function (sum, file) { return sum + (Number(file.size) || 0); }, 0);
+              setFtpConfirmLarge(true);
+              setAction({
+                status: "error",
+                message: t("gitFtpConfirmLarge", { n: files.length, size: ftpSize(total) })
+              });
+              return;
+            }
+            setFtpConfirmLarge(false);
+            fetch("/ftp/push?id=" + encodeURIComponent(profile.id) + "&confirm=1" + (large ? "&forceLarge=1" : ""), {
+              method: "POST",
+              headers: { Accept: "application/json" }
+            })
+              .then(function (response) { return response.json(); })
+              .then(function (started) {
+                if (!started || started.ok !== true) {
+                  setAction({ status: "error", message: (started && started.error) || "?" });
+                  return;
+                }
+                setAction({ status: "working", message: t("gitFtpRunning") });
+                pollFtp(0);
+              })
+              .catch(function (error) {
+                setAction({ status: "error", message: String(error && error.message ? error.message : error) });
+              });
+          })
+          .catch(function (error) {
+            setAction({ status: "error", message: String(error && error.message ? error.message : error) });
+          });
+      }
+
       /**
        * Kiadás: a host LEVÁLASZTOTT folyamatot indít, ezért a kimenet nem jön
        * vissza a böngészőbe. Az állapotot a `release-status` végpontról pollozzuk
@@ -5165,6 +5350,8 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                 if (releaseSubject) releasedTag = releaseSubject[1];
               }
               var releaseDisabled = busy || releaseFlying || releasedTag !== "";
+              // FTP-profil ehhez a munkaterülethez (a `localRoot` egyezése alapján).
+              var ftpProfile = ftpProfileFor(props.root);
               var releaseTitle = releaseFlying
                 ? t("gitReleaseBusy")
                 : releasedTag !== ""
@@ -5201,6 +5388,17 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                     onClick: function () { runGithubAction({ action: "push", root: props.root }); },
                     style: { border: "1px solid var(--dsw-alias-border-l3, rgba(255,255,255,0.25))", borderRadius: "7px", background: canPush ? "var(--dsw-alias-interactive-bg-hover-solid, rgba(255,255,255,0.08))" : "transparent", color: "inherit", opacity: canPush ? 1 : 0.45, cursor: canPush ? "pointer" : "not-allowed", font: "inherit", padding: "2px 10px" },
                     children: t("gitPush")
+                  }),
+                  // FTP deploy gyorsgomb a Kiadás ELŐTT: a tipikus sorrend a
+                  // tárhelyre feltöltés, aztán (ha kell) új telepítő-kiadás.
+                  // Profil nélkül nem indít, hanem az FTP fület nyitja meg.
+                  jsx.jsx("button", {
+                    type: "button",
+                    title: ftpProfile ? t("gitFtpHint") : t("gitFtpSetupHint"),
+                    disabled: busy,
+                    onClick: function () { runFtpDeploy(); },
+                    style: { border: "1px solid var(--dsw-alias-border-l3, rgba(255,255,255,0.25))", borderRadius: "7px", background: busy ? "transparent" : "var(--dsw-alias-interactive-bg-hover-solid, rgba(255,255,255,0.08))", color: "inherit", opacity: busy ? 0.45 : 1, cursor: busy ? "not-allowed" : "pointer", font: "inherit", padding: "2px 10px" },
+                    children: ftpProfile ? t("gitFtp") : t("gitFtpSetup")
                   }),
                   // Kiadás: a commit + tag + push + GitHub Release egy lépésben.
                   // Ez a projekt TELEPÍTHETŐ verzió (a bin\ exe-k a repóban vannak),
@@ -8725,6 +8923,15 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       // defined outside this function can reach it.
       themeServiceRef.current = ctx.theme || null;
       sessionsServiceRef.current = ctx.sessions || null;
+      // A Git panel „FTP deploy" gombja ezen át nyitja meg az FTP fület (a fület a
+      // `dsh-ftp-deploy` plugin regisztrálja, ezért itt csak a nyitó hívást adjuk).
+      ftpOpenRef.current = function () {
+        try {
+          if (ctx.sidebarRight && typeof ctx.sidebarRight.openTab === "function") ctx.sidebarRight.openTab("ftp");
+        } catch (error) {
+          /* ha nincs ilyen fül, a gomb nem tesz semmit */
+        }
+      };
 
       // Any uncaught error inside this bundle lands in the host log, so a broken
       // client build is diagnosable without opening DevTools. Installed once.

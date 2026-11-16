@@ -1,0 +1,26 @@
+{
+  "name": "dsh-ftp-deploy",
+  "version": "0.2.7",
+  "private": true,
+  "description": "FTP deploy panel and quick button for DeepSeek Harness: git-diff based upload to a hosting FTP account (engine ported from Felpuffanto 0.1.5).",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.2"
+  },
+  "license": "MIT"
+}

@@ -36,6 +36,11 @@ providers/config.json.bak-*
 .tmp-*/
 plugins/*/node_modules/
 node_modules/
+# KIVÉTEL: az FTP deploy plugin beágyazott (vendored) függőségei SZÁNDÉKOSAN a
+# repóban vannak — a telepítő offline kell működjön, nincs `npm install` a
+# felhasználónál (lásd plugins/dsh-ftp-deploy/vendor/README.md).
+!plugins/dsh-ftp-deploy/vendor/node_modules/
+!plugins/dsh-ftp-deploy/vendor/node_modules/**
 
 # --- build kimenetek ----------------------------------------------------------
 # A bin\ célzottan BENNE VAN a repóban (a kész launcher exe), de a köztes
