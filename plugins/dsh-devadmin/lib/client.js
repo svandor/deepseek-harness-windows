@@ -27,7 +27,9 @@ window.__ModuleLoader__.load({
     /** A FELSO MENUSOR rekesze, ahova az ikon kerul (a ui-extras is ezt hasznalja). */
     const HEADER_SLOT = "conversation.session.header.utilities";
     const BODY_SLOT = "sidebar.right.pane.tab";
-    const POLL_MS = 5000;
+    // A state válasz drága (HTTP-próba a dev oldalakra + portok), a host 15 s-ig
+    // cache-eli; ezért a panel is 15 s-onként frissít (korábban 5 s volt).
+    const POLL_MS = 15000;
 
     // ── stilbok (inline; a tema valtozoit hasznaljak) ────────────────────
     const PAGE = { padding: "12px", display: "flex", flexDirection: "column", gap: "12px", fontSize: "13px" };
@@ -180,6 +182,9 @@ window.__ModuleLoader__.load({
         let alive = true;
         const tick = async () => {
           if (!alive) return;
+          // Rejtett panel (a nem aktív munkaasztal ablaka) NE pollozzon: a state
+          // válasz drága (HTTP-próba a dev oldalakra), és rejtve senki sem látja.
+          if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
           await refresh();
         };
         tick();
@@ -677,27 +682,53 @@ window.__ModuleLoader__.load({
       const [hover, setHover] = react.useState(0);
       react.useEffect(() => {
         let alive = true;
-        const read = () => {
-          getJson("/devadmin/state")
-            .then((state) => {
-              if (!alive) return;
-              // MÉRT HIBA (2026-11-16): ez a függvény korábban ELDOBTA a választ,
-              // ezért a fejléc csak a saját kattintást jelezte — a váltás után
-              // (és a másik ablakban) NEM az aktív asztal volt kiemelve, amit a
-              // felhasználó „az egyes van aktív színnel" jelenségként látott.
-              // Mostantól a gombok a tényleges állapotot mutatják (2 s-enként).
-              const value = Number(state && state.desktop);
-              if (Number.isFinite(value) && value > 0) setActive(value);
-              const count = Number(state && state.desktopCount);
-              if (Number.isFinite(count) && count > 0) setDesktopCount(count);
-            })
-            .catch(() => {});
+        // MÉRT TERHELÉS (2026-11-16): a fejléc a TELJES `/devadmin/state`-et
+        // pollozta 2 s-onként MINDEN panelből. A state viszont minden hívásnál
+        // HTTP-próbát indít a dev oldalakra (Laravel-indítás) → folyamatos
+        // kérésözön, 12 MB-os access log, 14 pörgő php-cgi munkás, ~3 s-os
+        // válaszidő — ez késleltette az asztalváltás kattintását is (mért:
+        // 1 perc fölötti váltás). Ezért:
+        //   * az olvasás az OLCSÓ `/devadmin/desktop` végpontra megy (fájlolvasás,
+        //     nincs hálózat) — a régi host 404-jére `/devadmin/state` a tartalék;
+        //   * csak 5 s-onként, és HÁTTÉRBEN (rejtett ablak/panelek) egyáltalán nem;
+        //   * kattintás után 600 ms-mal egyszer újraolvasunk (gyors visszajelzés).
+        let fallbackToState = false;
+        const apply = (state) => {
+          if (!alive) return;
+          const value = Number(state && state.desktop);
+          if (Number.isFinite(value) && value > 0) setActive(value);
+          const count = Number(state && state.desktopCount);
+          if (Number.isFinite(count) && count > 0) setDesktopCount(count);
         };
-        read();
-        const timer = window.setInterval(read, 2000);
+        const read = () => {
+          if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+          const route = fallbackToState ? "/devadmin/state" : "/devadmin/desktop";
+          getJson(route)
+            .then(apply)
+            .catch(() => {
+              // Régi host: nincs olcsó végpont — onnan RITKÁN olvasunk (30 s),
+              // mert a state válasz ~3 s-os (HTTP-próba a dev oldalakra).
+              fallbackToState = true;
+            });
+        };
+        // Öntempózó ciklus: az olcsó végpontnál 5 s, a drága tartaléknál 30 s.
+        let timer = null;
+        const schedule = () => {
+          if (!alive) return;
+          read();
+          const delay = fallbackToState ? 30000 : 5000;
+          timer = window.setTimeout(schedule, delay);
+        };
+        schedule();
+        const fastRead = () => {
+          window.setTimeout(read, 600);
+          window.setTimeout(read, 2000);
+        };
+        if (typeof window !== "undefined") window.addEventListener("dsh-desktop-click", fastRead);
         return () => {
           alive = false;
-          window.clearInterval(timer);
+          if (timer !== null) window.clearTimeout(timer);
+          if (typeof window !== "undefined") window.removeEventListener("dsh-desktop-click", fastRead);
         };
       }, []);
       // NINCS elrejto feltetel: a felhasznalo kérése, hogy az 1/2 gomb MINDIG
@@ -724,6 +755,10 @@ window.__ModuleLoader__.load({
             onClick: () => {
               setActive(n);
               if (set) set(n);
+              // A poll ritka (5 s), ezért a kattintás után külön kérünk egy
+              // gyors újraolvasást — így a kiemelés azonnal a valós állapotot
+              // mutatja, tartós terhelés nélkül.
+              try { window.dispatchEvent(new Event("dsh-desktop-click")); } catch (error) { }
             },
           },
           String(n),

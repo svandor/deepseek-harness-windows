@@ -402,6 +402,14 @@ async function autostartEntries() {
 // ------------------------------------------------------------------ routes ---
 
 async function handleState(_req, res) {
+  // CACHE (2026-11-16, mért terhelés): ez a végpont minden hívásnál HTTP-próbát
+  // indít a dev oldalakra (Laravel-indítás) és port-tulajdonosokat kérdez, ezért
+  // ~3 s. A fejléc 6 panelből pollozta 2 s-onként → folyamatos kérésözön a dev
+  // szerverre. A válasz ezért 15 s-ig cache-elt; a `?fresh=1` megkerüli.
+  const wantFresh = String(_req?.url ?? "").includes("fresh=1");
+  if (!wantFresh && stateCache.payload !== null && Date.now() - stateCache.at < STATE_TTL_MS) {
+    return json(res, 200, stateCache.payload);
+  }
   const state = readJsonFile(STATE_FILE, null);
   const caddyPid = state?.caddy?.pid ?? null;
   const caddyAlive = pidAlive(caddyPid);
@@ -458,7 +466,7 @@ async function handleState(_req, res) {
     note: "A MySQL-t a DBngin kezeli (emelt folyamat); inditas/leallitas a DBnginbol megy.",
   };
 
-  json(res, 200, {
+  const payload = {
     devServer: {
       running: caddyAlive,
       caddyPid,
@@ -481,7 +489,9 @@ async function handleState(_req, res) {
     autostart: await autostartEntries(),
     paths: { repo: REPO_ROOT, tools: TOOLS_DIR, sitesRoot: SITES_ROOT, hosts: HOSTS_FILE },
     checkedAt: new Date().toISOString(),
-  });
+  };
+  stateCache = { at: Date.now(), payload };
+  json(res, 200, payload);
 }
 
 /**
@@ -609,6 +619,32 @@ function readDesktopCount() {
     return 1;
   }
 }
+/**
+ * OLCSÓ munkaasztal-végpont (GET, `n` nélkül) — a fejléc 1/2 gombjainak.
+ *
+ * MIÉRT (2026-11-16, mért terhelés): a fejléc korábban a TELJES
+ * `/devadmin/state`-et pollozta 2 s-onként MINDEN panelből, a state viszont
+ * minden hívásnál **HTTP-próbát indít a dev oldalakra** (Laravel-indítás) és
+ * port tulajdonosokat kérdez — 6 panel × 2 s mellett ez folyamatos
+ * kérésözön volt a dev szerverre (12 MB-os access log, 14 php-cgi munkás
+ * pörgött), a hívás pedig ~3 s-ra hízott, ami a kattintást is késleltette.
+ * Ez a végpont két fájlt olvas, hálózatot NEM használ.
+ */
+let desktopCache = { at: 0, payload: null };
+const DESKTOP_TTL_MS = 1000;
+
+function desktopPayload() {
+  const now = Date.now();
+  if (desktopCache.payload !== null && now - desktopCache.at < DESKTOP_TTL_MS) return desktopCache.payload;
+  const payload = { ok: true, desktop: readDesktopIndex(), desktopCount: readDesktopCount() };
+  desktopCache = { at: now, payload };
+  return payload;
+}
+
+/** A teljes state válasz rövid ideig cache-elve (a drága próbák miatt). */
+let stateCache = { at: 0, payload: null };
+const STATE_TTL_MS = 15000;
+
 function readDesktopIndex() {
   try {
     const text = readFileSync(join(REPO_ROOT, "state", "window-desktop.txt"), "utf8").trim();
@@ -620,11 +656,15 @@ function readDesktopIndex() {
 }
 function handleDesktop(url, res) {
   const n = Number(url.searchParams.get("n") ?? "0");
+  // `n` NÉLKÜL: olcsó OLVASÁS (a fejléc pollja) — ez nem ír fájlt, és nem
+  // indít HTTP-próbát (lásd desktopPayload()).
+  if (url.searchParams.get("n") === null) return json(res, 200, desktopPayload());
   if (n !== 1 && n !== 2) return json(res, 400, { ok: false, error: "n=1 vagy n=2 kell" });
   const file = join(REPO_ROOT, "state", "window-desktop.txt");
   try {
     mkdirSync(join(REPO_ROOT, "state"), { recursive: true });
     writeFileSync(file, String(n), "utf8");
+    desktopCache = { at: 0, payload: null };   // friss olvasás a következő kérésnél
   } catch (error) {
     return json(res, 500, { ok: false, error: `iras hiba: ${error?.message ?? error}` });
   }
