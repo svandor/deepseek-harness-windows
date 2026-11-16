@@ -1,6 +1,6 @@
 {
   "name": "dsh-process-guard",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "description": "Perzisztens folyamat-ledger + induláskori reconciláció: a DSH összeomlása után is látszanak és leállíthatók az elárvult gyerekfolyamatok (PID + indítási idő alapján).",
   "type": "module",
