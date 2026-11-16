@@ -127,14 +127,45 @@ try {
             try { $v = [double]$s.CookedValue } catch { continue }
             if ($null -eq $v -or [double]::IsNaN($v)) { continue }
             $n = ($s.InstanceName -replace '#\d+$', '')
-            if ($avg.ContainsKey($n)) { $avg[$n] = ($avg[$n] + $v) / 2 } else { $avg[$n] = $v }
+            # FIGYELEM: az azonos nevű példányok (pl. 54 msedgewebview2) ÖSSZEGE
+            # számít, nem az átlaga — az átlagolás MÉRTEN a gépet 8%-nak
+            # mutatta, miközben az idő-alapú valóság ~30% volt.
+            if ($avg.ContainsKey($n)) { $avg[$n] = $avg[$n] + $v } else { $avg[$n] = $v }
         }
     }
     if ($avg.Count -eq 0) { throw "nem jött érvényes minta" }
     $cores = [Environment]::ProcessorCount
     $busy = (($avg.GetEnumerator() | Measure-Object Value -Sum).Sum)
-    Write-Host ("Összes CPU: {0:N0}% (0–{1}% között, {2} logikai mag) = a gép {3:N0}%-a" -f `
-            $busy, ($cores * 100), $cores, (100.0 * $busy / ($cores * 100))) -ForegroundColor Yellow
+    Write-Host ("A PDH által kiolvasott folyamatok összege: {0:N0}% (1 mag = 100%). A PDH a közben változó példányokat" -f $busy) -ForegroundColor Yellow
+    Write-Host "  kihagyja, ezért ez ALSÓ becslés — a gép tényleges terheltségét az alábbi, rendszerszintű sor mondja meg." -ForegroundColor DarkGray
+    # A Task Manager a FREKVENCIA-SÚLYOZOTT értéket mutatja ("% Processor
+    # Utility"), a legtöbb más eszköz (MSI Center, PDH 'Processzor' készlet) az
+    # IDŐ-alapút ("% Processor Time"). MÉRT eset ugyanabban a percben:
+    # 73% (Task Manager) vs 35% (MSI Center) — nem ellentmondás, két mutató.
+    $piName = @((Get-Counter -ListSet * -ErrorAction SilentlyContinue).CounterSetName) |
+        Where-Object { $_ -match '^(Processzorinformációk|Processor Information)$' } | Select-Object -First 1
+    if ($piName) {
+        $pi = Get-Counter -ListSet $piName -ErrorAction SilentlyContinue
+        $totalPaths = @($pi.PathsWithInstances | Where-Object { $_ -match '\(_Total\)' -and $_ -match '%' })
+        $idlePath = @($totalPaths | Where-Object { $_ -match 'Üresjárat|Idle' }) | Select-Object -First 1
+        $busyTime = $null
+        if ($idlePath) {
+            try { $busyTime = 100 - (Get-Counter -Counter $idlePath -ErrorAction SilentlyContinue).CounterSamples[0].CookedValue } catch { }
+        }
+        # A frekvencia-súlyozott érték definíció szerint nem kisebb az
+        # idő-alapúnál, ezért a két "kihasználtság"-számláló maximuma az.
+        $utility = $null
+        foreach ($tp in @($totalPaths | Where-Object { $_ -match 'kihasználtság|Utility' -and $_ -notmatch 'Üresjárat|Idle|frekvencia|efficiency' })) {
+            try {
+                $v = (Get-Counter -Counter $tp -ErrorAction SilentlyContinue).CounterSamples[0].CookedValue
+                if ($null -ne $v -and ($null -eq $utility -or $v -gt $utility)) { $utility = $v }
+            } catch { }
+        }
+        if ($null -ne $busyTime) {
+            Write-Host ("Mag-idő szerint (a legtöbb eszköz ezt mutatja): {0:N0}%   |   frekvencia-súlyozva (Task Manager): {1}" -f `
+                    $busyTime, $(if ($null -ne $utility) { '{0:N0}%' -f $utility } else { '?' })) -ForegroundColor Yellow
+        }
+    }
     Write-Host ("  {0,-26} {1,7}" -f 'Folyamat', 'CPU%') -ForegroundColor DarkGray
     $avg.GetEnumerator() |
         ForEach-Object { [pscustomobject]@{ Process = $_.Key; CpuPct = [Math]::Round($_.Value, 1) } } |
