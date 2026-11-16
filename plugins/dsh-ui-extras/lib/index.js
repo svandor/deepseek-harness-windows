@@ -683,7 +683,9 @@ async function handleGithubAction(req, res) {
       // reports the state after the next refresh.
       try {
         const child = spawn("cmd.exe", ["/c", "start", "GitHub bejelentes", "cmd.exe", "/k", "gh auth login --hostname github.com --git-protocol https --web"], {
-          detached: true,
+          // Ugyanaz a mérés: `detached` mellett a gyermek elhal, ezért nem
+          // választjuk le (a `start` maga is azonnal visszatér).
+          detached: false,
           stdio: "ignore",
           windowsHide: false
         });
@@ -925,7 +927,15 @@ async function handleGithubAction(req, res) {
       if (dry) args.push("-DryRun");
       const child = spawn("powershell.exe", args, {
         cwd: REPO_ROOT,
-        detached: true,
+        // MÉRT HIBA (2026-11-16 13:18): `detached: true` mellett a gyermek
+        // `powershell.exe` SOHA nem futott le (a `DETACHED_PROCESS` miatt nincs
+        // konzolja, és a Windows PowerShell 5.1 ettől azonnal elhal — 3 minta:
+        // detached=3/3 halott, nem-detached=1/1 lefutott, marker-fájllal mérve).
+        // Ez volt az oka, hogy a panel Kiadás gombja „indítás után" semmit nem
+        // csinált (a státusz `starting` maradt, transcript nem készült).
+        // Leválasztás nélkül a szkript a harness gyermeke: a kiadás ideje alatt
+        // a harness úgyis fut (a panel pollozza az állapotot).
+        detached: false,
         stdio: "ignore",
         windowsHide: true
       });

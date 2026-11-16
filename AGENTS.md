@@ -328,7 +328,16 @@ Kötelező:
   („Kiadás fut…"), a spawn hibája is nyomot hagy. (4) **A dupla hibaüzenet
   megszűnt:** a végleges üzenet (kész/hiba) CSAK az alsó sorban jelenik meg, a
   felső sor csak a folyamatjelzést (⏳) mutatja. Az audit-blokkoló javítása után a
-  v0.2.7 kiadás lefut.
+  v0.2.7 kiadás lefut (commit `97e00bd`, portable ZIP 2,45 MB + telepítő EXE
+  2,48 MB, `isDraft:false`). (5) **A Kiadás gomb „néma” indulásának VALÓDI oka:
+  `detached: true`.** MÉRVE (marker-fájlos próba): leválasztva a gyermek
+  `powershell.exe` SOHA nem fut le (`DETACHED_PROCESS` → nincs konzol → a Windows
+  PowerShell 5.1 azonnal elhal), leválasztás nélkül 1/1 lefut. Ezért a host
+  `detached: false`-szal indít (`stdio: ignore`, `windowsHide: true`), a gyermek a
+  harness alatt fut (a kiadás ideje alatt a harness úgyis él). Ellenőrzés: a
+  javított spawn `-DryRun`-nal lefuttatta a szkriptet (transcript kész, terv
+  kiírva, `exit 0`). Új `dry=1` paraméter: a gomb útvonala éles kiadás nélkül
+  próbálható.
 
 - `2026-11-16` (nyolcadik kör) — **a „Kiadás" gomb teljes értékűvé tétele + v0.2.6
   kiadva.** (1) **A lánc ellenőrzése és ÉLES futtatása:** a gomb a
