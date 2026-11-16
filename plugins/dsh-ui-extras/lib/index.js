@@ -620,6 +620,9 @@ async function handleGithub(req, res) {
 const RELEASE_STATUS_FILE = join(REPO_ROOT, "state", "release-status.json");
 const RELEASE_LOG_FILE = join(REPO_ROOT, "state", "release-log.txt");
 
+/** A kiadás állapotfájlja ennyi után számít elavultnak (a build+feltöltés bőven belefér). */
+const RELEASE_STALE_MS = 45 * 60 * 1000;
+
 function readReleaseStatus() {
   try {
     if (!existsSync(RELEASE_STATUS_FILE)) return { ok: false };
@@ -629,7 +632,23 @@ function readReleaseStatus() {
     if (Number.isInteger(pid) && pid > 0) {
       try { process.kill(pid, 0); alive = true; } catch { alive = false; }
     }
-    return { ok: true, ...parsed, alive };
+    // MÉRT HIBA (2026-11-16): a `state:"starting"` rekord a pid halála után is a
+    // lemezen maradt, a gomb pedig újra aktív lett, miközben a kiadás futott.
+    // A futás tényét ezért NEM a pid dönti el, hanem az állapot + az életkor:
+    // a szkript a saját pid-jét írja, a leválasztott gyermek pid-je viszont a
+    // hostból nem mindig ellenőrizhető (jogosultság).
+    let ageMs = Number.POSITIVE_INFINITY;
+    try { ageMs = Date.now() - statSync(RELEASE_STATUS_FILE).mtimeMs; } catch { ageMs = Number.POSITIVE_INFINITY; }
+    const state = String(parsed?.state ?? "");
+    const inFlight = (state === "starting" || state === "running")
+      && (alive === true || ageMs < RELEASE_STALE_MS);
+    return {
+      ok: true,
+      ...parsed,
+      alive,
+      inFlight,
+      ageSec: Number.isFinite(ageMs) ? Math.round(ageMs / 1000) : null
+    };
   } catch {
     return { ok: false };
   }
@@ -645,12 +664,9 @@ function readReleaseLogTail() {
   }
 }
 
-/** A kiadás folyamatban van-e (indul vagy fut, és él a folyamat). */
+/** A kiadás folyamatban van-e (indul vagy fut; a pid mellett az életkor is dönt). */
 function releaseInFlight() {
-  const status = readReleaseStatus();
-  if (!status.ok) return false;
-  if (status.state !== "starting" && status.state !== "running") return false;
-  return status.alive === true;
+  return readReleaseStatus().inFlight === true;
 }
 
 async function handleGithubAction(req, res) {
@@ -903,7 +919,34 @@ async function handleGithubAction(req, res) {
       if (bump) args.push("-Bump", bump);
       const message = url.searchParams.get("message");
       if (message) args.push("-Message", message);
-      const child = spawn("powershell.exe", args, { detached: true, stdio: "ignore", windowsHide: true });
+      // `dry=1`: a teljes lánc lefut, de nem ír verziót/commitot/taget és nem
+      // publikál — így a gomb és a host-út maga is próbálható éles kiadás nélkül.
+      const dry = url.searchParams.get("dry") === "1";
+      if (dry) args.push("-DryRun");
+      const child = spawn("powershell.exe", args, {
+        cwd: REPO_ROOT,
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true
+      });
+      // MÉRT HIBA (2026-11-16 12:5x): a leválasztott gyermek azonnal elhalt, a
+      // státusz „starting” maradt, és semmi nem mondta meg, miért. Ezért a
+      // spawn hibája és a gyermek kilépése is nyomot hagy az állapotfájlban.
+      child.on("error", (error) => {
+        try {
+          writeFileSync(RELEASE_STATUS_FILE, JSON.stringify({
+            state: "failed",
+            pid: child.pid ?? 0,
+            version: "",
+            tag: "",
+            url: "",
+            error: `a kiadás folyamata nem indult el: ${String(error?.message ?? error)}`,
+            startedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            logPath: RELEASE_LOG_FILE
+          }, null, 2), "utf8");
+        } catch { /* ignored */ }
+      });
       child.unref();
       // Az első állapot AZONNAL: a szkript ~1 s múlva felülírja a sajátjával, de a
       // panel addig is látja, hogy fut (és a dupla-indítás védelme is működik).

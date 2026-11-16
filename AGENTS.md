@@ -305,6 +305,30 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-16` (kilencedik kor) — **a titok-audit hamis talalata, a konzolablakok
+  VALODI oka, es a Kiadas gomb egyidejussege.** (1) **A kiadas elbukott a
+  titok-kapun:** a MOSTANI faban 2 talalat volt — `tools\patch-sandbox-no-window.ps1`
+  28. es 68. sora, a `134217728` (9 jegyu) konstans, amit a minta TAJ-szamnak lat.
+  Ezt hex alak (`0x08000000`) es nev szerinti hivatkozas valtotta, igy az audit
+  0 talalat -> `exit 0` (a git-elozmenyben maradt talalat csak figyelmeztetes).
+  **Tanulsag: 9+ jegyu szamot ne irj a szkriptekbe.** (2) **A lathato `node.exe`
+  konzolablakok valodi oka:** a `CREATE_NO_WINDOW` NEM eleg — a gyermeknek igy
+  egyaltalan nincs konzolja, ezert amikor O indit konzolos programot (`node`,
+  `git`, `pwsh`), a Windows UJ, LATHATO ablakot ad neki (mert: a 13:02-es
+  ujrainditas UTAN is jottek ablakok 13:12:23-kor es 13:12:30-kor). Helyes modszer
+  (ezt teszi a Node `windowsHide` is): `STARTUPINFOW` `dwFlags = 256 | 1`
+  (`STARTF_USESHOWWINDOW`) + `wShowWindow = 0` (`SW_HIDE`), a letrehozasi jelzok
+  maradnak az eredetiek (`0`, `4`, `1028`) — a rejtett konzolt a gyermekek
+  OROKLIK. `tools\patch-sandbox-no-window.ps1` ezt alkalmazza, a korabbi hibas
+  foltot visszaforditja, idempotens (`-Check` OK), DSH-frissites utan ujrafuttathato.
+  (3) **A Kiadas gomb egyidejussege:** a futas tenyet eddig a statusz-fajl pid-je
+  dontotte el, a pid viszont a hostbol nem mindig ellenorizheto -> a gomb ujra aktiv
+  lett egy FUTÓ kiadas mellett. Most a host `inFlight` mezot ad (allapot + 45 perces
+  eletkor), a panel nyitaskor `probeRelease()`-szel kerdez ra, a gomb addig inaktiv
+  („Kedas fut…" -> „Kedas fut…", `gitReleaseBusy`), a spawn hibaja is nyomot hagy.
+  (4) **A dupla hibaüzenet megszunt:** a vegleges uzenet (kesz/hiba) CSAK az also
+  sorban jelenik meg, a felso sor csak a folyamatjelzest (ora) mutatja.
+
 - `2026-11-16` (nyolcadik kör) — **a „Kiadás" gomb teljes értékűvé tétele + v0.2.6
   kiadva.** (1) **A lánc ellenőrzése és ÉLES futtatása:** a gomb a
   `/ui-extras/github-action?action=release` végpontot hívja, a host pedig
@@ -788,170 +812,23 @@ Kötelező:
   a tűk megtalálják a `C:` és a `D:` alakú `vite`-ot is (`46676`, `41572`), az
   `esbuild` segédeket a gyökér-szűrés kiveszi. Mindkettő a **következő**
   harness-újraindításnál lép életbe.
-- `2026-11-13` — **a panel munkaterület-kulcsai kanonikusak** (junction-javítás a
-  panel állapotában). A `C:\Szerver` junction a `D:\Szerver`-re mutat, ezért
-  ugyanaz a projekt KÉT kulccsal élt a `state\panel-layout.json`-ban: mért
-  eset (2026-11-13) **14 kulcs, 9 valódi projekt**, és a panel beállításai
-  (nyitott terminál, aktív fül, szűrő, panelmagasságok) kétfelé szóródtak.
-  Javítás (`plugins\dsh-ui-extras\lib\index.js`): `canonicalWorkspace()`
-  `realpathSync.native`-tal oldja fel a junctiont; a `handleLayout()` fogadott
-  kulcsát és a `startRun()` munkaterületét is kanonizálja (így a `runs.json`
-  rekordjai és a túlélő-keresés is a valódi útvonalat használja), bootkor pedig
-  a `migrateWorkspaceKeys()` egyszer összevonja a meglévő bejegyzéseket
-  (`panel-layout`, `runnables`, `runs`). Új kézi eszköz:
-  `tools\canonicalize-panel-state.mjs` (`--apply`, előtte `*.bak-<időbélyeg>`
-  mentés; mérése: 14 → 9 kulcs). A `terminal` tool és a terminál-panel
-  érintetlen; a javítás a következő harness-újraindításnál lép életbe, a
-  `--apply` már most rendezte a fájlokat.
-- `2026-11-13` — **a panel-futás túléli a harness-restartot** (a felhasználó
-  jelezte: „a gyorsgombbal indítottam és korábban megjelent újraindítás után
-  is"). A `RUNS` szándékosan memóriabeli, ezért a restart után a rekord eltűnt,
-  a folyamat (két `vite` az 5173/5174-en) pedig árvaként tovább élt — a panelben
-  nem látszott, csak `taskkill`-lel lehetett elérni. Javítás
-  (`plugins\dsh-ui-extras\lib\index.js`): `persistRuns()` a `state\runs.json`-ba
-  írja minden futás `id + workspace + label + pid + startedAt + survivors`
-  rekordját; `restoreRuns()` bootkor két ágat kezel — élő **héj** (pid elég),
-  illetve kilépett héj (a `powershell -NoExit -Command -` a szülő halálakor
-  EOF-ot kap a stdin-en és kilép), amikor a `survivorPidsByWorkspace()` egyetlen
-  rejtett CIM-hívással a rekord **munkaterület-útvonalát** keresi a
-  parancssorokban. A kereső kihagyja önmagát, a harness pid-jét és a héjakat
-  (`powershell`/`pwsh`/`conhost`/`WindowsTerminal`), és csak a gyökereket adja
-  vissza (ez szűri ki az `esbuild` segédeket). A `killRecoveredRun()` pid-enként
-  ellenőriz (`-NoExit`, illetve munkaterület-egyezés), és csak egyezésnél lő
-  `taskkill /F /T`-vel; ami nem egyezik, azt kihagyja. A recovered rekord
-  olvasható, de nem írható (`writeToRun()` hiba, `latestLiveRun()` kihagyja),
-  és a kimenete nem hozható vissza. **Mérve:** `runs: 2 korábbi futás
-  visszatöltve (2 rekord, ebből 2 héj nélküli)`; a panel `run-3`/`run-4`
-  `recovered: true`-val; a `46676`/`42540` a restart előtt és után is élt;
-  `action=kill&id=run-4` → `{"ok":true,"tree":true}`, 5174 felszabadult, 5173
-  érintetlen. Ugyanekkor: a lemezen maradt kérés **boot-replayét** is lezártuk —
-  a tool törli a `state\terminal-request.json`-t, a host pedig a 30 s-nál
-  régebbi kérést eldobja (mért eset: egy `insert` a boot után újra beíródott).
-  Részletek: `docs\DSH-ATADAS.md` 10.6.
-- `2026-11-13` — **a modell mostantól a beépített terminál-panelben dolgozik**
-  (`terminal` tool). A lánc három része: (1) HOST oldal a `dsh-ui-extras`-ban —
-  `startTerminalMailbox()` 250 ms-onként figyeli a `state\terminal-request.json`-t,
-  a `runMailboxAction()` a panel `RUNS` nyilvántartásán hajtja végre
-  (`run|insert|input|output|stop|list`), a válasz a `state\terminal-response.json`-ba
-  megy; az `insert` Enter NÉLKÜL gépel, és a host echo-t ír, mert a csővezetékes
-  héj nem echo-zna. (2) AGENT oldal: új plugin `plugins\dsh-terminal-tool`
-  (`inject = ["tools"]`, `defineTool` → `terminal` tool), telepítés/ellenőrzés/
-  visszavonás `plugins\dsh-terminal-tool\install.ps1` (`-Check`, `-Remove`), a
-  junction a `~\.dsh\profiles\node_modules\dsh-terminal-tool`. (3) A preset
-  bejegyzés (`tool-terminal` / `dsh-terminal-tool`) az agent-síkos
-  `~\.dsh\.agent-presets\standard-free\agent.cordis.yml`-ben — enélkül a tool
-  hiába regisztrálódik a host-síkon, a modell nem látja.
-  **Mért buktatók:** a `defineTool` kötelező `output { schema, render }`-je; az
-  `output.schema` value-DSL a `required` MINDKÉT formáját elutasítja (a
-  `parameters`-ban viszont a `required: true` helyes); a junction ellenére a Node
-  a valódi útvonalról oldja fel az importokat, ahol nincs `node_modules`, ezért a
-  `@deepseek-ai/dsh-tools`-t `createRequire` jelöltlistával kell feloldani; a
-  preset kompozíció SESSION-LÉTREHOZÁSKOR töltődik, tehát a tool csak új
-  sessionben vagy harness-újraindítás után jelenik meg. **Boot-replay hiba
-  (javítva):** a kérésfájl a lemezen maradt, a `handledMailboxIds` viszont
-  memóriabeli, ezért a boot után a legutolsó kérés újra végrehajtódott (mért:
-  egy `insert` még egyszer beíródott; `run` esetén ez minden bootnál lefuttatott
-  volna egy parancsot) — a tool most törli a kérésfájlt, a host pedig a 30 s-nál
-  régebbi kérést eldobja. **Mérve:** harness-oldali mount (`defineTool feloldva` +
-  `beregisztrálva`), és a tool `action=run` hívása a panel `run-2` futásában
-  végrehajtotta a `git status --short`-ot. Részletek: `docs\DSH-ATADAS.md` 10. szakasz.
-- `2026-11-13` — **a tálcaikonról eltűntek a panelbeállítások, és dupla
-  indítások futottak.** (1) A panelbeállítások a 2026-10-31-i váltásnál vesztek
-  el, amikor a launcher a PowerShell-tálcáról a natív `DshTray.exe`-re állt át: a
-  natív menü nem kínálta a felosztást és a robot felületet. Visszaállítva
-  `src\DshTray.cs`-ben (`Ablak felosztása` 1/2/3, `4. felület: robot panel`,
-  `Csak robot mód`), a `state\tray-config.json`-ba mentve — a `TinyJson.Set()`
-  csak a saját kulcsokat írja, a többit (`autostart`, `logLevel`) nem bántja —,
-  és váltáskor csak az ablak nyílik újra, a harness nem áll le. Régi bináris:
-  `bin\DshTray.exe.old-20261113-110249`. (2) A dupla indítás megszűnt: a natív
-  tálca `EnsureHarness()` és az új `tools\start-harness-once.ps1` **közös neves
-  mutexet** (`Global\DshHarnessStart-<port>`) és „friss `harness.pid` = éppen
-  indul" ablakot használ; mért eset: 24504 nyert / 35424 elhalt, illetve korábban
-  három indítás egymás után (6988 → 16956 → 14412). Az indítás `-NoWait`-tel
-  megy, mert a `restart-harness.ps1` szinkron hívása **elakadt** (0 CPU-s
-  gyermek), és emiatt az elfogadási próba riport nélkül maradt.
-- `2026-11-12` — **a Git panel commitja nem működött HU módban.** A repó
-  publikus, ezért a `commit-msg` hook (`tools/check-commit-msg.mjs`) angol
-  üzenetet követel, a panel viszont HU kapcsolóval magyar üzenetet állít elő
-  (`Frissítés: …`) — a hook elutasította. A panel csak ennyit mutatott:
-  `git commit failed`, mert a hook stderr-je ÜRES SORRAL kezdődik, a kód pedig az
-  első sort vette. Javítás (`plugins\dsh-ui-extras\lib\index.js`): magyar
-  üzenethez a hook dokumentált `commit-lang: any` tracert fűzi (tehát a magyar
-  üzenet JELÖLVE megy át; a jelöletlen magyart a hook továbbra is elutasítja), a
-  hibaüzenet pedig az első NEM ÜRES sort adja vissza. A javítás a harness
-  újraindításakor lép életbe (a plugin szerveroldali kódja boot-időben töltődik;
-  a kliens a lap újratöltésével). Mellékesen: a DSH sandboxában a `git commit`
-  hookja MSYS `sh`-t indít, ami signal-pipe-ot nem tud létrehozni
-  (`couldn't create signal pipe, Win32 error 5`) — ilyenkor a commit emelt
-  hozzáféréssel megy át.
-- `2026-11-11` — **a helyi Ollama hívása TILOS Windows alatt** (2.1. pont).
-  **HELYESBÍTETT OK (2026-11-14):** a „~22 GB-nál a Windows újraindítja a DSH-t"
-  tünet oka **a rosszul beállított lapozófájl (virtuális memória) volt** — azt
-  korábban én rontottam el, és azóta javítottam (32 768 MB kezdő / 65 536 MB max,
-  mért). A „a `llama-server` és a DSH együtt nem fér el a 32 GB-os gépen" mondat
-  tehát **téves volt**; a tiltás felhasználói döntésként marad érvényben. Kivéve:
-  (1) `providers\config.json` minden `ollama/...` lánctagja, a kivett
-  láncok az `localOllama.archivedTargets`-ben (worker, free-quota, deepseek-chat,
-  fast-chat, vision-worker, `auto.rules.kep`, local-only), a `local-only` route
-  üres lánccal 503-at ad; (2) `~/.dsh/settings.yaml`: `ollama-local` provider és
-  `local-only` modell (mentés: `settings.yaml.bak-*-ollama-off`); (3) második
-  védvonal a `proxy.mjs` `localOllamaGate()` kapuja, ami win32 alatt a visszatett
-  célokat is ejti, és a `/healthz` kimondja; (4) kapuzva a `free-guard`, a
-  `chain-doctor`, a `check-ollama`, a `check-subagent.ps1` és a
-  `focus-ollama-check.mjs` bot-job 11434-es hívása. Új eszköz:
-  `tools\local-ollama-settings.mjs` (ellenőrzés/kivétel, YAML-validálással).
-  Linuxos visszaállítás: `providers\settings.ollama-local-disabled.yaml`.
-- `2026-10-28` — szabálytár létrehozva; a fókusz-tilalom eddig csak prózában élt
-  a `bot\README.md`-ben, kikényszerítve nem volt. Ezt ez a fájl pótolja.
-- `2026-10-28` — a 09:00-s villanás valódi gyökere a `DSH model retune daily`
-  `.cmd` shimje. A meglévő `fix-flashing-tasks.ps1` két okból nem találta meg:
-  (1) csak `.exe` neveket vizsgált, a `.cmd` műveletet nem; (2) a hivatkozott
-  `tools\run-hidden.vbs` nem létezett, így `-Apply` el sem indult. Mindkettő
-  javítva; a `.cmd`-felismerés és a feladatonkénti hibakezelés is bekerült.
-- `2026-10-31` — **az ablak X gombbal nem volt bezárható**: a `bin\DshTray.exe`
-  20 másodperces `EnsureWindow()` felügyelete visszaindította. Javítás: a
-  `DshWindow` a szabályos bezárás `Closing` eseményében `state\window.closed`
-  jelölőt hagy, a tálca ezt tiszteletben tartja (a jelölőt a menü / tálcaikon
-  törli). Összeomlás és `kill` után nincs jelölő, ezért az automatikus
-  helyreállítás megmaradt (mérve: X → 45 s után sincs ablak; `kill -Force` →
-  32 s alatt újra megnyílik). Ugyanekkor a `DshLauncher.exe` már **nem** a régi
-  `powershell.exe -WindowStyle Hidden` + `tray\dsh-tray.ps1` párost indítja
-  (második felügyelő *és* látható konzolvillanás — 1.1/1.3 tilos minta), hanem
-  a natív `bin\DshTray.exe`-t; a régi ps1 tálca `Open-Window`-ja is figyeli a
-  jelölőt, ha valaki mégis elindítja.
-- `2026-10-31` — **az újranyitott ablak fehéren indult**. Mért eset: az előző
-  ablak 09:18:42-kor zárt be, az új 4 másodperccel később indult, és mindhárom
-  panelen `webview2 init failed (pane N): COMException 0x8000FFFF
-  (E_UNEXPECTED)` lett — a WebView2 böngészőfolyamata még leállóban volt. A
-  meglévő újrapróbálkozás csak a *környezet* létrehozását fogta, a *vezérlőét*
-  nem. Javítás: a környezet és a vezérlő egy közös próbaciklusban fut (3 próba,
-  friss profilkönyvtár, 1,5 s → 3 s várakozás), és ha mind elbukik, a panel
-  `static` gyerekablaka szöveges hibaüzenetet rajzol ki a néma fehér helyett
-  (eddig a hibaoldal is WebView2-re épült, ezért nem jelent meg semmi).
-- `2026-11-02` — **Gemma 4 12B a helyi záró szakaszban** (`ollama/gemma4-12b-128k`,
-  a `worker`, `local-only` és `vision-worker` route végén). Mérések: 11,95B dense,
-  48 réteg, Q4_K_M 8,0 GB, GPU-n fut, generálás 53–77 tok/s, prefill
-  1142–1308 tok/s, valódi `tool_calls`, látás MŰKÖDIK (a `vision-test.png`-ből
-  kiolvasta a „777"-et, 117 képtoken), magyar szöveg folyékony. Hang: a Google
-  szerint a 12B natívan fogad hangot (≤30 s), de az Ollama 0.30.9 HTTP API-ja
-  NEM viszi át (mért: `/api/generate` `audio` mező 480 KB WAV-ot némán eldobott
-  — 25 tokos prompt; `/api/chat` `messages[].audio` → 400; OpenAI `input_audio`
-  → eldobva; `type:audio` → 400), ezért delegálásra nem használható.
-  **Három saját hiba, amit a napló leplezett le:** (1) a nyers `gemma4:12b`
-  betöltése 15 285 MiB VRAM fölé ment — az ok nem a modell mérete, hanem hogy a
-  szerver `OLLAMA_CONTEXT_LENGTH=262144` alapértéke érvényesül, ha a tag nem ad
-  `num_ctx`-et; (2) a „dupla betöltés" gyanúja HAMIS, mert
-  `OLLAMA_MAX_LOADED_MODELS=1` — a 11–12 s-os újratöltések oka az, hogy egy
-  MÁSIK kliens (`-c 4096`, a mérő) és a delegálás felváltva kilökte egymást;
-  (3) az `/v1` végpont a `think`-et és az `options.num_ctx`-et is eldobja, ezért
-  a gondolkodást csak `reasoning_effort`-tal lehet fogni. Javítás: származtatott
-  tag (`PARAMETER num_ctx 131072`, blob-megosztással), a proxy kis keretnél
-  (`max_tokens < 2048`) automatikusan `reasoning_effort: none`-t injektál
-  (mért: 6,6 s + üres válasz → 0,2 s + helyes válasz), és induláskor
-  kontextus-lintet futtat. Üzemeltetési csapda: a proxy `proxy.pid`-je üres
-  lehet, miközben egy ÁRVA példány tartja a 4123-at; a `run-proxy-service.ps1`
-  „már fut" ága ilyenkor nem indít újat, ezért a valódi PORTBIRTOKLÓT kell
-  leállítani (a `netstat` állapotoszlopa ezen a gépen magyar: `HALLGATÁS`).
-  Újraindítás csak `wscript`/`cscript` + `*-hidden.vbs` úton (1.2): közvetlen
-  `wscript.exe` hívásnál a PowerShell NEM várja meg (GUI-alkalmazás), ezért a
-  `restart-proxy-hidden.vbs`-t `cscript`-tel kell futtatni.
+
+- **Korabbi korok (tomoritve; reszletek: `docs\DSH-ATADAS.md` 10.6–10.7,
+  `docs\DSH-ASZTAL-TERV.md`).** `2026-11-13` — a panelallapot kulcsai kanonikusak
+  (junction-feloldas `canonicalWorkspace()`-szel, `tools\canonicalize-panel-state.mjs`;
+  mert 14 -> 9 kulcs); a panel-futas TULELI a restartot (`state\runs.json` a
+  `command`-ot is tarolja, ketfazisu visszatoltes, `killRecoveredRun()` pid- es
+  utvonal-ellenorzessel) es bootkor automatikusan folytatodik (`autoResumeRuns()`,
+  max 8 rekord, kikapcsolas `state\no-auto-resume`); a `terminal` tool host- es
+  agens-oldala (`plugins\dsh-terminal-tool`, mailbox a `state\terminal-request.json`-on
+  at, preset-bejegyzes nelkul a modell nem latja). `2026-11-12` — a Git panel
+  commitja HU modban atment: a hook a `commit-lang: any` tracert fogadja el, a
+  hibaolvasas pedig az elso NEM ures sort veszi (a hook stderr-je ures sorral
+  kezdodik). `2026-10-31` — az X gombbal bezart ablak nem jon vissza
+  (`state\window.closed` jelolo), a launcher a nativ `DshTray.exe`-t inditja, es
+  az ujranyitott ablak nem indul feheren (3 probas kornyezet+vezerlo ciklus,
+  szoveges hibaoldal a feher helyett). `2026-10-28` — a villanas gyokere a
+  `DSH model retune daily` `.cmd` shimje volt (`fix-flashing-tasks.ps1` javitva:
+  `.cmd`-felismeres + a hianyzo `tools\run-hidden.vbs`). A helyi Ollama tilalma
+  (`2026-11-11`) es a gemma4-12b-128k memoria-meresei (`2026-11-02`) a 2. es 2.1.
+  pontban elnek tovabb.

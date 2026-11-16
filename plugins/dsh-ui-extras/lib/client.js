@@ -1466,6 +1466,8 @@ window.__ModuleLoader__.load({
       "gitReleaseTimeout": "A kiadás állapota 10 perc után sem érkezett meg — nézd meg a naplót: state\\release-log.txt",
       "gitReleaseIdle": "Nincs kiadási állapot (ebben a munkamenetben még nem futott kiadás).",
       "gitReleaseStale": "A kiadás folyamata leállt, de eredményt nem írt — nézd meg a naplót: state\\release-log.txt",
+      "gitReleaseBusy": "Kiadás fut — a gomb addig inaktív, amíg a kiadás nem hozható létre",
+      "gitReleaseBusyShort": "Kiadás fut…",
       "gitCommitPlaceholder": "Commit üzenet (üresen automatikus)",
       "gitAheadBehindHint": "↑ = hány commit vár feltolásra (Push), ↓ = hány commit van a távoli ágon, ami nálad még nincs meg. Ez commitok száma, nem fájloké.",
       "gitCommitFiles": "commitra:",
@@ -1757,6 +1759,8 @@ window.__ModuleLoader__.load({
       "gitReleaseTimeout": "No release status after 10 minutes — check the log: state\\release-log.txt",
       "gitReleaseIdle": "No release status (no release has run in this session).",
       "gitReleaseStale": "The release process stopped without reporting a result — check the log: state\\release-log.txt",
+      "gitReleaseBusy": "A release is running — the button stays disabled until a release can be started again",
+      "gitReleaseBusyShort": "Release running…",
       "gitCommitPlaceholder": "Commit message (empty = automatic)",
       "gitAheadBehindHint": "↑ = how many commits are waiting to be pushed (Push), ↓ = how many commits exist on the remote branch that you do not have yet. These count commits, not files.",
       "gitCommitFiles": "to commit:",
@@ -4794,6 +4798,15 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       var action = actionState[0];
       var setAction = actionState[1];
 
+      // A kiadás futása a HOST-on él, nem ebben a panelben: ha a panel újra
+      // renderelődik (fülváltás, ablak-újranyitás), a helyi `busy` elfelejtené,
+      // és a gomb újra nyomható lenne egy futó kiadás mellé. Ezért ezt az
+      // állapotot a `release-status` végpontból tükrözzük (a gomb ez alapján
+      // inaktív, amíg a kiadás nem hozható létre).
+      var releaseState = react.useState(false);
+      var releaseFlying = releaseState[0];
+      var setReleaseFlying = releaseState[1];
+
       // The picked repository is remembered on the HOST, so reopening the panel
       // — or restarting the window, which mints a fresh browser profile — does
       // not silently drop the selection the user already made.
@@ -4952,31 +4965,61 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       }
 
       /**
+       * Panelnyitáskor megkérdezi a hostot: fut-e már kiadás? Ha igen, a gomb
+       * inaktív lesz és a szokásos pollozás veszi át — így nem lehet egy futó
+       * kiadás mellé másodikat indítani (a korábbi viselkedés ezt engedte).
+       */
+      function probeRelease() {
+        fetch("/ui-extras/github-action?action=release-status", { headers: { Accept: "application/json" } })
+          .then(function (response) { return response.json(); })
+          .then(function (body) {
+            if (!body || body.ok !== true) { setReleaseFlying(false); return; }
+            var flying = (body.state === "running" || body.state === "starting") && body.inFlight === true;
+            setReleaseFlying(flying);
+            if (flying) {
+              setAction({
+                status: "working",
+                message: t("gitReleaseRunning") + (body.tag ? " (" + String(body.tag) + ")" : (body.version ? " (v" + String(body.version) + ")" : ""))
+              });
+              pollRelease(0);
+            }
+          })
+          .catch(function () { setReleaseFlying(false); });
+      }
+
+      react.useEffect(function () { probeRelease(); }, []);
+
+      /**
        * Kiadás: a host LEVÁLASZTOTT folyamatot indít, ezért a kimenet nem jön
        * vissza a böngészőbe. Az állapotot a `release-status` végpontról pollozzuk
        * (2 s), legfeljebb 10 percig — a végén a panel KIÍRJA az eredményt (kész +
        * link, vagy a hibaüzenet). A ciklus kötött, hogy ne maradjon futva (§1.7).
        */
       function runRelease() {
+        if (releaseFlying) return;
         setAction({ status: "working", message: t("gitReleasing") });
         fetch("/ui-extras/github-action?action=release", { headers: { Accept: "application/json" } })
           .then(function (response) { return response.json(); })
           .then(function (body) {
             if (!body || body.ok !== true) {
+              setReleaseFlying(false);
               setAction({ status: "error", message: (body && body.error) || "?" });
               return;
             }
+            setReleaseFlying(true);
             loadGithub();
             loadGit();
             pollRelease(0);
           })
           .catch(function (error) {
+            setReleaseFlying(false);
             setAction({ status: "error", message: String(error && error.message ? error.message : error) });
           });
       }
 
       function pollRelease(tick) {
         if (tick > 300) {
+          setReleaseFlying(false);
           setAction({ status: "error", message: t("gitReleaseTimeout") });
           return;
         }
@@ -4986,19 +5029,23 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
             .then(function (body) {
               if (!body || body.ok !== true) { pollRelease(tick + 1); return; }
               var tag = String(body.tag || "");
-              // Ha a folyamat már nem él, de eredmény nincs: nem várunk tovább
-              // (a naplóban van a hiba oka).
-              if ((body.state === "running" || body.state === "starting") && body.alive !== true) {
+              // A kiadás véget ért, ha a host szerint már nem fut (a pid halála
+              // önmagában nem elég: a szkript saját pid-je a hostból nézve
+              // ellenőrizhetetlen lehet) — ilyenkor nem várunk tovább.
+              if ((body.state === "running" || body.state === "starting") && body.inFlight !== true) {
+                setReleaseFlying(false);
                 setAction({ status: "error", message: t("gitReleaseStale") });
                 return;
               }
               if (body.state === "done") {
+                setReleaseFlying(false);
                 setAction({ status: "done", message: t("gitReleaseDone", { tag: tag || "?", url: String(body.url || "") }) });
                 loadGithub();
                 loadGit();
                 return;
               }
               if (body.state === "failed") {
+                setReleaseFlying(false);
                 // A napló utolsó sorai adják a valódi okot (git/gh stderr).
                 var tail = String(body.logTail || "")
                   .split("\n")
@@ -5014,9 +5061,11 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                 return;
               }
               if (body.state === "none") {
+                setReleaseFlying(false);
                 setAction({ status: "done", message: t("gitReleaseIdle") });
                 return;
               }
+              setReleaseFlying(true);
               setAction({
                 status: "working",
                 message: t("gitReleaseRunning") + (tag !== "" ? " (" + tag + ")" : (body.version ? " (v" + String(body.version) + ")" : ""))
@@ -5131,11 +5180,11 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                   // ezért a push önmagában nem elég: a verzió és a Release is kell.
                   jsx.jsx("button", {
                     type: "button",
-                    title: t("gitReleaseHint"),
-                    disabled: busy,
+                    title: releaseFlying ? t("gitReleaseBusy") : t("gitReleaseHint"),
+                    disabled: busy || releaseFlying,
                     onClick: function () { runRelease(); },
-                    style: { border: "1px solid var(--dsw-alias-border-l3, rgba(255,255,255,0.25))", borderRadius: "7px", background: "var(--dsw-alias-interactive-bg-hover-solid, rgba(255,255,255,0.08))", color: "inherit", cursor: "pointer", font: "inherit", padding: "2px 10px" },
-                    children: t("gitRelease")
+                    style: { border: "1px solid var(--dsw-alias-border-l3, rgba(255,255,255,0.25))", borderRadius: "7px", background: busy || releaseFlying ? "transparent" : "var(--dsw-alias-interactive-bg-hover-solid, rgba(255,255,255,0.08))", color: "inherit", opacity: busy || releaseFlying ? 0.45 : 1, cursor: busy || releaseFlying ? "not-allowed" : "pointer", font: "inherit", padding: "2px 10px" },
+                    children: releaseFlying ? t("gitReleaseBusyShort") : t("gitRelease")
                   }),
                   primary.ok === true
                     ? jsx.jsx("span", {
@@ -5152,14 +5201,14 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                   // Operation feedback: the two buttons look identical before and
                   // after a push, so without this the only evidence is the output
                   // line at the bottom of a long panel.
-                  action
+                  // A VÉGEREDMÉNYT (kész/hiba) viszont CSAK az alsó sor írja ki
+                  // egyszer — korábban mindkét hely kiírta, ezért jelent meg a
+                  // hibaüzenet duplán (MÉRT HIBA 2026-11-16).
+                  action && action.status === "working"
                     ? jsx.jsx("span", {
-                      style: {
-                        opacity: action.status === "working" ? 0.75 : 1,
-                        color: action.status === "error" ? "#fca5a5" : action.status === "done" ? "#86efac" : "inherit"
-                      },
+                      style: { opacity: 0.75 },
                       title: action.message || "",
-                      children: action.status === "working" ? "⏳ " + (action.message || "") : action.status === "done" ? "✔ " + (action.message || "") : "✕ " + (action.message || "")
+                      children: "⏳ " + (action.message || "")
                     })
                     : null
                 ]
@@ -5320,10 +5369,12 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                   ]
                 })
                 : null,
-              action
+              action && action.status !== "working"
                 ? jsx.jsx("div", {
-                  style: { marginTop: "6px", opacity: action.status === "error" ? 0.95 : 0.8, color: action.status === "error" ? "#ffb4ab" : "inherit", whiteSpace: "pre-wrap" },
-                  children: (action.status === "working" ? t("ghWorking") : action.message) || ""
+                  // A végleges üzenet EGYSZER, itt jelenik meg (a fenti sor csak a
+                  // folyamatjelzést mutatja) — a hosszú hiba/napló-részlet ide fér be.
+                  style: { marginTop: "6px", opacity: action.status === "error" ? 0.95 : 0.8, color: action.status === "error" ? "#ffb4ab" : action.status === "done" ? "#86efac" : "inherit", whiteSpace: "pre-wrap" },
+                  children: (action.status === "done" ? "✔ " : action.status === "error" ? "✕ " : "") + (action.message || "")
                 })
                 : null
             ]
