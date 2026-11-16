@@ -5,14 +5,16 @@
 ![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A5%2022-339933?logo=node.js&logoColor=white)
 
 **Turns the DeepSeek Harness Web GUI into a normal Windows application — and adds
-three things it does not ship with: a full Hungarian interface, an automatic
-free-model fallback chain for subagent delegation, and a built-in local robot
-with its own status panel.**
+what it does not ship with: a full Hungarian interface, an automatic free-model
+fallback chain for subagent delegation, a built-in local robot with its own
+status panel, and a local PHP dev environment (own PHP versions, Composer,
+Caddy + php-cgi, admin UI inside the DSH).**
 
-A DeepSeek Harness Web GUI **igazi Windows-alkalmazássá** alakítása — plusz három
-olyan dolog, ami alapból nincs benne: **teljes magyar felület**, **ingyenes
-modellekre épülő automatikus fallback-lánc a subagent-delegációhoz**, és egy
-**beépített helyi robot** saját állapotpanellel.
+A DeepSeek Harness Web GUI **igazi Windows-alkalmazássá** alakítása — plusz ami
+alapból nincs benne: **teljes magyar felület**, **ingyenes modellekre épülő
+automatikus fallback-lánc a subagent-delegációhoz**, **beépített helyi robot**
+saját állapotpanellel, és **helyi PHP fejlesztői környezet** (saját PHP-verziók,
+Composer, Caddy + php-cgi, admin felület a DSH-ban).
 
 > Author / Szerző: **Varga Sándor (svandor)** — MIT license / MIT licenc
 
@@ -54,6 +56,7 @@ extends it.
 | **Up to six panes, two work windows** | The configured pane count is the *total*: 4–6 panes open **two separate windows** (4 → 2+2, 5 → 3+2, 6 → 3+3). Only one window is visible at a time; the other is hidden at window level with its WebView2 panes still alive, so switching (header **1/2** icons or the tray's *Desktop* menu) takes **0.15–0.25 s** and loses no state. A fresh start always opens desktop 1 and pre-starts the other one hidden. |
 | **Per-pane, per-desktop profiles** | Every pane runs its own WebView2 profile (`state\webview2\pane-N`, and `pane-N-d2` for desktop 2), so it keeps its own workspace, selected session and drafts — and two windows never fight over one profile directory (that caused blank panes before). Measured cost for 6 panes: WebView2 ~3.7–4.3 GB in 48 processes, window chrome ~0.25 GB, background GUI ~2.2 GB. |
 | **One taskbar icon** | The pinned launcher and the running window share one taskbar button through a single explicit AppUserModelID (`DeepSeek.Harness`) plus a `RelaunchCommand` on the shortcut — without the latter, Windows reports "This item is not openable" once the window is closed. `tools\set-pinned-aumid.ps1` sets both; pinning itself is a single manual step from the Start menu, because Windows 11 removed the "Pin to taskbar" verb. |
+| **Local PHP dev environment (Herd replacement)** | The workspace serves PHP itself: own PHP builds with a one-command version switch (`tools\php-version.ps1 -Use 8.5`, `dev.ps1 -Action php-install`), Composer, **Caddy + `php-cgi` FastCGI workers** on 443/80 with HTTPS from Caddy's own CA, per-project profiles in `.dsh\dev.yaml`, a hosts manager that only removes the lines it added, and an **Admin tab inside the DSH** (plus `/devadmin/`) for service start/stop/restart, PHP install/switch, site settings and logs. The UI calls the same `tools\dev.ps1` as the command line. Measured parity with the previous Herd setup: `/` → 200, `/jelentkezes` → 200, redirect domain → 301. Details: [`docs/DSH-HERD-KIVALTAS.en.md`](docs/DSH-HERD-KIVALTAS.en.md). |
 
 ### Install
 

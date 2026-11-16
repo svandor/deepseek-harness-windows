@@ -6,16 +6,18 @@
 
 > **English** — Turns the DeepSeek Harness Web GUI into a normal Windows
 > application (tray icon, native WebView2 window, pinnable launcher) and adds
-> three things it does not ship with: a **full Hungarian interface**, an
-> **automatic free-model fallback chain for subagent delegation**, and a
-> **built-in local robot** with its own status panel. Full English description:
-> [`README.en.md`](README.en.md).
+> what it does not ship with: a **full Hungarian interface**, an **automatic
+> free-model fallback chain for subagent delegation**, a **built-in local robot**
+> with its own status panel, and a **local PHP dev environment** (own PHP
+> versions, Composer, Caddy + php-cgi, admin UI in the DSH). Full English
+> description: [`README.en.md`](README.en.md).
 >
 > **Magyar** — A DeepSeek Harness Web GUI-t igazi Windows-alkalmazássá alakítja
-> (tálcaikon, natív WebView2 ablak, tálcára kitűzhető indító), és hozzáad hármat,
-> ami alapból nincs benne: **teljes magyar felület**, **ingyenes modellekre
-> épülő automatikus fallback-lánc a subagent-delegációhoz**, és egy **beépített
-> helyi robot** saját állapotpanellel.
+> (tálcaikon, natív WebView2 ablak, tálcára kitűzhető indító), és hozzáadja, ami
+> alapból nincs benne: **teljes magyar felület**, **ingyenes modellekre épülő
+> automatikus fallback-lánc a subagent-delegációhoz**, **beépített helyi robot**
+> saját állapotpanellel, valamint **helyi PHP fejlesztői környezet** (saját PHP-verziók,
+> Composer, Caddy + php-cgi, admin felület a DSH-ban).
 
 Szerző / Author: **Varga Sándor (svandor)** — MIT licenc / MIT license.
 
@@ -256,6 +258,40 @@ Ezt állítja be a `tools\set-pinned-aumid.ps1` (`-Check` / `-Apply`):
 > **Start-menü**: `.\pin-to-taskbar.ps1` létrehozza a Start-menü bejegyzést,
 > ott jobb klikk → *Kitűzés a tálcára*. (A régi, közvetlen ablak-pin
 > — `DshWindow.lnk` — rossz: az ablak-exe paraméterek nélkül indul.)
+
+## Helyi PHP fejlesztői környezet (Herd-kiváltás)
+
+A program a Harness felülete mellett **saját PHP-környezetet** is kiszolgál, hogy
+a Laravel-/PHP-projektekhez ne kelljen külső panelt (Herd, Laragon, XAMPP)
+telepíteni. Minden beállítás a DSH felületéről intézhető: nincs kézi
+`php.ini`-szerkesztés és nincs terminál.
+
+- **Saját PHP + Composer:** `tools\php-version.ps1 -List` / `-Use <ver>` (a
+  `D:\Tools\php\current` junctiont váltja); új verzió telepítése
+  `tools\dev.ps1 -Action php-install -PhpVersion 8.5`-tel vagy az admin
+  felületről (windows.php.net NTS build; a `php.ini` a ténylegesen meglévő
+  DLL-ekből generálódik, ezért 8.4 és 8.5 is jó). Composer: `bin\composer.cmd`.
+- **Saját kiszolgáló:** Caddy 2.11.9 + `php-cgi` FastCGI munkások (9101–9199),
+  HTTPS a Caddy saját CA-jával (egyszeri `certutil -addstore -user Root`;
+  a `caddy trust` Windows-on megakad, ezért nem azt használjuk).
+- **Projektprofil:** `.dsh\dev.yaml` (`domain`, `docroot`, `php`, `aliases`).
+  A `tools\dev.ps1` műveletei: `list`, `status`, `start`, `stop`, `restart`,
+  `logs`, `php-install`, `php-available`, `php-ini`, `site-save`, `service`.
+- **Indítás konzolablak nélkül:** `tools\dev-hidden.vbs` — a szerver `wscript`-en
+  át indul, így nem villan fel ablak és nem veszi el a fókuszt.
+- **hosts-kezelés nyilvántartással:** `tools\dev-hosts.ps1` — csak a maga által
+  felvett sorokat törli (`.dsh\hosts-added.json`), emelt hozzáférés nélkül
+  kimondja a futtatandó parancsot, de nem nyit felugró ablakot.
+- **Admin felület a DSH-ban:** a jobb oldalsáv **Admin** füle (és a `/devadmin/`
+  önálló oldal) — szolgáltatás start/stop/restart, PHP-verzió lista/telepítés/
+  váltás, site-beállítás mentése, naplók, hosts-ellenőrzés, munkaasztal-váltás.
+  A felület **ugyanazt** a `tools\dev.ps1`-et hívja, mint a parancssor (egy
+  kódút, nincs „két igazság").
+- **Mért paritás:** a két korábban Herd-telepítésű projekt (Laravel 12 és egy
+  sima PHP-redirect) a saját láncon ugyanazt adja, mint a Herd alatt:
+  `/` → 200, `/jelentkezes` → 200, `jelentkezes-redirect.test/` → 301.
+- A Herd leállt és kikerült az autostartból; a 443/80-at a Caddy szolgálja.
+  Részletek: [`docs\DSH-HERD-KIVALTAS.md`](docs/DSH-HERD-KIVALTAS.md).
 
 ## Miért volt szükség erre a könyvtárra
 
