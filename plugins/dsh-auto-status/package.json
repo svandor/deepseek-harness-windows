@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-status",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "private": true,
   "description": "Auto route állapotsáv a composer felett: a helyi proxy /healthz-ből mutatja, melyik modell szolgálja ki éppen az 'Auto' modellt.",
   "type": "module",
