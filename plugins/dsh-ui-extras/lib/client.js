@@ -5035,6 +5035,11 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
               // snapshot unconditionally is cheaper than reasoning about which
               // action touches which field.
               loadGit();
+              // FELHASZNÁLÓI KÉRÉS (2026-11-16): „az előnézetet triggerelje a
+              // commit”. A commit után a feltöltendő/törlendő lista megváltozhat
+              // (a fájlok „committed” eredetűvé válnak), ezért az FTP blokk
+              // előnézete is frissül — nem kell kézzel a ⟳ gombra kattintani.
+              if (params.action === "commit" || params.action === "push") refreshFtpPreview();
               if (typeof after === "function") after(body);
             } else {
               setAction({ status: "error", message: (body && body.error) || "?" });
@@ -5137,9 +5142,18 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
         return true;
       }
 
+      /**
+       * Az aktuális munkaterülethez tartozó profil előnézetének frissítése.
+       * Hívja a commit/push sikerág (felhasználói kérés: „az előnézetet
+       * triggerelje a commit”), a deploy vége és a „⟳ Előnézet” gomb.
+       */
+      function refreshFtpPreview() {
+        var profile = ftpProfileFor(props.root);
+        if (profile) loadFtpPreview(profile.id);
+      }
+
       /** A profil előnézete a Git panel blokkjához. */
-      function loadFtpPreview(profileId) {
-        if (!profileId) return;
+      function loadFtpPreview(profileId) {        if (!profileId) return;
         setFtpPreview(null);
         fetch("/ftp/preview?id=" + encodeURIComponent(profileId), { headers: { Accept: "application/json" } })
           .then(function (response) { return response.json(); })
