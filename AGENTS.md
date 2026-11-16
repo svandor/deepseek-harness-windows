@@ -305,29 +305,30 @@ Kötelező:
 
 ## 4. Változásnapló
 
-- `2026-11-16` (kilencedik kor) — **a titok-audit hamis talalata, a konzolablakok
-  VALODI oka, es a Kiadas gomb egyidejussege.** (1) **A kiadas elbukott a
-  titok-kapun:** a MOSTANI faban 2 talalat volt — `tools\patch-sandbox-no-window.ps1`
-  28. es 68. sora, a `134217728` (9 jegyu) konstans, amit a minta TAJ-szamnak lat.
-  Ezt hex alak (`0x08000000`) es nev szerinti hivatkozas valtotta, igy az audit
-  0 talalat -> `exit 0` (a git-elozmenyben maradt talalat csak figyelmeztetes).
-  **Tanulsag: 9+ jegyu szamot ne irj a szkriptekbe.** (2) **A lathato `node.exe`
-  konzolablakok valodi oka:** a `CREATE_NO_WINDOW` NEM eleg — a gyermeknek igy
-  egyaltalan nincs konzolja, ezert amikor O indit konzolos programot (`node`,
-  `git`, `pwsh`), a Windows UJ, LATHATO ablakot ad neki (mert: a 13:02-es
-  ujrainditas UTAN is jottek ablakok 13:12:23-kor es 13:12:30-kor). Helyes modszer
+- `2026-11-16` (kilencedik kör) — **a titok-audit hamis találata, a konzolablakok
+  VALÓDI oka, és a Kiadás gomb egyidejűsége.** (1) **A kiadás elbukott a
+  titok-kapun:** a MOSTANI fában 2 találat volt — `tools\patch-sandbox-no-window.ps1`
+  28. és 68. sora, a `134217728` (9 jegyű) konstans, amit a minta TAJ-számnak lát.
+  Ezt hex alak (`0x08000000`) és név szerinti hivatkozás váltotta, így az audit
+  0 találat → `exit 0` (a git-előzményben maradt találat csak figyelmeztetés).
+  **Tanulság: 9+ jegyű számot ne írj a szkriptekbe.** (2) **A látható `node.exe`
+  konzolablakok valódi oka:** a `CREATE_NO_WINDOW` NEM elég — a gyermeknek így
+  egyáltalán nincs konzolja, ezért amikor Ő indít konzolos programot (`node`,
+  `git`, `pwsh`), a Windows ÚJ, LÁTHATÓ ablakot ad neki (mért: a 13:02-es
+  újraindítás UTÁN is jöttek ablakok 13:12:23-kor és 13:12:30-kor). Helyes módszer
   (ezt teszi a Node `windowsHide` is): `STARTUPINFOW` `dwFlags = 256 | 1`
-  (`STARTF_USESHOWWINDOW`) + `wShowWindow = 0` (`SW_HIDE`), a letrehozasi jelzok
+  (`STARTF_USESHOWWINDOW`) + `wShowWindow = 0` (`SW_HIDE`), a létrehozási jelzők
   maradnak az eredetiek (`0`, `4`, `1028`) — a rejtett konzolt a gyermekek
-  OROKLIK. `tools\patch-sandbox-no-window.ps1` ezt alkalmazza, a korabbi hibas
-  foltot visszaforditja, idempotens (`-Check` OK), DSH-frissites utan ujrafuttathato.
-  (3) **A Kiadas gomb egyidejussege:** a futas tenyet eddig a statusz-fajl pid-je
-  dontotte el, a pid viszont a hostbol nem mindig ellenorizheto -> a gomb ujra aktiv
-  lett egy FUTÓ kiadas mellett. Most a host `inFlight` mezot ad (allapot + 45 perces
-  eletkor), a panel nyitaskor `probeRelease()`-szel kerdez ra, a gomb addig inaktiv
-  („Kedas fut…" -> „Kedas fut…", `gitReleaseBusy`), a spawn hibaja is nyomot hagy.
-  (4) **A dupla hibaüzenet megszunt:** a vegleges uzenet (kesz/hiba) CSAK az also
-  sorban jelenik meg, a felso sor csak a folyamatjelzest (ora) mutatja.
+  ÖRÖKLIK. `tools\patch-sandbox-no-window.ps1` ezt alkalmazza, a korábbi hibás
+  foltot visszafordítja, idempotens (`-Check` OK), DSH-frissítés után újrafuttatható.
+  (3) **A Kiadás gomb egyidejűsége:** a futás tényét eddig a státusz-fájl pid-je
+  döntötte el, a pid viszont a hostból nem mindig ellenőrizhető → a gomb újra aktív
+  lett egy FUTÓ kiadás mellett. Most a host `inFlight` mezőt ad (állapot + 45 perces
+  életkor), a panel nyitáskor `probeRelease()`-szel kérdez rá, a gomb addig inaktív
+  („Kiadás fut…"), a spawn hibája is nyomot hagy. (4) **A dupla hibaüzenet
+  megszűnt:** a végleges üzenet (kész/hiba) CSAK az alsó sorban jelenik meg, a
+  felső sor csak a folyamatjelzést (⏳) mutatja. Az audit-blokkoló javítása után a
+  v0.2.7 kiadás lefut.
 
 - `2026-11-16` (nyolcadik kör) — **a „Kiadás" gomb teljes értékűvé tétele + v0.2.6
   kiadva.** (1) **A lánc ellenőrzése és ÉLES futtatása:** a gomb a
@@ -813,22 +814,22 @@ Kötelező:
   `esbuild` segédeket a gyökér-szűrés kiveszi. Mindkettő a **következő**
   harness-újraindításnál lép életbe.
 
-- **Korabbi korok (tomoritve; reszletek: `docs\DSH-ATADAS.md` 10.6–10.7,
-  `docs\DSH-ASZTAL-TERV.md`).** `2026-11-13` — a panelallapot kulcsai kanonikusak
-  (junction-feloldas `canonicalWorkspace()`-szel, `tools\canonicalize-panel-state.mjs`;
-  mert 14 -> 9 kulcs); a panel-futas TULELI a restartot (`state\runs.json` a
-  `command`-ot is tarolja, ketfazisu visszatoltes, `killRecoveredRun()` pid- es
-  utvonal-ellenorzessel) es bootkor automatikusan folytatodik (`autoResumeRuns()`,
-  max 8 rekord, kikapcsolas `state\no-auto-resume`); a `terminal` tool host- es
-  agens-oldala (`plugins\dsh-terminal-tool`, mailbox a `state\terminal-request.json`-on
-  at, preset-bejegyzes nelkul a modell nem latja). `2026-11-12` — a Git panel
-  commitja HU modban atment: a hook a `commit-lang: any` tracert fogadja el, a
-  hibaolvasas pedig az elso NEM ures sort veszi (a hook stderr-je ures sorral
-  kezdodik). `2026-10-31` — az X gombbal bezart ablak nem jon vissza
-  (`state\window.closed` jelolo), a launcher a nativ `DshTray.exe`-t inditja, es
-  az ujranyitott ablak nem indul feheren (3 probas kornyezet+vezerlo ciklus,
-  szoveges hibaoldal a feher helyett). `2026-10-28` — a villanas gyokere a
-  `DSH model retune daily` `.cmd` shimje volt (`fix-flashing-tasks.ps1` javitva:
-  `.cmd`-felismeres + a hianyzo `tools\run-hidden.vbs`). A helyi Ollama tilalma
-  (`2026-11-11`) es a gemma4-12b-128k memoria-meresei (`2026-11-02`) a 2. es 2.1.
-  pontban elnek tovabb.
+- **Korábbi körök (tömörítve; részletek: `docs\DSH-ATADAS.md` 10.6–10.7,
+  `docs\DSH-ASZTAL-TERV.md`).** `2026-11-13` — a panelállapot kulcsai kanonikusak
+  (junction-feloldás `canonicalWorkspace()`-szel, `tools\canonicalize-panel-state.mjs`;
+  mért 14 → 9 kulcs); a panel-futás TÚLÉLI a restartot (`state\runs.json` a
+  `command`-ot is tárolja, kétfázisú visszatöltés, `killRecoveredRun()` pid- és
+  útvonal-ellenőrzéssel) és bootkor automatikusan folytatódik (`autoResumeRuns()`,
+  max 8 rekord, kikapcsolás `state\no-auto-resume`); a `terminal` tool host- és
+  ágens-oldala (`plugins\dsh-terminal-tool`, mailbox a
+  `state\terminal-request.json`-on át, preset-bejegyzés nélkül a modell nem látja).
+  `2026-11-12` — a Git panel commitja HU módban átment: a hook a `commit-lang: any`
+  tracert fogadja el, a hibaolvasás pedig az első NEM üres sort veszi (a hook
+  stderr-je üres sorral kezdődik). `2026-10-31` — az X gombbal bezárt ablak nem jön
+  vissza (`state\window.closed` jelölő), a launcher a natív `DshTray.exe`-t indítja,
+  és az újranyitott ablak nem indul fehéren (3 próbás környezet+vezérlő ciklus,
+  szöveges hibaoldal a fehér helyett). `2026-10-28` — a villanás gyökere a
+  `DSH model retune daily` `.cmd` shimje volt (`fix-flashing-tasks.ps1` javítva:
+  `.cmd`-felismerés + a hiányzó `tools\run-hidden.vbs`). A helyi Ollama tilalma
+  (`2026-11-11`) és a gemma4-12b-128k memória-mérései (`2026-11-02`) a 2. és 2.1.
+  pontban élnek tovább.
