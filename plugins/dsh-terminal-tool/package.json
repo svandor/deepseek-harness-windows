@@ -1,6 +1,6 @@
 {
   "name": "dsh-terminal-tool",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "private": true,
   "description": "Agent-oldali `terminal` tool: a DSH beépített terminál-paneljében futtat és ír be (fájl-postafiókon keresztül, síkfüggetlenül).",
   "type": "module",
