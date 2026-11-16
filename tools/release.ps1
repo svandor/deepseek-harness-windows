@@ -63,8 +63,22 @@ $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $versionFile = Join-Path $root 'VERSION'
 $pluginRoot = Join-Path $root 'plugins'
 
-function Fail([string]$text) { Write-Host "HIBA: $text" -ForegroundColor Red; exit 1 }
+function Fail([string]$text) { Write-Host "HIBA: $text" -ForegroundColor Red; Stop-ReleaseLog; exit 1 }
 function Step([string]$text) { Write-Host "==> $text" -ForegroundColor Cyan }
+
+# Kiadási napló: a Git panel „Kiadás" gombja LEVÁLASZTOTT folyamatban futtat
+# (`stdio: ignore`), ezért a kimenet egyébként nyomtalanul elveszne — egy elbukott
+# kiadás (titok-audit kapu, `gh` hiba, push) okát senki nem látná. A szkript ezért
+# MAGA naplóz: `state\release-log.txt` (2 MB fölött rotál).
+function Stop-ReleaseLog { try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { } }
+try {
+    $logDir = Join-Path $root 'state'
+    if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+    $logFile = Join-Path $logDir 'release-log.txt'
+    if ((Test-Path $logFile) -and ((Get-Item $logFile).Length -gt 2MB)) { Remove-Item $logFile -Force }
+    Start-Transcript -Path $logFile -Append | Out-Null
+    Write-Host "Kiadási napló: $logFile"
+} catch { }
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Fail 'nincs git a PATH-on' }
 if (-not (Test-Path (Join-Path $root '.git'))) { Fail "nem git repó: $root" }
@@ -232,9 +246,40 @@ git -C $root push origin $tag | ForEach-Object { Write-Host "  $_" }
 # --- 7) GitHub Release ---------------------------------------------------------
 Step "GitHub Release: $tag"
 $prevTag = (git -C $root tag -l 'v*' | Where-Object { $_ -ne $tag } | Sort-Object { [version]($_ -replace '^v', '') } | Select-Object -Last 1)
-$ghArgs = @('release', 'create', $tag, '--title', $tag, '--generate-notes')
-if ($prevTag) { $ghArgs += @('--notes-start-tag', $prevTag); Write-Host "  jegyzetek: $prevTag..$tag" }
-if ($Message) { $ghArgs += @('--notes', $Message) }
+
+# JEGYZETEK: a `--generate-notes` egy PR-alapú repóban hasznos, itt viszont csak
+# a „Full Changelog" sort adta (MÉRT: v0.2.6 kiadás jegyzete ennyi volt), tehát a
+# felhasználó nem látta, mi az új. Ezért a commitokból magunk írjuk a listát.
+$notes = $Message
+if (-not $notes) {
+    $range = if ($prevTag) { "$prevTag..HEAD" } else { 'HEAD' }
+    $subjects = @(git -C $root log --no-merges --pretty=format:'%s' $range)
+    $body = New-Object System.Text.StringBuilder
+    [void]$body.AppendLine("## Mi új ebben: $tag")
+    [void]$body.AppendLine('')
+    foreach ($subject in $subjects) {
+        if ([string]::IsNullOrWhiteSpace($subject)) { continue }
+        [void]$body.AppendLine("- $subject")
+    }
+    [void]$body.AppendLine('')
+    [void]$body.AppendLine('## Telepítés')
+    [void]$body.AppendLine("- **Hordozható:** ``DeepSeek-Harness-$($tag -replace '^v','')-portable.zip``")
+    [void]$body.AppendLine("- **Telepítő:** ``DeepSeek-Harness-Setup-$($tag -replace '^v','').exe`` (a csatolt EXE)")
+    if ($prevTag) {
+        [void]$body.AppendLine('')
+        [void]$body.AppendLine("**Teljes változáslista:** https://github.com/svandor/deepseek-harness-windows/compare/$prevTag...$tag")
+    }
+    $notes = $body.ToString()
+}
+
+$ghArgs = @('release', 'create', $tag, '--title', $tag)
+if ($notes) {
+    $ghArgs += @('--notes', $notes)
+} else {
+    $ghArgs += '--generate-notes'
+    if ($prevTag) { $ghArgs += @('--notes-start-tag', $prevTag) }
+}
+if ($prevTag) { Write-Host "  jegyzetek: a commitokbol ($prevTag..$tag)" }
 & gh @ghArgs
 if ($LASTEXITCODE -ne 0) { Fail "a gh release create nem sikerült (exit $LASTEXITCODE) — a tag és a push már fenn van" }
 
@@ -250,3 +295,4 @@ if ($assets.Count -gt 0) {
 Write-Host ''
 Write-Host "KÉSZ: $tag kiadva." -ForegroundColor Green
 Write-Host "  https://github.com/svandor/deepseek-harness-windows/releases/tag/$tag"
+Stop-ReleaseLog
