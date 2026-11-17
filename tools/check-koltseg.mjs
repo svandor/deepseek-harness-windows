@@ -29,6 +29,7 @@ import { billableTime, presetProfile } from "../plugins/dsh-koltseg/lib/engine/p
 import { decompressSessionLog, parseSessionText, sessionLogFiles, sessionsRoot } from "../plugins/dsh-koltseg/lib/engine/scan.js";
 import { dayStart, daysAgoStart, nextDayStart } from "../plugins/dsh-koltseg/lib/engine/time.js";
 import { deriveSession } from "../plugins/dsh-koltseg/lib/engine/turns.js";
+import { scanUsage } from "../plugins/dsh-ui-extras/lib/index.js";
 import { readFileSync } from "node:fs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -138,6 +139,7 @@ else {
     console.log(`  agent (szerver oldali munka) : ${hours(result.components.agentMs)}`);
     console.log(`  olvasás (emberi)             : ${hours(result.components.readMs)}`);
     console.log(`  gépelés (emberi)             : ${hours(result.components.typeMs)}`);
+    console.log(`    ebből szövegből becsült    : ${hours(result.components.typeEstimatedMs || 0)}`);
     console.log(`  háttérmunka                  : ${hours(result.components.jobsMs)}`);
     console.log(`  valós aktív idő (unió)       : ${hours(result.components.wallMs)}`);
     console.log(`  elszámolható                 : ${result.minutes.toFixed(1)} perc`);
@@ -163,6 +165,35 @@ else {
   if (!workspaces.some((entry) => entry.path.toLowerCase() === workspace.toLowerCase())) {
     fail("a saját munkaterület nem szerepel a naplókból készült listában");
   } else ok("a munkaterület megtalálható a listában");
+
+  // ── 4b) gépelés a beírt szövegből (2026-11-17) ─────────────────────────
+  const typed = Number.isFinite(result.components.typeEstimatedMs) ? result.components.typeEstimatedMs : null;
+  if (typed === null) fail("a válaszból hiányzik a typeEstimatedMs (a becslés nem futott)");
+  else if (typed > 0) ok(`gépelés-becslés a beírt szövegből: ${hours(typed)}`);
+  else ok("gépelés-becslés: nincs becsülhető szöveg ebben az időszakban");
+  if (typed !== null && typed > 0 && result.components.typeMs + 1 < typed) {
+    fail("a becsült gépelés nagyobb, mint a teljes gépelés komponens");
+  }
+
+  // ── 4c) a token-sor munkaterület-szűrése és a cache-kedvezmény ─────────
+  // MÉRT HIBA (2026-11-17): a panel a TELJES deployment 30 napos költségét
+  // mutatta (2 session-höz $133.76 a $0.62 helyett). Itt ellenőrizzük, hogy a
+  // szűrt szám kisebb a globálisnál, és hogy a cache-kedvezmény ki van mondva.
+  const scoped = await scanUsage(days, null, workspace);
+  const global = await scanUsage(days, null, "");
+  if (scoped.totals.costUsd > global.totals.costUsd + 1e-9) {
+    fail("a munkaterület-szűrt token-költség nagyobb a globálisnál");
+  } else {
+    ok(`token-költség a munkaterületre: $${scoped.totals.costUsd.toFixed(4)} (globális: $${global.totals.costUsd.toFixed(4)})`);
+  }
+  if (scoped.cache.hitTokens > 0 && scoped.cache.discountPercent < 50) {
+    fail(`a cache-kedvezmény nem érvényesül (${scoped.cache.discountPercent}%)`);
+  } else if (scoped.cache.hitTokens > 0) {
+    ok(`cache-kedvezmény érvényesül: ${scoped.cache.discountPercent}% (megtakarítás $${scoped.cache.savedUsd.toFixed(4)})`);
+  }
+  if (!json) {
+    console.log(`  token: ${scoped.totals.requests} kérés, cache-találat ${(scoped.cache.hitTokens / 1e6).toFixed(1)} M token`);
+  }
 }
 
 // ── összegzés ─────────────────────────────────────────────────────────────

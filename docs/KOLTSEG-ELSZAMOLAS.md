@@ -52,7 +52,7 @@ nem számolunk el:
 | Szerver oldali munkaidő | `turn/start` → `turn/end` a tartós session-naplóból (a helyi Ollama is benne) |
 | Háttérmunkák | a panelek terminál-futásai (`state\runs.json`), **becslés** |
 | Olvasás | a kör vége és az első billentyű között |
-| Gépelés | az első billentyű és a következő kör kezdete között |
+| Gépelés | az első billentyű és a következő kör kezdete között; kliens-adat nélkül a **beírt prompt hosszából becsülve** (lásd 4. pont) |
 | Valós aktív idő | a körök uniója, rövid résekkel összefűzve |
 
 Alatta a **végösszeg**: elszámolható idő, nettó Ft, (kapcsolható) ÁFA, bruttó.
@@ -96,6 +96,15 @@ Két szinten; a felület a mérés alján kiírja, melyik élt:
    A rejtett lapon töltött idő kimarad; ha a szünetben nincs aktivitás, az
    „távol” (0), nem becsüljük felülre.
    Szöveget **nem** küldünk — csak időbélyegeket.
+3. **Szöveg-alapú gépelés-becslés (visszamenőleg is működik):** a session-napló
+   tartalmazza a **felhasználó által beírt** prompt hosszát, ebből a gépelés
+   ideje becsülhető: `hossz / 150 leütés-perc` (a tempó profil-szintű,
+   `typingCharsPerMinute`). Csak a **hossz** olvasódik, a szöveg nem; a rövid
+   prompt (12 karakter alatt, pl. „ok”) nem számít, és a becslés soha nem
+   nagyobb a rendelkezésre álló szünetnél, a tétlenség-plafonnál, illetve a
+   kliens-mért gépelésnél (érvényes: `max(mért, becsült)`). Ezt a részt a
+   panel „becsült (a beírt szövegből)” jelöléssel mutatja, a mérés jegyzetei
+   pedig kiírják a perceket.
 
 Ha nincs kliens-adat (másik kliens, terminálból indított session), a mérés
 automatikusan az 1. szintre esik vissza, és ezt ki is írja.
@@ -109,7 +118,11 @@ automatikusan az 1. szintre esik vissza, és ezt ki is írja.
   munkafolyamatonként), magyar formátumban (pontosvessző, tizedesvessző).
 - **ÁFA:** kapcsoló a végösszegen (alapból kikapcsolva, 27%).
 - **Token/API önköltség:** kapcsoló; külön sorban mutatja a becsült USD
-  tokenköltséget (a meglévő `/ui-extras/usage` adataiból). Az óradíj alapból
+  tokenköltséget (a meglévő `/ui-extras/usage` adataiból), **a kiválasztott
+  munkaterületre szűrve** (a session-hatókör a saját session számát használja).
+  Alatta a **cache-kedvezmény kimondva**: hány token volt cache-találat, hány
+  százalék a kedvezmény (a DeepSeek-flash találati ár a miss-ár 2%-a → 98%),
+  és mennyit hozott — enélkül a szám ellenőrizhetetlen. Az óradíj alapból
   magában foglalja a tokeneket — ez a sor csak kimutatás.
 
 ## 6. Konfiguráció

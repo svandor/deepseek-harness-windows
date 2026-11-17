@@ -55,7 +55,7 @@ visible what is *not* being billed:
 | Server-side work time | `turn/start` → `turn/end` from the durable session log (local Ollama included) |
 | Background jobs | the panels' terminal runs (`state\runs.json`), an **estimate** |
 | Reading | between the end of a turn and the first keystroke |
-| Typing | between the first keystroke and the start of the next turn |
+| Typing | between the first keystroke and the start of the next turn; without client data it is **estimated from the typed prompt length** (see section 4) |
 | Real active time | the union of the turns, merged across short gaps |
 
 Below that the **total**: billable time, net HUF, (toggleable) VAT, gross.
@@ -101,9 +101,17 @@ At two levels; the bottom of the window states which one was used:
    **typing** figure. Time on a hidden tab is excluded; if there is no activity
    during a gap it is "away" (0) rather than estimated upwards.
    No text is sent — only timestamps.
+3. **Text-based typing estimate (works retroactively too):** the session log
+   carries the length of the prompt the **user typed**, so typing time can be
+   estimated: `length / 150 characters per minute` (the pace is a profile field,
+   `typingCharsPerMinute`). Only the **length** is read, never the text; a short
+   prompt (under 12 characters, e.g. "ok") does not count, and the estimate never
+   exceeds the available gap, the idle cap, or the client-measured typing
+   (effective value: `max(measured, estimated)`). The panel marks that portion as
+   "estimated (from the typed text)" and the measurement notes state the minutes.
 
 Without client data (another client, a session started from a terminal) the
-measurement falls back to level 1 automatically and says so.
+measurement falls back to levels 1 and 3 automatically and says so.
 
 ## 5. Freezing and export
 
@@ -114,8 +122,13 @@ measurement falls back to level 1 automatically and says so.
   format (semicolon, decimal comma).
 - **VAT:** a toggle on the total (off by default, 27%).
 - **Token/API material cost:** a toggle; shows the estimated USD token cost in a
-  separate line (from the existing `/ui-extras/usage` data). The hourly rate
-  already covers tokens by default — this line is informational only.
+  separate line (from the existing `/ui-extras/usage` data), **filtered to the
+  selected workspace** (the session scope uses that one session's own figures).
+  Below it the **cache discount is stated explicitly**: how many tokens were
+  cache hits, what percentage the discount is (the DeepSeek-flash hit price is 2%
+  of the miss price → 98%), and how much it saved — without that the number is
+  unverifiable. The hourly rate already covers tokens by default — this line is
+  informational only.
 
 ## 6. Configuration
 

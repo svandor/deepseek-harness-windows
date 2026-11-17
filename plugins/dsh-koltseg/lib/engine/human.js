@@ -124,7 +124,7 @@ export function readActivity(stateDir, since) {
     if (session.length === 0) continue;
     let bucket = bySession.get(session);
     if (bucket === undefined) {
-      bucket = { keys: [], hidden: [], firstAt: 0, lastAt: 0, any: 0 };
+      bucket = { keys: [], pointers: [], hidden: [], firstAt: 0, lastAt: 0, any: 0 };
       bySession.set(session, bucket);
     }
     bucket.any += 1;
@@ -133,6 +133,7 @@ export function readActivity(stateDir, since) {
     if (row.at < since) continue;
     const interval = { start: row.at, end: Number.isFinite(row.to) ? row.to : row.at };
     if (row.kind === "key") bucket.keys.push(interval);
+    else if (row.kind === "pointer") bucket.pointers.push(interval);
     else if (row.kind === "hidden") bucket.hidden.push(interval);
     total += 1;
   }
@@ -141,6 +142,41 @@ export function readActivity(stateDir, since) {
 
 /** A mérő kliens élt-e a kérdéses időszak körül (12 órás tűrés). */
 const ACTIVITY_TRUST_MILLISECONDS = 12 * 3600000;
+
+/**
+ * Alap gépelési sebesség a SZÖVEG-ALAPÚ becsléshez (leütés / perc).
+ *
+ * MIÉRT (2026-11-17, a felhasználó kérése): „a gépelés idejét rosszul számolja
+ * … a beírt szövegből visszamenőleg is lehetne kalkulálni”. A kliens-oldali
+ * aktivitás-mérés csak a MOST futó felületre él, ezért a korábbi időszakokra 0
+ * gépelés jött ki (mért: 4,8 perc 2492 perc olvasás mellett). A beírt prompt
+ * HOSSZA viszont a naplóban visszamenőleg is megvan: 150 leütés/perc egy
+ * óvatos, kétkezes gépelési tempó (kb. 30 szó/perc).
+ */
+export const TYPING_CHARS_PER_MINUTE = 150;
+
+/** Ez alatt a hossz alatt nincs értelme becsülni („ok”, „folytasd”, „igen”). */
+export const MIN_TYPING_CHARS = 12;
+
+/** Egy prompt beírásának felső becslése (a szöveg nem lehet órákig tartó gépelés). */
+const MAX_TYPING_ESTIMATE_MS = 30 * 60000;
+
+/**
+ * Gépelési idő becslése a beírt szöveg hosszából.
+ *
+ * @param {number} chars a prompt hossza karakterben
+ * @param {number} charsPerMinute a tempó (a profilból; 0/érvénytelen -> alap)
+ * @param {number} capMs felső korlát (a rendelkezésre álló szünet)
+ * @returns {number} becsült gépelési idő ms-ban (0, ha nincs értelmes szöveg)
+ */
+export function typingEstimateMs(chars, charsPerMinute, capMs) {
+  const length = Number.isFinite(chars) && chars > 0 ? chars : 0;
+  if (length < MIN_TYPING_CHARS) return 0;
+  const cpm = Number.isFinite(charsPerMinute) && charsPerMinute > 0 ? charsPerMinute : TYPING_CHARS_PER_MINUTE;
+  const raw = (length / cpm) * 60000;
+  const cap = Number.isFinite(capMs) && capMs > 0 ? capMs : MAX_TYPING_ESTIMATE_MS;
+  return Math.min(raw, cap);
+}
 
 /**
  * A mérés eldöntése: a kliens-adat használható-e erre a szünetre?
@@ -174,9 +210,16 @@ export function humanTime(session, activity, profile, window) {
   const items = [];
   let readMs = 0;
   let typeMs = 0;
+  let estimatedTypeMs = 0;
   let gapMs = 0;
   let clientUsed = 0;
   let fallbackUsed = 0;
+  // A szöveg-alapú gépelés-becslés tempója (a profilból; 0 -> alapérték).
+  const charsPerMinute = Number.isFinite(profile?.typingCharsPerMinute) && profile.typingCharsPerMinute > 0
+    ? profile.typingCharsPerMinute
+    : TYPING_CHARS_PER_MINUTE;
+  // `0` = nincs plafon (a profil 0-t is enged), ezért külön kezeljük.
+  const capOrInfinity = (value) => (Number.isFinite(value) && value > 0 ? value : Number.POSITIVE_INFINITY);
 
   // Csak a LEZÁRT körök párosíthatók: a nyitott kör után még nincs „következő".
   for (let i = 0; i < turns.length - 1; i += 1) {
@@ -190,6 +233,12 @@ export function humanTime(session, activity, profile, window) {
     const length = gapEnd - gapStart;
     gapMs += length;
 
+    // GÉPELÉS-BECSLÉS A BEÍRT SZÖVEGBŐL (2026-11-17, felhasználói kérés):
+    // a következő kört kiváltó prompt hossza a naplóban visszamenőleg is megvan,
+    // ezért a kliens-mérés hiányában is becsülhető a gépelés ideje.
+    const typedChars = Number.isFinite(next.promptChars) ? next.promptChars : 0;
+    const estimate = typingEstimateMs(typedChars, charsPerMinute, Math.min(length, capOrInfinity(idleCap)));
+
     const hasActivity = activityTrusted(activity, gapEnd);
     if (!hasActivity) {
       fallbackUsed += 1;
@@ -197,8 +246,25 @@ export function humanTime(session, activity, profile, window) {
       // 0, nem pedig a plafonig felbecsült érték. Ez a konzervatív irány, és a
       // felhasználó szabálya is („a hosszabb szünet nem számít”).
       const counted = idleCap > 0 && length > idleCap ? 0 : length;
-      readMs += counted;
-      items.push({ turn: current.turn, gapMs: length, readMs: counted, typeMs: 0, source: counted > 0 ? "fallback" : "away" });
+      if (counted === 0) {
+        items.push({ turn: current.turn, gapMs: length, readMs: 0, typeMs: 0, source: "away" });
+        continue;
+      }
+      // A szünet összes ideje a rendelkezésre álló keret; a GÉPELÉS a beírt
+      // szövegből becsült rész, a maradék az olvasás (a kettő nem duplázódik).
+      const typing = Math.min(estimate, counted);
+      const reading = counted - typing;
+      readMs += reading;
+      typeMs += typing;
+      if (typing > 0) estimatedTypeMs += typing;
+      items.push({
+        turn: current.turn,
+        gapMs: length,
+        readMs: reading,
+        typeMs: typing,
+        source: "fallback",
+        estimated: typing > 0,
+      });
       continue;
     }
 
@@ -206,30 +272,53 @@ export function humanTime(session, activity, profile, window) {
     const hidden = clip(activity.hidden, gapStart, gapEnd);
     const visible = subtract([{ start: gapStart, end: gapEnd }], hidden);
     const visibleMs = visible.reduce((sum, interval) => sum + (interval.end - interval.start), 0);
-    const keys = clip(activity.keys, gapStart, gapEnd);
+    const keys = clip(activity.keys ?? [], gapStart, gapEnd);
+    // 2026-11-17: az OLVASÁS jelenléte nem csak billentyű lehet. A mérő a
+    // `pointer` (egér/görgetés) vödröket is rögzíti — olvasás közben az ember
+    // görget és mozgatja az egeret, gépelni viszont nem feltétlenül. Korábban a
+    // `keys.length === 0` ág „távol"-nak jelölte az ilyen szünetet, ezért lett
+    // MINDEN olvasási idő 0 (MÉRT: a 23 körös Antikolt-session minden köre
+    // `humanSource: "away"`, readMs=0, holott `activityMeasured: true`).
+    const pointers = clip(activity.pointers ?? [], gapStart, gapEnd);
 
-    if (keys.length === 0) {
+    if (keys.length === 0 && pointers.length === 0) {
       // Van aktivitás-mérés, de ebben a szünetben semmi: a felhasználó nem itt
-      // volt. Ez NEM becsülhető felülről — 0, „távol” jelöléssel.
-      items.push({ turn: current.turn, gapMs: length, readMs: 0, typeMs: 0, source: "away" });
+      // volt. A beírt szöveg viszont bizonyítja, hogy valahol gépelt — ezért a
+      // becslés marad (a „távol” nem írja felül a szöveget).
+      const typing = Math.min(estimate, length);
+      if (typing > 0) {
+        typeMs += typing;
+        estimatedTypeMs += typing;
+      }
+      items.push({ turn: current.turn, gapMs: length, readMs: 0, typeMs: typing, source: "away", estimated: typing > 0 });
       continue;
     }
 
     clientUsed += 1;
-    const typeStart = keys[0].start;
-    const read = Math.min(cappedLength(gapStart, typeStart, readCap), visibleMs);
-    // A gépelés a gépelés kezdetétől a következő körig tart, rejtett idő nélkül,
-    // a tétlenség-plafonnal vágva (hosszú gondolkodás nem gépelés).
-    const typingWindow = subtract([{ start: typeStart, end: gapEnd }], hidden);
+    // Az olvasás a válasz végétől az ELSŐ emberi jelzésig tart (billentyű VAGY
+    // egér/görgetés), a `readCap` plafonnal.
+    const firstSignal = Math.min(
+      keys.length > 0 ? keys[0].start : Number.POSITIVE_INFINITY,
+      pointers.length > 0 ? pointers[0].start : Number.POSITIVE_INFINITY,
+    );
+    const read = Math.min(cappedLength(gapStart, firstSignal, readCap), visibleMs);
+    // A gépelés a BILLENTYŰ első lenyomásától indul (egérre nem gépelünk).
+    const typeStart = keys.length > 0 ? keys[0].start : gapEnd;
+    const typingWindow = keys.length > 0 ? subtract([{ start: typeStart, end: gapEnd }], hidden) : [];
     const typingVisible = typingWindow.reduce((sum, interval) => sum + (interval.end - interval.start), 0);
-    const typing = cappedLength(typeStart, typeStart + typingVisible, idleCap);
+    const measured = keys.length > 0 ? cappedLength(typeStart, typeStart + typingVisible, idleCap) : 0;
+    // MÉRT vs BECSÜLT: a kisebb nem nyerhet (különben a kliens-mérés hiányos
+    // vödröi miatt maradna a 0), de a szünet hosszát nem léphetjük túl.
+    const room = Math.max(0, length - read);
+    const typing = Math.min(Math.max(measured, estimate), room);
+    if (typing > measured) estimatedTypeMs += typing - measured;
     readMs += read;
     typeMs += typing;
-    items.push({ turn: current.turn, gapMs: length, readMs: read, typeMs: typing, source: "client" });
+    items.push({ turn: current.turn, gapMs: length, readMs: read, typeMs: typing, source: "client", estimated: typing > measured });
   }
 
   const source = clientUsed > 0 && fallbackUsed > 0 ? "mixed" : (clientUsed > 0 ? "client" : "fallback");
-  return { items, readMs, typeMs, gapMs, source };
+  return { items, readMs, typeMs, estimatedTypeMs, gapMs, source };
 }
 
 /** Az aktivitás-mérés elérhető-e egyáltalán ebben az ablakban. */

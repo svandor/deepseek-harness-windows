@@ -234,6 +234,7 @@ export async function measure(options) {
   let agentMs = 0;
   let readMs = 0;
   let typeMs = 0;
+  let typeEstimatedMs = 0;
   let grossMs = 0;
   let openTurns = 0;
   const wallIntervals = [];
@@ -257,6 +258,7 @@ export async function measure(options) {
     })();
     const bucket = activity.bySession.get(record.id);
     const human = humanTime(recordWithClosed, bucket, profile, window);
+    typeEstimatedMs += Number.isFinite(human.estimatedTypeMs) ? human.estimatedTypeMs : 0;
     humanSources.add(human.source);
 
     agentMs += recordAgent;
@@ -275,6 +277,7 @@ export async function measure(options) {
       agentMs: recordAgent,
       readMs: human.readMs,
       typeMs: human.typeMs,
+      typeEstimatedMs: human.estimatedTypeMs,
       grossMs: recordGross,
       humanSource: human.source,
       activityMeasured: activityPresence(bucket),
@@ -294,6 +297,7 @@ export async function measure(options) {
           agentMs: turnAgent,
           readMs: item.readMs,
           typeMs: item.typeMs,
+          estimated: item.estimated === true,
           gapMs: item.gapMs,
           humanSource: item.source,
         });
@@ -331,6 +335,8 @@ export async function measure(options) {
     jobsMs: jobs.jobsMs,
     readMs,
     typeMs,
+    // A gépelés azon része, ami a BEÍRT SZÖVEGBŐL becsült (nem kliens-mérés).
+    typeEstimatedMs,
     wallMs,
     grossMs,
   };
@@ -351,6 +357,12 @@ export async function measure(options) {
     notes.push(`${delegated.length} alügynök-session (${Math.round(delegatedAgentMs / 60000)} perc) a szülő köridejében van, ezért nem duplázzuk.`);
   }
   if (jobs.count > 0) notes.push(`Háttérmunka: ${jobs.count} futás, becsült idő (a befejezés nincs naplózva).`);
+  if (typeEstimatedMs > 0) {
+    const cpm = Number.isFinite(profile.typingCharsPerMinute) && profile.typingCharsPerMinute > 0
+      ? profile.typingCharsPerMinute
+      : 150;
+    notes.push(`A gépelés ${Math.round(typeEstimatedMs / 60000)} perce a beírt promptok hosszából becsülve (${cpm} leütés/perc).`);
+  }
   if (profile.roundToMinutes === 0) notes.push("Kerekítés: percre pontos (nincs felfelé kerekítés).");
   if (billable.billableMs !== billable.rawMs) {
     notes.push(`Kerekítés/minimum: ${Math.round(billable.rawMs / 60000)} perc -> ${Math.round(billable.billableMs / 60000)} perc.`);
@@ -380,6 +392,7 @@ export async function measure(options) {
       machineToHuman: profile.machineToHuman,
       idleCapMinutes: profile.idleCapMinutes,
       readCapMinutes: profile.readCapMinutes,
+      typingCharsPerMinute: profile.typingCharsPerMinute,
       roundToMinutes: profile.roundToMinutes,
       minimumMinutes: profile.minimumMinutes,
       combine: profile.combine,

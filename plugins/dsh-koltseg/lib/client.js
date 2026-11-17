@@ -33,7 +33,7 @@ window.__ModuleLoader__.load({
     }
 
     var NS = "koltseg";
-    var BUILD = "2026-11-16.1";
+    var BUILD = "2026-11-17.2";
     var ROUTE = "/koltseg";
     var HEADER_SLOT = "conversation.session.header.utilities";
     var TRACKER_SLOT = "conversation.composer.dock";
@@ -82,6 +82,7 @@ window.__ModuleLoader__.load({
       "components.jobs": "Háttérmunkák",
       "components.humanRead": "Olvasás (válasz elolvasása)",
       "components.humanType": "Gépelés (új prompt)",
+      "components.humanType.estimated": "becsült (a beírt szövegből)",
       "components.wall": "Valós aktív idő (bruttó)",
       "components.weight": "súly",
       "components.counted": "beszámít",
@@ -97,6 +98,9 @@ window.__ModuleLoader__.load({
       "options.material": "Token/API önköltség (külön sor)",
       "options.material.note": "Az óradíj alapból magában foglalja a tokeneket; ez a sor csak kimutatás.",
       "options.material.usd": "Token költség: {usd}",
+      "options.material.cache": "Cache-találat: {hit} ({percent}% a bemenetből), {discount}% kedvezmény érvényesítve · kimenet {out} · {requests} kérés",
+      "options.material.cache.saved": "Kedvezmény nélkül {baseline} lenne — a cache ennyit hozott: {saved}.",
+      "options.material.scope": "A token-sor a kiválasztott munkaterületre/harmonikára szűrve.",
       "options.material.unavailable": "A token költség ehhez nem érhető el.",
       "actions.refresh": "Frissítés",
       "actions.freeze": "Rögzítés",
@@ -161,6 +165,7 @@ window.__ModuleLoader__.load({
       "components.jobs": "Background jobs",
       "components.humanRead": "Reading (the answer)",
       "components.humanType": "Typing (next prompt)",
+      "components.humanType.estimated": "estimated (from the typed text)",
       "components.wall": "Real active time (gross)",
       "components.weight": "weight",
       "components.counted": "counted",
@@ -176,6 +181,9 @@ window.__ModuleLoader__.load({
       "options.material": "Token/API material cost (separate line)",
       "options.material.note": "The hourly rate already covers tokens by default; this line is informational.",
       "options.material.usd": "Token cost: {usd}",
+      "options.material.cache": "Cache hits: {hit} ({percent}% of input), {discount}% discount applied · output {out} · {requests} requests",
+      "options.material.cache.saved": "Without the discount it would be {baseline} — the cache saved {saved}.",
+      "options.material.scope": "The token line is filtered to the selected workspace/session.",
       "options.material.unavailable": "Token cost is unavailable here.",
       "actions.refresh": "Refresh",
       "actions.freeze": "Freeze",
@@ -331,6 +339,24 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * Token-szám rövid alakja (`112,4 M` / `458,9 e` / `987`).
+     *
+     * MIÉRT: a token-sorban a nyers szám olvashatatlan (20544962161), a
+     * mérnöki jelölés pedig idegen a felülettől; a magyar alak ezres/hátvány
+     * tagolást használ.
+     */
+    function fmtTokens(value) {
+      var number = toNumber(value);
+      var abs = Math.abs(number);
+      var text;
+      if (abs >= 1000000000) text = String((number / 1000000000).toFixed(1)).replace(".", ",") + "\u00A0Mrd";
+      else if (abs >= 1000000) text = String((number / 1000000).toFixed(1)).replace(".", ",") + "\u00A0M";
+      else if (abs >= 10000) text = String((number / 1000).toFixed(1)).replace(".", ",") + "\u00A0e";
+      else text = groupDigits(String(Math.round(number)));
+      return text;
+    }
+
     function pad2(value) {
       return String(value).padStart(2, "0");
     }
@@ -482,6 +508,10 @@ window.__ModuleLoader__.load({
         background: "var(--dsw-alias-bg-layer-3, #242427)",
         color: "var(--dsw-alias-label-primary, #f5f5f5)",
         boxShadow: "0 18px 48px rgba(0,0,0,.5)",
+        // A natív vezérlők (legördülő lista, dátumválasztó, jelölőnégyzet,
+        // görgetősáv) így sötétek — enélkül a panel sötét hátterén világos
+        // felugró elemek jelennek meg (mért hiba, 2026-11-17).
+        colorScheme: "dark",
         fontSize: "12px",
         lineHeight: "18px",
         overflow: "hidden",
@@ -513,6 +543,34 @@ window.__ModuleLoader__.load({
         fontSize: "12px",
         padding: "3px 6px",
         minWidth: "0",
+      },
+      /**
+       * A profil-legördülő.
+       *
+       * MIÉRT KÜLÖN (2026-11-17, a felhasználó észrevétele: „rossz a legördülő
+       * sötét módja”): a natív `<select>` NEM örökli a `transparent` hátteret —
+       * a böngésző a saját (világos) festését használja, ezért a panel sötét
+       * hátterén fehér csík/listа jelent meg, olvashatatlan szöveggel. A javítás
+       * három dolog: konkrét háttér a vezérlőn, `colorScheme: "dark"` (a natív
+       * felugró listát és a görgetősávot is sötétre állítja), és a
+       * `<option>`-ökön is explicit háttér/szín (a Windows-Chrome az `option`
+       * hátterét a select-tel együtt festi).
+       */
+      select: {
+        border: "1px solid var(--dsw-alias-border-l3, rgba(255,255,255,0.22))",
+        borderRadius: "6px",
+        background: "var(--dsw-alias-bg-layer-2, #2c2c30)",
+        color: "var(--dsw-alias-label-primary, #f5f5f5)",
+        colorScheme: "dark",
+        font: "inherit",
+        fontSize: "12px",
+        padding: "3px 6px",
+        minWidth: "0",
+        maxWidth: "220px",
+      },
+      option: {
+        background: "var(--dsw-alias-bg-layer-2, #2c2c30)",
+        color: "var(--dsw-alias-label-primary, #f5f5f5)",
       },
       chip: {
         border: "1px solid var(--dsw-alias-border-l2, rgba(255,255,255,0.16))",
@@ -834,7 +892,12 @@ window.__ModuleLoader__.load({
         }
         var alive = true;
         var days = useRange ? 60 : 30;
-        var url = "/ui-extras/usage?days=" + String(days) + (scope === "session" && sessionId.length > 0 ? "&session=" + encodeURIComponent(sessionId) : "");
+        // MUNKATERÜLET-SZŰRÉS (2026-11-17, mért hiba): enélkül a token-sor a
+        // TELJES deployment 30 napos költségét mutatta a kiválasztott
+        // munkaterület helyett (mért: 2 session / $0.62 helyett $133.76).
+        var url = "/ui-extras/usage?days=" + String(days)
+          + (scope === "session" && sessionId.length > 0 ? "&session=" + encodeURIComponent(sessionId) : "")
+          + (workspace.length > 0 ? "&workspace=" + encodeURIComponent(workspace) : "");
         getJson(url)
           .then(function (data) {
             if (!alive) return;
@@ -842,17 +905,29 @@ window.__ModuleLoader__.load({
               setMaterial({ status: "unavailable", usd: 0, error: "" });
               return;
             }
-            var usd = 0;
-            if (scope === "session") usd = data.session && typeof data.session.costUsd === "number" ? data.session.costUsd : 0;
-            else usd = data.totals && typeof data.totals.costUsd === "number" ? data.totals.costUsd : 0;
-            setMaterial({ status: "ready", usd, error: "" });
+            // A session-hatókör a saját session számát használja, a
+            // munkaterület-hatókör a (szűrt) összesítést.
+            var stats = scope === "session" && data.session ? data.session : data.totals;
+            var usd = stats && typeof stats.costUsd === "number" ? stats.costUsd : 0;
+            setMaterial({
+              status: "ready",
+              usd,
+              error: "",
+              requests: stats && typeof stats.requests === "number" ? stats.requests : 0,
+              missTokens: stats && typeof stats.miss === "number" ? stats.miss : 0,
+              hitTokens: stats && typeof stats.hit === "number" ? stats.hit : 0,
+              outTokens: stats && typeof stats.out === "number" ? stats.out : 0,
+              // A cache-kedvezmény tényleges hatása (a host számolja).
+              cache: data.cache && typeof data.cache === "object" ? data.cache : null,
+              scoped: typeof data.workspace === "string" && data.workspace.length > 0,
+            });
             return undefined;
           })
           .catch(function () {
             if (alive) setMaterial({ status: "unavailable", usd: 0, error: "" });
           });
         return function () { alive = false; };
-      }, [configStatus.status, configStatus.data, scope, sessionId, useRange]);
+      }, [configStatus.status, configStatus.data, scope, sessionId, useRange, workspace]);
 
       var config = configStatus.status === "ready" && configStatus.data ? configStatus.data : null;
       var profiles = config && Array.isArray(config.profiles) ? config.profiles : [];
@@ -966,7 +1041,7 @@ window.__ModuleLoader__.load({
         { key: "agent", label: t("components.agent"), ms: data.components.agentMs, weight: data.profile.weights.agent, value: data.contributions.agent },
         { key: "jobs", label: t("components.jobs"), ms: data.components.jobsMs, weight: data.profile.weights.jobs, value: data.contributions.jobs },
         { key: "humanRead", label: t("components.humanRead"), ms: data.components.readMs, weight: data.profile.weights.humanRead, value: data.contributions.humanRead },
-        { key: "humanType", label: t("components.humanType"), ms: data.components.typeMs, weight: data.profile.weights.humanType, value: data.contributions.humanType },
+        { key: "humanType", label: t("components.humanType"), ms: data.components.typeMs, weight: data.profile.weights.humanType, value: data.contributions.humanType, hint: toNumber(data.components.typeEstimatedMs) > 0 ? t("components.humanType.estimated") : "" },
         { key: "wall", label: t("components.wall"), ms: data.components.wallMs, weight: data.profile.weights.wall, value: data.contributions.wall },
       ];
 
@@ -1046,13 +1121,13 @@ window.__ModuleLoader__.load({
       body.push(h("div", { key: "profile", style: { ...S.row, marginTop: "6px" } },
         h("span", { style: S.label }, t("profile.label")),
         h("select", {
-          style: { ...S.input, maxWidth: "220px" },
+          style: S.select,
           value: profileId,
           onChange: function (event) { chooseProfile(event.target.value); },
         },
-          h("option", { value: "" }, data !== null ? data.profile.name : "–"),
+          h("option", { value: "", style: S.option }, data !== null ? data.profile.name : "–"),
           profiles.map(function (entry) {
-            return h("option", { key: entry.id, value: entry.id }, entry.name);
+            return h("option", { key: entry.id, value: entry.id, style: S.option }, entry.name);
           }),
         ),
         data !== null
@@ -1091,7 +1166,7 @@ window.__ModuleLoader__.load({
                     h("div", { style: S.note },
                       "×" + String(row.weight).replace(".", ",") + " · " +
                       (counted ? t("components.counted") : t("components.notCounted")) +
-                      (row.weight > 0 ? "" : "")),
+                      (row.hint ? " · " + row.hint : "")),
                   ),
                   h("td", { style: S.tdNum }, fmtMinutes(row.ms) + " p"),
                   h("td", { style: S.tdNum, opacity: counted ? 1 : 0.45 }, fmtMinutes(row.value) + " p"),
@@ -1159,6 +1234,32 @@ window.__ModuleLoader__.load({
             material.status === "ready"
               ? t("options.material.usd", { usd: fmtUsd(material.usd) })
               : t("options.material.unavailable")));
+          // A cache-kedvezmény KIMONDVA (2026-11-17, felhasználói észrevétel:
+          // „a 98% cache kedvezményt nem vonja le”). A kedvezmény érvényesül,
+          // de eddig nem lehetett ellenőrizni — most a cache-elt bemenet, a
+          // százalék és a tényleges megtakarítás is látszik.
+          if (material.status === "ready" && material.cache && toNumber(material.hitTokens) > 0) {
+            var inputTokens = toNumber(material.missTokens) + toNumber(material.hitTokens);
+            var hitPercent = inputTokens > 0 ? Math.round((toNumber(material.hitTokens) / inputTokens) * 100) : 0;
+            body.push(h("div", { key: "material-cache", style: S.note },
+              t("options.material.cache", {
+                hit: fmtTokens(material.hitTokens),
+                percent: String(hitPercent),
+                discount: String(toNumber(material.cache.discountPercent)),
+                out: fmtTokens(material.outTokens),
+                requests: String(toNumber(material.requests)),
+              })));
+            if (toNumber(material.cache.baselineUsd) > 0) {
+              body.push(h("div", { key: "material-cache-saved", style: S.note },
+                t("options.material.cache.saved", {
+                  baseline: fmtUsd(material.cache.baselineUsd),
+                  saved: fmtUsd(material.cache.savedUsd),
+                })));
+            }
+          }
+          if (material.status === "ready" && material.scoped === true) {
+            body.push(h("div", { key: "material-scope", style: S.note }, t("options.material.scope")));
+          }
           body.push(h("div", { key: "material-note", style: S.note }, t("options.material.note")));
         }
 
@@ -1209,7 +1310,7 @@ window.__ModuleLoader__.load({
                     h("td", { style: S.td }, fmtStamp(row.start)),
                     h("td", { style: S.tdNum }, fmtMinutes(row.agentMs)),
                     h("td", { style: S.tdNum }, row.humanSource === "edge" ? "–" : fmtMinutes(row.readMs)),
-                    h("td", { style: S.tdNum }, row.humanSource === "edge" ? "–" : fmtMinutes(row.typeMs)),
+                    h("td", { style: S.tdNum }, row.humanSource === "edge" ? "–" : (fmtMinutes(row.typeMs) + (row.estimated ? "\u00A0*" : ""))),
                   );
                 }),
               ),
@@ -1796,7 +1897,7 @@ window.__ModuleLoader__.load({
     exports.ActivityTracker = ActivityTracker;
     exports.PanelBoundary = PanelBoundary;
     exports.reportEvent = reportEvent;
-    exports.__util = { groupDigits: groupDigits, digitsOnly: digitsOnly };
+    exports.__util = { groupDigits: groupDigits, digitsOnly: digitsOnly, fmtTokens: fmtTokens, fmtUsd: fmtUsd };
     exports.__dict = { hu: HU, en: EN };
     exports.__constants = { NS, HEADER_SLOT, TRACKER_SLOT, INPUT_DOCK_SLOT, HEADER_ID, HEADER_ORDER, BUILD, ROUTE };
     return module.exports;

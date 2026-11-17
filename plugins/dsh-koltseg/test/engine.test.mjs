@@ -10,13 +10,13 @@ import { test } from "node:test";
 import { zstdCompressSync } from "node:zlib";
 import { measure, sessionList, samePath, turnIntervals, workspaceList } from "../lib/engine/calc.js";
 import { canonicalWorkspace, defaultConfig, normalizeConfig, profileOf, resolveRate } from "../lib/engine/config.js";
-import { appendActivity, humanTime, readActivity } from "../lib/engine/human.js";
+import { appendActivity, humanTime, readActivity, typingEstimateMs } from "../lib/engine/human.js";
 import { clip, sumMs, subtract, totalMs, union, unionWithSlack } from "../lib/engine/intervals.js";
 import { appendLedger, ledgerCsv, readLedger, removeLedger } from "../lib/engine/ledger.js";
 import { DEFAULT_PROFILE_ID, PRESET_PROFILES, billableTime, grossHuf, amountHuf, normalizeProfile, presetProfile } from "../lib/engine/profile.js";
 import { decompressSessionLog, parseSessionText } from "../lib/engine/scan.js";
 import { dayOf, dayStart, nextDayStart, today } from "../lib/engine/time.js";
-import { deriveSession } from "../lib/engine/turns.js";
+import { deriveSession, promptCharacters } from "../lib/engine/turns.js";
 
 const MINUTE = 60000;
 
@@ -111,6 +111,35 @@ function sessionEvents(options) {
     const start = turn.start;
     const end = turn.end;
     events.push({ type: "turn/start", seq: seq++, time: start, data: { turn: turn.turn } });
+    // A beírt prompt: a valóságban ~30 ms-mal a `turn/start` UTÁN jön, és a
+    // `source.kind === "user"` különbözteti meg a befecskendezett szövegektől.
+    if (Number.isFinite(turn.promptChars) && turn.promptChars > 0) {
+      events.push({
+        type: "user/message",
+        seq: seq++,
+        time: start + 30,
+        data: {
+          role: "user",
+          id: `msg-${seq}`,
+          source: { kind: "user" },
+          content: [{ type: "text", text: "x".repeat(turn.promptChars) }],
+        },
+      });
+    }
+    // Befecskendezett (NEM gépelt) szöveg: emlékeztető/alügynök-értesítő.
+    if (Number.isFinite(turn.systemChars) && turn.systemChars > 0) {
+      events.push({
+        type: "user/message",
+        seq: seq++,
+        time: start + 40,
+        data: {
+          role: "user",
+          id: `sys-${seq}`,
+          source: { kind: "agent-instructions", form: "instructions" },
+          content: [{ type: "text", text: "y".repeat(turn.systemChars) }],
+        },
+      });
+    }
     events.push({ type: "step/start", seq: seq++, time: start + 1000, data: { turn: turn.turn, step: 1 } });
     if (end !== null && end !== undefined) {
       events.push({ type: "assistant/message", seq: seq++, time: end - 5000, data: { turn: turn.turn, step: 1, message: {}, usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, cacheReadTokens: 0, reasoningTokens: 0 } } });
@@ -342,6 +371,98 @@ test("ha van kliens-mérés, de a szünetben nincs aktivitás, az „távol” (
   assert.equal(human.items[0].source, "away");
 });
 
+// ────────────────────────────────────── gépelés a beírt szövegből (2026-11-17)
+
+test("a beírt prompt hosszából visszamenőleg is becsül gépelést (kliens nélkül)", () => {
+  const base = Date.now() - 6 * 3600000;
+  const text = sessionEvents({
+    turns: [
+      { turn: 1, start: base, end: base + 10 * MINUTE, promptChars: 5000 },
+      // 300 karakter a 150 leütés/perc tempóval = 2 perc gépelés
+      { turn: 2, start: base + 20 * MINUTE, end: base + 30 * MINUTE, promptChars: 300 },
+    ],
+  });
+  const record = deriveSession(parseSessionText(text));
+  const window = { from: base - 3600000, to: base + 7 * 3600000 };
+  const human = humanTime(record, undefined, presetProfile("alap"), window);
+  assert.equal(human.source, "fallback");
+  assert.equal(record.turns[1].promptChars, 300);
+  // A 10 perces szünetből 2 perc gépelés, 8 perc olvasás (nem duplázódik).
+  assert.equal(human.typeMs, 2 * MINUTE);
+  assert.equal(human.readMs, 8 * MINUTE);
+  assert.equal(human.estimatedTypeMs, 2 * MINUTE);
+  assert.equal(human.items[0].estimated, true);
+  // Az első kör promptja a szünet ELŐTT volt, ezért nem a 2. szünet gépelése.
+  assert.equal(human.items[0].typeMs, 2 * MINUTE);
+});
+
+test("a befecskendezett szöveg (emlékeztető, alügynök) NEM gépelés", () => {
+  const base = Date.now() - 6 * 3600000;
+  const text = sessionEvents({
+    turns: [
+      { turn: 1, start: base, end: base + 10 * MINUTE },
+      // 60 000 karakteres rendszer-emlékeztető: ha ezt számolnánk, 400 perc
+      // gépelés jönne ki egy 10 perces szünetre.
+      { turn: 2, start: base + 20 * MINUTE, end: base + 30 * MINUTE, systemChars: 60000 },
+    ],
+  });
+  const record = deriveSession(parseSessionText(text));
+  assert.equal(record.turns[1].promptChars, 0);
+  const human = humanTime(record, undefined, presetProfile("alap"), { from: base - 3600000, to: base + 7 * 3600000 });
+  assert.equal(human.typeMs, 0);
+  assert.equal(human.readMs, 10 * MINUTE);
+});
+
+test("a becslés a szünetre és a tétlenség-plafonra is vágódik", () => {
+  // 5 000 000 karakter 150 leütés/perc-cel 33 333 perc lenne — a szünet 10 perc.
+  assert.equal(typingEstimateMs(300, 150, 10 * MINUTE), 2 * MINUTE);
+  assert.equal(typingEstimateMs(5000000, 150, 10 * MINUTE), 10 * MINUTE);
+  // Rövid prompt („ok”) alatt nincs becslés.
+  assert.equal(typingEstimateMs(8, 150, 10 * MINUTE), 0);
+  // Érvénytelen tempóra az alapérték lép.
+  assert.equal(typingEstimateMs(300, 0, 10 * MINUTE), 2 * MINUTE);
+
+  const base = Date.now() - 6 * 3600000;
+  const text = sessionEvents({
+    turns: [
+      { turn: 1, start: base, end: base + 10 * MINUTE, promptChars: 10 },
+      { turn: 2, start: base + 20 * MINUTE, end: base + 30 * MINUTE, promptChars: 5000000 },
+    ],
+  });
+  const record = deriveSession(parseSessionText(text));
+  const human = humanTime(record, undefined, presetProfile("alap"), { from: base - 3600000, to: base + 7 * 3600000 });
+  // A profil plafonja 15 perc, a szünet 10: a becslés 10 percnél áll meg.
+  assert.equal(human.typeMs, 10 * MINUTE);
+  assert.equal(human.readMs, 0);
+});
+
+test("a beírt szöveg gépelést ad akkor is, ha a kliens szerint a felhasználó „távol” volt", () => {
+  const base = Date.now() - 6 * 3600000;
+  const text = sessionEvents({
+    turns: [
+      { turn: 1, start: base, end: base + 10 * MINUTE },
+      { turn: 2, start: base + 40 * MINUTE, end: base + 50 * MINUTE, promptChars: 600 },
+    ],
+  });
+  const record = deriveSession(parseSessionText(text));
+  // Aktivitás-mérés van (a kliens élt), de ebben a szünetben nincs jelzés.
+  const activity = { keys: [{ start: base + 50 * MINUTE, end: base + 51 * MINUTE }], hidden: [], firstAt: base, lastAt: base + 51 * MINUTE, any: 2 };
+  const human = humanTime(record, activity, presetProfile("alap"), { from: base - 3600000, to: base + 7 * 3600000 });
+  assert.equal(human.readMs, 0);
+  assert.equal(human.typeMs, 4 * MINUTE); // 600 / 150 = 4 perc
+  assert.equal(human.items[0].source, "away");
+  assert.equal(human.items[0].estimated, true);
+});
+
+test("a promptCharacters csak a felhasználói szöveget számolja", () => {
+  assert.equal(promptCharacters({ source: { kind: "user" }, content: [{ type: "text", text: "abcde" }] }), 5);
+  assert.equal(promptCharacters({ content: [{ type: "text", text: "abcde" }] }), 5); // forrás nélkül: felhasználói
+  assert.equal(promptCharacters({ source: { kind: "agent-instructions" }, content: [{ type: "text", text: "abcde" }] }), 0);
+  assert.equal(promptCharacters({ source: { kind: "plugin", plugin: "x" }, content: [{ type: "text", text: "abcde" }] }), 0);
+  // Nem szöveg-blokk nem számít (kép, csatolmány).
+  assert.equal(promptCharacters({ source: { kind: "user" }, content: [{ type: "image", url: "x" }] }), 0);
+  assert.equal(promptCharacters(null), 0);
+});
 test("az aktivitás-napló írható és visszaolvasható, a hibás vödör kimarad", () => {
   const stateDir = tempDir("koltseg-state-");
   const workspace = tempDir("koltseg-ws-");

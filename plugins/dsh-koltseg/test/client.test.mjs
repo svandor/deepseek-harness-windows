@@ -336,3 +336,30 @@ test("kliens: a hero gomb a kozos gombsorba portol (nem kulon sorba)", () => {
     else globalThis.document = savedDocument;
   }
 });
+
+test("kliens: a lebegő ablak sötét színsémát és sötét legördülőt ad", () => {
+  // MÉRT HIBA (2026-11-17): a natív <select> `transparent` háttérrel FEHÉR
+  // listát rajzolt a sötét panelen. A javítás: colorScheme a panelen és a
+  // selecten, valamint konkrét háttér/szín a selecten és az option-ökön.
+  const { exported, react } = loadClient();
+  const { ctx } = makeCtx();
+  exported.apply(ctx);
+  const t = ctx.locale.bind("koltseg");
+  react.__reset();
+  const closed = exported.KoltsegButton({ t, sessionId: "session-abc" });
+  closed.props.onClick();
+  react.__rewind();
+  const opened = exported.KoltsegButton({ t, sessionId: "session-abc" });
+  const panel = opened.children[1];
+  assert.equal(panel.props.style.colorScheme, "dark", "a panel sötét színsémát kér (natív vezérlők)");
+});
+
+test("kliens: a token-szám rövid alakja olvasható (M / Mrd)", () => {
+  const { exported } = loadClient();
+  const { fmtTokens } = exported.__util;
+  assert.equal(fmtTokens(112354944), "112,4\u00A0M");
+  assert.equal(fmtTokens(20544962161), "20,5\u00A0Mrd");
+  assert.equal(fmtTokens(12345), "12,3\u00A0e");
+  assert.equal(fmtTokens(987), "987");
+  assert.equal(fmtTokens(0), "0");
+});

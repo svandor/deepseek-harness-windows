@@ -3924,6 +3924,27 @@ function requestCost(usage, model, time) {
     + out * (peak ? price.outPeak : price.outOff)) / 1000000;
 }
 
+/**
+ * A cache-elt (talált) bemenet költsége ÉS az az alap, amit cache nélkül
+ * fizetnénk (ugyanazok a tokenek a cache-MISS áron).
+ *
+ * MIÉRT (2026-11-17, felhasználói észrevétel: „a 98% cache kedvezményt nem vonja
+ * le”): a kedvezmény létezik és érvényesül (`requestCost` a `hitPeak`/`hitOff`
+ * árat használja, ami a DeepSeek-flash sorban a miss-ár 2%-a), de a panelben
+ * SEHOL nem látszott, mennyi volt a cache-elt bemenet és mennyit hozott a
+ * kedvezmény — így a szám ellenőrizhetetlennek tűnt. Ezért a válasz kiadja a
+ * két összeget, a felület pedig kimondja a százalékot.
+ */
+function cacheReadCost(usage, model, time) {
+  const price = modelPrices(model);
+  const peak = isPeakInstant(time);
+  const hit = usage.cacheReadTokens || 0;
+  return {
+    cost: (hit * (peak ? price.hitPeak : price.hitOff)) / 1000000,
+    baseline: (hit * (peak ? price.missPeak : price.missOff)) / 1000000
+  };
+}
+
 /** The session log directory of this deployment. */
 function sessionsRoot() {
   const home = typeof process.env.DSH_HOME === "string" && process.env.DSH_HOME.length > 0
@@ -4004,13 +4025,34 @@ const usageCache = { key: null, at: 0, value: null, running: null };
 const USAGE_CACHE_MILLISECONDS = 120000;
 
 /**
+ * Two workspace paths are the same directory (drive-letter and case
+ * insensitive on Windows, like the rest of the workspace routing).
+ *
+ * MIÉRT KELL (2026-11-17, felhasználói hiba): a költségelszámolás panel
+ * token-sora a TELJES deployment 30 napos költségét mutatta a kiválasztott
+ * munkaterület helyett (mért: 2 session-höz $133.76 a $0.62 helyett), mert a
+ * `/ui-extras/usage` végpont nem tudott munkaterületre szűrni. A munka­terület-
+ * szűrés a session-napló FEJLÉCÉNEK `cwd` mezőjén megy.
+ */
+function sameWorkspace(left, right) {
+  const a = canonicalWorkspace(left);
+  const b = canonicalWorkspace(right);
+  if (a.length === 0 || b.length === 0) return false;
+  const norm = (value) => (process.platform === "win32" ? value.replace(/\//gu, "\\").toLowerCase() : value);
+  return norm(a) === norm(b);
+}
+
+/**
  * Sum tokens and cost over the last `days` days of session logs.
  * @param days - window length; the file mtime filter uses it, so untouched
  *   sessions are never opened.
+ * @param sessionId - when given, that one session's own figures are attached.
+ * @param workspace - when given, only sessions whose header `cwd` is that
+ *   workspace are counted (the cost line of a per-workspace measurement).
  * @returns the aggregate: totals, per-day and per-model breakdowns, and (when
  *   `sessionId` is given) that one session's own figures.
  */
-async function scanUsage(days, sessionId) {
+async function scanUsage(days, sessionId, workspace) {
   const since = Date.now() - days * 24 * 60 * 60 * 1000;
   const root = sessionsRoot();
   const files = sessionLogFiles(root);
@@ -4018,6 +4060,7 @@ async function scanUsage(days, sessionId) {
   const perModel = new Map();
   const totals = { requests: 0, miss: 0, hit: 0, out: 0, reasoning: 0, total: 0, costUsd: 0 };
   const wanted = typeof sessionId === "string" && sessionId.length > 0 ? sessionId : null;
+  const wantedWorkspace = typeof workspace === "string" && workspace.length > 0 ? workspace : "";
   const session = { id: wanted, requests: 0, miss: 0, hit: 0, out: 0, total: 0, costUsd: 0 };
   // Delegalt (subagent) munkat kulon merjuk: a megtakaritas-szamlashoz kell,
   // hogy mennyi ment at az ingyenes fallback-lancra a fizetos route helyett.
@@ -4051,6 +4094,8 @@ async function scanUsage(days, sessionId) {
   /** SG keret-elszamolashoz: modellenkent es (nap, modell) bontasban. */
   const sgModels = new Map();
   const sgDayModel = new Map();
+  /** A cache-kedvezmény tényleges hatása (lásd {@link cacheReadCost}). */
+  const cacheEffect = { hitTokens: 0, hitCostUsd: 0, baselineUsd: 0 };
   let scanned = 0;
   let skipped = 0;
 
@@ -4074,25 +4119,32 @@ async function scanUsage(days, sessionId) {
       appendClientLog(`usage scan: ${file} nem olvashato (${String(error?.message ?? error)})`);
       continue;
     }
-    scanned += 1;
-
     // A session-fejlec az elso sor: ebbol derul ki, hogy ez egy DELEGALT
     // (subagent) session-e. A DSH a `delegationDepth`-et es az `origin`
-    // mezot irja ide.
+    // mezot irja ide; a `cwd` pedig a munkaterulet-szureshez kell.
     let delegatedFile = false;
     // Melyik uton ment ez a gyermek? Egy session keverheti is (a proxy
     // kiesese utan a gyermek mar a fizetos route-on futhat), ezert nem
     // cimkezzuk a fajlt, hanem keresenkent szamoljuk.
     let delegatedFreeFile = false;
     let delegatedPaidFile = false;
+    let headerCwd = "";
     const firstLine = text.slice(0, text.indexOf("\n") === -1 ? text.length : text.indexOf("\n"));
     if (firstLine.indexOf('"type":"session"') !== -1 || firstLine.indexOf('"type": "session"') !== -1) {
       try {
         const header = JSON.parse(firstLine);
         const depth = typeof header.delegationDepth === "number" ? header.delegationDepth : 0;
         delegatedFile = depth > 0 || header.origin === "subagent";
+        headerCwd = typeof header.cwd === "string" ? header.cwd : "";
       } catch { /* a fejlec ertelmezhetetlen: nem tekintjuk delegaltnak */ }
     }
+    // Munkaterulet-szures: a mérés es a token-sor UGYANARRA a munkaterületre
+    // vonatkozzon. Fejlec nelkul nem tudjuk besorolni, ezert kihagyjuk.
+    if (wantedWorkspace.length > 0 && (headerCwd.length === 0 || !sameWorkspace(headerCwd, wantedWorkspace))) {
+      skipped += 1;
+      continue;
+    }
+    scanned += 1;
     if (delegatedFile) delegated.sessions += 1;
 
     for (const line of text.split("\n")) {
@@ -4111,6 +4163,10 @@ async function scanUsage(days, sessionId) {
       const usage = data.usage;
       const model = messageModel(data);
       const cost = requestCost(usage, model, event.time);
+      const cacheCost = cacheReadCost(usage, model, event.time);
+      cacheEffect.hitTokens += usage.cacheReadTokens || 0;
+      cacheEffect.hitCostUsd += cacheCost.cost;
+      cacheEffect.baselineUsd += cacheCost.baseline;
       const tokens = usage.totalTokens || ((usage.inputTokens || 0) + (usage.cacheReadTokens || 0) + (usage.outputTokens || 0));
 
       totals.requests += 1;
@@ -4307,7 +4363,20 @@ async function scanUsage(days, sessionId) {
       grossUsd: sgFreeUsd + sgPaidUsd,
       models: sgQuotaModels.sort((a, b) => b.tokens - a.tokens)
     },
+    // A cache-kedvezmeny kimondva: enelkul a szam ellenorizhetetlen.
+    cache: {
+      hitTokens: cacheEffect.hitTokens,
+      hitCostUsd: cacheEffect.hitCostUsd,
+      baselineUsd: cacheEffect.baselineUsd,
+      savedUsd: Math.max(0, cacheEffect.baselineUsd - cacheEffect.hitCostUsd),
+      discountPercent: cacheEffect.baselineUsd > 0
+        ? Math.round((1 - cacheEffect.hitCostUsd / cacheEffect.baselineUsd) * 100)
+        : 0
+    },
     activeDays: days0.length,
+    // A szures visszhangja: a panel ebol tudja, hogy a token-sor a sajat
+    // munkateruletere vonatkozik-e.
+    workspace: wantedWorkspace.length > 0 ? canonicalWorkspace(wantedWorkspace) : null,
     session: wanted === null ? null : session,
     pricing: {
       note: "hivatalos DeepSeek listárák, csúcsidőben dupla",
@@ -4321,14 +4390,17 @@ async function scanUsage(days, sessionId) {
 }
 
 /** Cached wrapper around {@link scanUsage}; one scan at a time. */
-async function usageSnapshot(days, sessionId) {
-  const key = `${days}`;
+async function usageSnapshot(days, sessionId, workspace) {
+  const wantedWorkspace = typeof workspace === "string" ? workspace : "";
+  // A kulcsban a munkaterulet is benne van: kulonben egy globalis szkennelés
+  // kiszolgalna egy munkaterulet-szurt kérést (forditva is).
+  const key = `${days}|${wantedWorkspace.toLowerCase()}`;
   const now = Date.now();
   if (usageCache.value !== null && usageCache.key === key && now - usageCache.at < USAGE_CACHE_MILLISECONDS) {
     return withSessionFigures(usageCache.value, sessionId);
   }
   if (usageCache.running === null) {
-    usageCache.running = scanUsage(days, null)
+    usageCache.running = scanUsage(days, null, wantedWorkspace)
       .then((value) => {
         usageCache.key = key;
         usageCache.at = Date.now();
@@ -4409,9 +4481,12 @@ async function handleUsage(req, res, url) {
   const rawDays = Number(url.searchParams.get("days") ?? "30");
   const days = Number.isFinite(rawDays) && rawDays > 0 && rawDays <= 365 ? Math.round(rawDays) : 30;
   const sessionId = url.searchParams.get("session") ?? "";
+  // Munkaterulet-szures (2026-11-17): a költségelszámolás panel token-sora a
+  // kiválasztott munkaterület költségét kérdezze, ne a teljes deploymentét.
+  const workspace = url.searchParams.get("workspace") ?? "";
   let snapshot;
   try {
-    snapshot = await usageSnapshot(days, sessionId);
+    snapshot = await usageSnapshot(days, sessionId, workspace);
   } catch (error) {
     sendJson(res, { ok: false, error: String(error?.message ?? error) });
     return;
@@ -5496,7 +5571,7 @@ export { approvalPathKey, approvalPathOf, approvalPathWithin, approvalPathScopeO
  * holiday table is exported so `tools/check-plugin.mjs` can prove the client's
  * copy of it has not drifted from this one.
  */
-export { isPeakInstant, modelPrices, requestCost, scanUsage, sessionsRoot };
+export { isPeakInstant, modelPrices, requestCost, cacheReadCost, scanUsage, sessionsRoot };
 export { isFreeModel };
 
 /**
