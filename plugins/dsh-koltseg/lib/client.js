@@ -33,7 +33,7 @@ window.__ModuleLoader__.load({
     }
 
     var NS = "koltseg";
-    var BUILD = "2026-11-17.3";
+    var BUILD = "2026-11-17.4";
     var ROUTE = "/koltseg";
     var HEADER_SLOT = "conversation.session.header.utilities";
     var TRACKER_SLOT = "conversation.composer.dock";
@@ -59,6 +59,11 @@ window.__ModuleLoader__.load({
       "tab.title": "Költségelszámolás",
       "header.title": "Költségelszámolás — a fejlesztés ideje és díja (munkafolyamat, munkaterület, időszak)",
       "panel.title": "Költségelszámolás",
+      // A panel új (kliens) és a host motor régi lehet — ezt ki kell mondani,
+      // különben a felhasználó hiába tölti újra a panelt (2026-11-17).
+      "panel.hostOk": "host {build}",
+      "panel.hostUnknown": "host ?",
+      "panel.hostStale": "A panel kódja új (v{build}), de a HOST-on futó motor még a régi — a számok a következő harness-indításnál frissülnek. Indítás: tálca → „Harness újraindítása”.",
       "panel.close": "Bezárás",
       "scope.session": "Ez a munkafolyamat",
       "scope.workspace": "Munkaterület",
@@ -142,6 +147,9 @@ window.__ModuleLoader__.load({
       "tab.title": "Cost accounting",
       "header.title": "Cost accounting — development time and price (workflow, workspace, period)",
       "panel.title": "Cost accounting",
+      "panel.hostOk": "host {build}",
+      "panel.hostUnknown": "host ?",
+      "panel.hostStale": "The panel code is new (v{build}) but the HOST engine is still the old one — the numbers update at the next harness start. Start it from the tray: \u201eRestart harness\u201d.",
       "panel.close": "Close",
       "scope.session": "This workflow",
       "scope.workspace": "Workspace",
@@ -904,34 +912,53 @@ window.__ModuleLoader__.load({
         var url = "/ui-extras/usage?days=" + String(days)
           + (scope === "session" && sessionId.length > 0 ? "&session=" + encodeURIComponent(sessionId) : "")
           + (workspace.length > 0 ? "&workspace=" + encodeURIComponent(workspace) : "");
-        getJson(url)
-          .then(function (data) {
-            if (!alive) return;
-            if (!data || data.ok !== true) {
+        // EGYSZERI ÚJRAPRÓBÁLKOZÁS (2026-11-17, mért eset: „A token költség
+        // ehhez nem érhető el”, mert az első kérés a session-napló Kibontása
+        // közben elhalt). Kötött: legfeljebb 2 próba, 3 s várakozás (§1.7).
+        var attempts = 0;
+
+        function loadMaterial() {
+          attempts += 1;
+          getJson(url)
+            .then(function (data) {
+              if (!alive) return;
+              if (!data || data.ok !== true) {
+                if (attempts < 2) {
+                  setTimeout(function () { if (alive) loadMaterial(); }, 3000);
+                  return;
+                }
+                setMaterial({ status: "unavailable", usd: 0, error: "" });
+                return;
+              }
+              // A session-hatókör a saját session számát használja, a
+              // munkaterület-hatókör a (szűrt) összesítést.
+              var stats = scope === "session" && data.session ? data.session : data.totals;
+              var usd = stats && typeof stats.costUsd === "number" ? stats.costUsd : 0;
+              setMaterial({
+                status: "ready",
+                usd,
+                error: "",
+                requests: stats && typeof stats.requests === "number" ? stats.requests : 0,
+                missTokens: stats && typeof stats.miss === "number" ? stats.miss : 0,
+                hitTokens: stats && typeof stats.hit === "number" ? stats.hit : 0,
+                outTokens: stats && typeof stats.out === "number" ? stats.out : 0,
+                // A cache-kedvezmény tényleges hatása (a host számolja).
+                cache: data.cache && typeof data.cache === "object" ? data.cache : null,
+                scoped: typeof data.workspace === "string" && data.workspace.length > 0,
+              });
+              return undefined;
+            })
+            .catch(function () {
+              if (!alive) return;
+              if (attempts < 2) {
+                setTimeout(function () { if (alive) loadMaterial(); }, 3000);
+                return;
+              }
               setMaterial({ status: "unavailable", usd: 0, error: "" });
-              return;
-            }
-            // A session-hatókör a saját session számát használja, a
-            // munkaterület-hatókör a (szűrt) összesítést.
-            var stats = scope === "session" && data.session ? data.session : data.totals;
-            var usd = stats && typeof stats.costUsd === "number" ? stats.costUsd : 0;
-            setMaterial({
-              status: "ready",
-              usd,
-              error: "",
-              requests: stats && typeof stats.requests === "number" ? stats.requests : 0,
-              missTokens: stats && typeof stats.miss === "number" ? stats.miss : 0,
-              hitTokens: stats && typeof stats.hit === "number" ? stats.hit : 0,
-              outTokens: stats && typeof stats.out === "number" ? stats.out : 0,
-              // A cache-kedvezmény tényleges hatása (a host számolja).
-              cache: data.cache && typeof data.cache === "object" ? data.cache : null,
-              scoped: typeof data.workspace === "string" && data.workspace.length > 0,
             });
-            return undefined;
-          })
-          .catch(function () {
-            if (alive) setMaterial({ status: "unavailable", usd: 0, error: "" });
-          });
+        }
+
+        loadMaterial();
         return function () { alive = false; };
       }, [configStatus.status, configStatus.data, scope, sessionId, useRange, workspace]);
 
@@ -1362,11 +1389,21 @@ window.__ModuleLoader__.load({
           t("status.measureError", { error: configStatus.error })));
       }
 
+      // A KLIENS build-je és a HOST-on futó motor jelzése. Ha a host régi, a
+      // felhasználó lássa, hogy a számok miért nem frissültek (2026-11-17).
+      var hostBuild = data !== null && typeof data.engine === "string" ? data.engine : "";
+      var hostStale = hostBuild.length === 0 || hostBuild !== BUILD;
+      var hostLabel = hostBuild.length > 0 ? t("panel.hostOk", { build: hostBuild }) : t("panel.hostUnknown");
+
       return h("div", null,
         h("div", { style: S.panelHead },
           h("span", null, t("panel.title")),
           h("div", { style: { ...S.row, gap: "4px" } },
             h("span", { style: S.label }, "v" + BUILD),
+            h("span", {
+              style: hostStale ? { ...S.label, color: "#ffb86b", cursor: "help" } : S.label,
+              title: hostStale ? t("panel.hostStale", { build: BUILD }) : hostLabel,
+            }, hostLabel),
             safeProps.onClose
               ? h("button", {
                 type: "button",

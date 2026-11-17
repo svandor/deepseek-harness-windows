@@ -21,6 +21,17 @@ import { dayOf, today } from "./time.js";
 
 const isWindows = process.platform === "win32";
 
+/**
+ * A HOST-oldali motor build-jele.
+ *
+ * MIÉRT (2026-11-17): a kliens-oldali kód a panel újratöltésével azonnal él, a
+ * MÉRÉS viszont a hoston fut, és csak a harness következő indulásakor frissül.
+ * A felhasználó kétszer is hiába töltötte újra a panelt („még mindig nem látom”),
+ * mert a futó harness a régi motort futtatta — ezt a számot a panel kiírja, így
+ * a kliens/host eltérés látható, nem találgatás.
+ */
+export const ENGINE_BUILD = "2026-11-17.4";
+
 /** Két útvonal ugyanaz-e (kanonikus alak, Windows alatt kis/nagybetű-független). */
 export function samePath(left, right) {
   const a = canonicalWorkspace(left);
@@ -394,6 +405,11 @@ export async function measure(options) {
 
   return {
     ok: true,
+    // A HOST-oldali motor jele (2026-11-17). MIÉRT KELL: a kliens kódja
+    // panel-újratöltéssel él, a SZÁMOK a hoston futnak — a felhasználó eddig
+    // hiába töltötte újra a panelt, mert a futó harness még a régi motort
+    // futtatta (MÉRT: a 15:00:35-kor indult folyamat). A panel kiírja ezt.
+    engine: ENGINE_BUILD,
     scope,
     workspace,
     workspaceLabel: workspaceLabel(workspace),

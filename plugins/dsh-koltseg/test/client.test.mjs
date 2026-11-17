@@ -219,6 +219,9 @@ test("kliens: a panel props nélkül és props-szal is renderel (nincs kivétel)
   // A panel a mérés hiányában is kiír valamit (nem üres, nem néma).
   const body = closable.children[1];
   assert.ok(Array.isArray(body.children) && body.children.length > 0, "van tartalom hiba nélkül is");
+  // A fejléc kiírja a KLIENS és a HOST build-jét is: mérés nélkül a host
+  // ismeretlen, tehát a „host ?” jelzésnek látszania kell (2026-11-17).
+  assert.match(JSON.stringify(closable), /host \?/u);
 });
 
 test("kliens: a panel hiba-határa szöveget ad, nem üres helyet", () => {

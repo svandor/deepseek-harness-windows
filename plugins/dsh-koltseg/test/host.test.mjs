@@ -147,6 +147,10 @@ test("host: a /koltseg/measure valódi naplókon számol", async () => {
   assert.equal(Array.isArray(json.sessions), true);
   assert.equal(Array.isArray(json.notes), true);
   assert.ok(json.profile.id.length > 0);
+  // A host a saját motorjának build-jelét is kiadja (2026-11-17): a panel ebből
+  // látja, hogy a futó harness még a régi motort futtatja-e.
+  assert.equal(typeof json.engine, "string");
+  assert.match(json.engine, /^\d{4}-\d{2}-\d{2}\.\d+$/u);
 });
 
 test("host: a munkafolyamat-hatókör azonosító nélkül 400-at ad", async () => {
@@ -203,7 +207,9 @@ test("host: a munkaterületet a session naplófejlécéből oldja fel (nem a hos
   // 2) CSAK a session-azonosítót adjuk át: a munkaterületet a host oldja fel
   const measured = await call(routes, "/koltseg/measure?scope=session&id=" + encodeURIComponent(session.id));
   assert.equal(measured.json.ok, true);
-  assert.equal(measured.json.workspace, first.path, "a feloldott munkaterület a session cwd-je");
+  // Windows alatt az útvonal kis/nagybetűre érzéketlen: a pontos sztring-
+  // egyezés párhuzamos futásnál ingatag volt (mért), a lényeg a mappa.
+  assert.equal(measured.json.workspace.toLowerCase(), first.path.toLowerCase(), "a feloldott munkaterület a session cwd-je");
   assert.ok(!/[\\/]@deepseek-ai[\\/]/u.test(measured.json.workspace), "NEM a harness saját lib mappája");
   assert.equal(measured.json.sessions.length, 1);
 });
