@@ -26,6 +26,20 @@ window.__ModuleLoader__.load({
     var react = require('react');
     var h = react.createElement;
 
+    /**
+     * A hero-gombsor befogadója a `dsh-ui-extras` CornerControls hero-példányában
+     * (`[data-dsh-hero-actions]`). A `conversation.input.dock` függőleges lista,
+     * ezért a robot gomb külön slot-bejegyzésként külön sorba került — a
+     * felhasználó jelzése szerint „más helyre van bedobva, nem a gombsorba”.
+     * A portál a MÁR LÉTEZŐ gombsorba rajzol, így marad egy sor.
+     */
+    var reactDom = null;
+    try {
+      reactDom = require('react-dom');
+    } catch (error) {
+      reactDom = null;
+    }
+
     var NS = 'hazi-robot';
     var inject = ['slots', 'locale', 'theme'];
     var SIDE_KEY = 'hazi-robot-side';
@@ -301,6 +315,37 @@ window.__ModuleLoader__.load({
 
     function phaseServesView(heroVariant, phase) {
       return heroVariant === true ? phase === 'hero' : phase !== 'hero';
+    }
+
+    /** A hero-gombsor befogadójának keresése (`[data-dsh-hero-actions]`). */
+    function readHeroActionsHost() {
+      try {
+        if (typeof document === 'undefined') return null;
+        return document.querySelector('[data-dsh-hero-actions]');
+      } catch (error) {
+        return null;
+      }
+    }
+
+    /**
+     * A hero-gombsor befogadója, élőben követve. A befogadó a `dsh-ui-extras`
+     * hero-példányával együtt jelenik meg és tűnik el, ezért 500 ms-onként
+     * újraolvassuk; a kör a komponens unmountjakor leáll (korlátos, §1.7).
+     */
+    function useHeroActionsHost(enabled) {
+      var state = react.useState(function () { return enabled === true ? readHeroActionsHost() : null; });
+      var host = state[0];
+      var setHost = state[1];
+      react.useEffect(function () {
+        if (enabled !== true) { setHost(null); return undefined; }
+        setHost(readHeroActionsHost());
+        var timer = setInterval(function () {
+          var next = readHeroActionsHost();
+          setHost(function (previous) { return previous === next ? previous : next; });
+        }, 500);
+        return function () { clearInterval(timer); };
+      }, [enabled]);
+      return host;
     }
 
     /* --------------------------------- téma ----------------------------------- */
@@ -907,18 +952,29 @@ window.__ModuleLoader__.load({
       var open = openState[0];
       var setOpen = openState[1];
       var phase = useConversationPhase();
+      // A hero-példány a `dsh-ui-extras` gombsorába portol; a fejléc-példány a
+      // helyén marad (a befogadó ott nincs is meg).
+      var heroHost = useHeroActionsHost(props.heroVariant === true);
       var localeId = useLocaleId(props.locale);
       var t = translator(localeId);
       var dark = useDarkTheme(props.theme);
       applyTheme(dark);
       if (!phaseServesView(props.heroVariant, phase)) return null;
+      var button = h('button', {
+        style: S.button,
+        title: t('openTitle'),
+        'aria-label': t('appName'),
+        onClick: function () { setOpen(!open); },
+      }, '🤖');
+      // Csak a GOMB megy a portálba; a panel a saját helyén (fixed) marad.
+      var shownButton = heroHost !== null && heroHost !== undefined && reactDom && typeof reactDom.createPortal === 'function'
+        ? reactDom.createPortal(
+          h('span', { style: { display: 'inline-flex', alignItems: 'center', order: 0 } }, button),
+          heroHost,
+        )
+        : button;
       return h(react.Fragment, null,
-        h('button', {
-          style: S.button,
-          title: t('openTitle'),
-          'aria-label': t('appName'),
-          onClick: function () { setOpen(!open); },
-        }, '🤖'),
+        shownButton,
         open ? h(RobotPanel, {
           onClose: function () { setOpen(false); },
           locale: props.locale,

@@ -3085,6 +3085,11 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
           ? (alibabaBillData.pretaxGrossAmount ?? (aliPretax !== null ? aliPretax * ALIBABA_VAT_RATE : null))
           : null;
         var aliAmount = (aliOutstanding > 0) ? aliOutstanding : (aliPretaxGross ?? (aliPretax ?? (spend.alibabaUsd || 0)));
+        // A mínusz SZÁNDÉKOS (egyeztetett működés, 2026-11-17): az Alibaba-
+        // egyenleg NEGATÍVBA megy (azaz tartozás), ezért a szám elé mindig
+        // mínusz kerül — nulla tartozásnál is `-$0.00`, mert az a "nulla
+        // egyenleg" megjelenítése a tartozás-oldalon. EZT NE „javítsd" előjel-
+        // levágással: a felhasználó kifejezetten ezt a formát kérte.
         var aliSpendText = "-" + formatUsd2(aliAmount);
         // FORDULONAP: a szamla a ciklus (naptari honap) zarasa utan esedekes.
         // A ciklus-vegat a cycle mezobol szamoljuk (a honap 0. napja = utolso nap).
@@ -4736,6 +4741,25 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                 : null
             ]
           }),
+          // ── hero gombsor befogadója ─────────────────────────────────────
+          // MÉRT HIBA (2026-11-17, a felhasználó jelzése): „hiányzik a php, 1/2
+          // és ftp gombok, a robot és költség gombok pedig más helyre vannak
+          // bedobálva, nem a gombsorba”. A `conversation.input.dock` egy
+          // FÜGGŐLEGES lista: minden bejegyzés külön sor, ezért a többi plugin
+          // hero-példánya (robot, költség) és a korábban hiányzó fejléc-gombok
+          // (PHP, 1/2, FTP) nem kerülhettek ebbe a sorba.
+          //
+          // Ezért a hero-változat hordoz egy befogadót: a többi plugin `hero`
+          // fázisban ide PORTOLJA a saját gombját (a portál a valódi DOM-ba
+          // rajzol, a slot bejegyzése `null`-t ad, így nem lesz plusz sor). A
+          // sorrendet a portolt elemek CSS `order`-je adja, ugyanaz, mint a
+          // fejléc-sorban (robot 0, költség 5, PHP 60, 1/2 61, FTP 62).
+          heroVariant
+            ? jsx.jsx("span", {
+              "data-dsh-hero-actions": "1",
+              style: { display: "inline-flex", alignItems: "center", gap: "6px", flex: "none" }
+            })
+            : null,
           status
             ? jsx.jsx("span", {
               "data-dsh-ui-extras": "status",

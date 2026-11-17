@@ -191,6 +191,8 @@ namespace DshTray
         private volatile bool _stopping;
         private int _windowStarts;
         private DateTime _windowWindow = DateTime.MinValue;
+        /// <summary>Ablakindítás zárja: a felügyelet és az indítási opener közös.</summary>
+        private readonly object _windowStartGate = new object();
         private bool _closeLogged;      // a "felhasználó bezárta" esemény már naplózva
         private DateTime _lastRetune = DateTime.MinValue;
         private System.Windows.Forms.Timer _desktopWatch;   // window-desktop.txt figyelo
@@ -198,9 +200,11 @@ namespace DshTray
         private int _desktop = 1;            // utoljara latott munkaasztal
         private string _windowUrl = string.Empty;
         private volatile bool _awaitToken;   // harness-újraindítás után az új tokenre várunk
+        private readonly bool _explicitShow; // kifejezett indítás (DshLauncher --show)
 
-        public TrayApp()
+        public TrayApp(bool explicitShow)
         {
+            _explicitShow = explicitShow;
             _cfg.Root = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".."));
             Log.Init(Path.Combine(_cfg.StateDir, "native-tray.log"));
             Log.Info("tálca indul (pid " + Process.GetCurrentProcess().Id + ", gyökér: " + _cfg.Root + ")");
@@ -232,21 +236,45 @@ namespace DshTray
                     new UTF8Encoding(false));
             }
             catch (Exception ex) { Log.Error("tray.pid írás: " + ex.Message); }
+            // KIFEJEZETT INDÍTÁS (`--show`, a DshLauncher adja át): a felhasználó
+            // azért indította el az alkalmazást, hogy lássa az ablakot. A korábbi
+            // bezárás-jelölő ilyenkor NEM érvényes — enélkül a kitűzött ikon első
+            // kattintására csak a rendszertálca-ikon jelent meg, az ablak a második
+            // kattintásra nyílt meg (MÉRT HIBA, 2026-11-17 11:09:52: „a felhasználó
+            // bezárta az ablakot — a tálca-indulás NEM nyitja meg újra”).
+            if (_explicitShow)
+            {
+                ClearCloseMarker();
+                Log.Info("kifejezett indítás (--show): az ablak megnyílik");
+            }
+
             // FRISS INDÍTÁS (felhasználói kérés, 2026-11-16): ha a tálca
-            // indulásakor EGYETLEN munkaablak sem fut, az **1. asztallal**
-            // kezdünk. Korábban a fájlban maradt érték (pl. 2) nyitotta az első
-            // ablakot, ezért indítás után a 2. asztal jött be.
+            // indulásakor nincs LÁTHATÓ munkaablak, az **1. asztallal** kezdünk.
+            //
+            // MIÉRT a LÁTHATÓ ablak számít, nem a folyamatlétszám (MÉRT HIBA,
+            // 2026-11-17): a 2. asztal ablaka rejtve életben maradt, ezért a régi
+            // `GetProcessesByName("DshWindow").Length == 0` feltétel hamis „van már
+            // ablak” választ adott — a fájlban maradt 2-es érték miatt a tálca a
+            // LEGUTÓBBI asztalt nyitotta meg a kért 1. helyett.
             try
             {
-                if (Process.GetProcessesByName("DshWindow").Length == 0)
+                if (!AnyVisibleDshWindow())
                 {
                     File.WriteAllText(
                         Path.Combine(_cfg.StateDir, "window-desktop.txt"), "1", new UTF8Encoding(false));
-                    for (int d = 1; d <= 2; d++)
+                    // Csak az ELAVULT pid-fájlokat töröljük: egy élő, rejtett ablak
+                    // pid-fájlját megtartjuk, különben második ablak indulna
+                    // ugyanarra az asztalra, és a régi magára maradna.
+                    for (int d = 1; d <= DesktopCount(); d++)
                     {
-                        try { if (File.Exists(DesktopPidPath(d))) File.Delete(DesktopPidPath(d)); } catch { }
+                        try
+                        {
+                            if (RunningDesktopWindow(d) == 0 && File.Exists(DesktopPidPath(d)))
+                                File.Delete(DesktopPidPath(d));
+                        }
+                        catch { }
                     }
-                    Log.Info("friss indítás: az 1. munkaasztal nyílik");
+                    Log.Info("friss indítás: az 1. munkaasztal lesz a látható");
                 }
             }
             catch (Exception ex) { Log.Error("friss indítás: " + ex.Message); }
@@ -309,6 +337,9 @@ namespace DshTray
             Log.Info("munkaasztal-figyelo elindult (200 ms)");
             Log.Info("felügyelet elindult (20 s), ütemező elindult (60 s)");
             HealDesktopPidFromRunningWindow();
+            // Az indítási ablak AZONNAL nyíljon meg, ne a 20 s-os felügyeleti
+            // tickre várjon (mért ~24 s késés → „első kattintásra semmi” tünet).
+            StartStartupOpener();
             EnsureOtherDesktopWindows(4000);
         }
 
@@ -356,9 +387,50 @@ namespace DshTray
             preparer.Start();
         }
 
-        // ── konfiguráció ───────────────────────────────────────────────────
-        private void LoadConfig()
+        /// <summary>
+        /// Az indítási ablak megnyitása AZONNAL, amint a harness figyel.
+        ///
+        /// MIÉRT (MÉRT HIBA, 2026-11-17): a felügyelet 20 s-onként fut, ezért friss
+        /// indítás után az ablak csak a KÖVETKEZŐ tickre nyílt meg (~24 s késés).
+        /// A felhasználó ezt úgy élte meg, hogy „első kattintásra csak a tálca-ikon
+        /// jelenik meg, másodikra jön az ablak”. Ez a szál 500 ms-onként próbál
+        /// (legfeljebb 120-szor = 60 s, §1.7 korlát), és a MEGSZOKOTT `EnsureWindow`
+        /// utat használja (bezárás-jelölő, ablakszám-korlát, token-várás) — nincs
+        /// külön, párhuzamos logika. A szál háttérszál, a ciklus után nem marad futva.
+        /// </summary>
+        private void StartStartupOpener()
         {
+            var opener = new Thread(() =>
+            {
+                try
+                {
+                    for (int attempt = 0; attempt < 120 && !_stopping; attempt++)
+                    {
+                        if (AnyVisibleDshWindow()) return;
+                        // A felhasználó bezárta, és nem kért kifejezett indítást
+                        // (pl. bejelentkezéskori autostart): nem nyitunk ablakot.
+                        if (!_explicitShow && File.Exists(_cfg.WindowClosedMarker)) return;
+                        if (Listening(_cfg.Port) && CurrentUrl().Length > 0)
+                        {
+                            EnsureWindow();
+                            if (AnyVisibleDshWindow())
+                            {
+                                Log.Info("indítási ablak megnyitva (" + (attempt * 500) + " ms)");
+                                return;
+                            }
+                        }
+                        Thread.Sleep(500);
+                    }
+                    Log.Info("indítási ablak: 60 s alatt nem sikerült megnyitni");
+                }
+                catch (Exception ex) { Log.Error("indítási ablak: " + ex.Message); }
+            });
+            opener.IsBackground = true;
+            opener.Start();
+        }
+
+        // ── konfiguráció ───────────────────────────────────────────────────
+        private void LoadConfig()        {
             string path = Path.Combine(_cfg.StateDir, "tray-config.json");
             string json = string.Empty;
             try { if (File.Exists(path)) json = File.ReadAllText(path); }
@@ -881,7 +953,7 @@ namespace DshTray
         /// </summary>
         private void StartWindow()
         {
-            StartDesktopWindow(Math.Max(1, Math.Min(2, ReadDesktop())));
+            StartDesktopWindow(Math.Max(1, Math.Min(DesktopCount(), ReadDesktop())));
         }
 
         /// <summary>A token URL a state\harness.url-ből, vagy a harness.log utolsó sora.</summary>
@@ -1167,8 +1239,21 @@ namespace DshTray
         /// asztalonkent PanesForDesktop() panellel. Ha az adott asztal mar fut,
         /// nem inditunk masodikat; az indulas pid-jet a sajat asztal pid-fajljaba
         /// irjuk (es a DshWindow is elmenti a sajat pid-jet).
+        ///
+        /// ZÁR (2026-11-17): két szál is indíthat ablakot (a 20 s-os felügyelet és
+        /// az új indítási opener). A „fut-e már" ellenőrzés és a pid-fájl írása
+        /// közé eddig becsúszhatott egy második indítás — a mért hiba
+        /// (2026-11-16) pont két ablak volt ugyanarra az asztalra.
         /// </summary>
         private void StartDesktopWindow(int desktop)
+        {
+            lock (_windowStartGate)
+            {
+                StartDesktopWindowLocked(desktop);
+            }
+        }
+
+        private void StartDesktopWindowLocked(int desktop)
         {
             desktop = Math.Max(1, Math.Min(DesktopCount(), desktop));
             if (RunningDesktopWindow(desktop) != 0) return;
@@ -1826,7 +1911,9 @@ namespace DshTray
         /// </summary>
         private void StopDesktopWindows()
         {
-            for (int desktop = 1; desktop <= 2; desktop++)
+            // 2026-11-17: a korábbi 1..2 határ helyett a beállított asztalszám,
+            // különben a 3. asztal (DesktopCount() > 2) ablaka életben maradna.
+            for (int desktop = 1; desktop <= DesktopCount(); desktop++)
             {
                 string pidPath = DesktopPidPath(desktop);
                 try
@@ -1852,25 +1939,59 @@ namespace DshTray
             }
         }
 
+        /// <summary>
+        /// Tálca-kilépés: MINDEN háttérfolyamat leállítása (felhasználói döntés,
+        /// 2026-11-17).
+        ///
+        /// MIÉRT VÁLTOZOTT: a 2026-11-16-i szabály — „a kilépés otthagyja a
+        /// munkaablakokat, a következő tálca átveszi őket" — a gyakorlatban
+        /// invazívnak bizonyult: a „Kilépés" után is élt a harness (node), az
+        /// LLM-proxy és a WebView2-fák, ezért a felhasználó azt hitte, leállította
+        /// a rendszert, holott nem (MÉRT ESET 2026-11-17: a tálca 11:09:51-kor
+        /// újraindult, a harness pid 12132 viszont 05:48:40 óta változatlanul
+        /// futott tovább — így a `node_modules`-ba tett javítás sem lépett életbe).
+        ///
+        /// SORREND: előbb a visszaindító ciklusok állnak le (különben a 20 s-os
+        /// felügyelet a leállítás közben visszahozná a harness-t/proxyt), utána
+        /// ablakok → harness → proxy → robot-szerver, végül az állapotfájlok
+        /// takarítása. Csak a pid-fájlban, illetve a PORT TULAJDONOSAKÉNT
+        /// azonosított folyamatot öljük (§1.6: név szerint soha).
+        /// </summary>
         private void ExitApp()
         {
-            Log.Info("tálca kilépés");
+            Log.Info("tálca kilépés — minden háttérfolyamat leállítása (felhasználói kérés, 2026-11-17)");
             _stopping = true;
-            // FONTOS (2026-11-16, mért hiba): itt korábban StopDesktopWindows()
-            // állt, ezért a tálca leállítása (frissítés, "Kilépés") MINDEN
-            // munkaablakot megölt — a felhasználó ezt "minden bezárult"-ként élte
-            // meg. A munkaablakok önálló folyamatok: a tálca kilépése nem zárja be
-            // őket, és a következő tálca a pid-fájlokból (illetve a futó
-            // folyamatokból) átveszi őket.
-            try
-            {
-                int alive = Process.GetProcessesByName("DshWindow").Length;
-                if (alive > 0) Log.Info("a munkaablakok nyitva maradnak (" + alive + " ablak)");
-            }
-            catch { }
-            try { if (_supervise != null) _supervise.Dispose(); } catch { }
-            try { if (_schedule != null) _schedule.Dispose(); } catch { }
-            try { if (_desktopWatch != null) { _desktopWatch.Stop(); _desktopWatch.Dispose(); } } catch { }
+
+            // 1) A visszaindító ciklusok ELŐBB álljanak le. A `_stopping` jelzőt a
+            //    tickek ugyan nézik, de a timer leállítása zárja ki a versenyt.
+            try { if (_supervise != null) _supervise.Dispose(); } catch (Exception ex) { Log.Error("felügyelet leállítás: " + ex.Message); }
+            try { if (_schedule != null) _schedule.Dispose(); } catch (Exception ex) { Log.Error("ütemező leállítás: " + ex.Message); }
+            try { if (_desktopWatch != null) { _desktopWatch.Stop(); _desktopWatch.Dispose(); } } catch (Exception ex) { Log.Error("asztal-figyelő leállítás: " + ex.Message); }
+
+            // 2) Munkaablakok (a WebView2-gyermekeik velük együtt elhalnak).
+            //    Előbb a pid-fájlokat heal-eljük, hogy minden futó ablak rekordja
+            //    meglegyen — a főablaknak nincs saját pid-fájlja.
+            try { HealDesktopPidFromRunningWindow(); } catch { }
+            StopDesktopWindows();
+
+            // 3) Harness: a 3080-as port tulajdonosa.
+            StopPort(_cfg.Port);
+
+            // 4) LLM-proxy (4123).
+            StopPort(_cfg.ProxyPort);
+
+            // 5) Robot-szerver (4180), ha fut.
+            try { if (Listening(_cfg.RobotPort)) StopPort(_cfg.RobotPort); } catch (Exception ex) { Log.Error("robot-szerver leállítás: " + ex.Message); }
+
+            // 6) Állapotfájlok: a következő indítás ne higgye futónak a leállított
+            //    harness-t, és ne a halott token-URL-re navigáljon.
+            try { File.Delete(Path.Combine(_cfg.StateDir, "harness.pid")); } catch { }
+            try { File.Delete(_cfg.UrlFile); } catch { }
+
+            int left = 0;
+            try { left = Process.GetProcessesByName("DshWindow").Length; } catch { }
+            Log.Info("tálca kilépés kész (maradék DshWindow: " + left + ")");
+
             try { if (_icon != null) { _icon.Visible = false; _icon.Dispose(); } } catch { }
             ExitThread();
         }
@@ -1986,8 +2107,17 @@ namespace DshTray
         private static Mutex _mutex;
 
         [STAThread]
-        private static void Main()
+        private static void Main(string[] args)
         {
+            // `--show` (a DshLauncher adja át kifejezett indításkor): a felhasználó
+            // AZÉRT indította el az alkalmazást, hogy lássa az ablakot — ilyenkor a
+            // „bezárva” jelölő nem érvényes (lásd a TrayApp konstruktorát).
+            bool explicitShow = false;
+            foreach (string a in args)
+            {
+                if (a == "--show") explicitShow = true;
+            }
+
             // Függő frissítés alkalmazása: a build által hátrahagyott
             // *.exe.new fájlok cseréje, amint a célfájl nincs zárolva.
             try
@@ -2014,7 +2144,7 @@ namespace DshTray
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new TrayApp());
+            Application.Run(new TrayApp(explicitShow));
         }
     }
 }

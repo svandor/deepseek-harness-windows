@@ -601,6 +601,42 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * A hero-gombsor befogadója a `dsh-ui-extras` CornerControls hero-példányában
+     * (`[data-dsh-hero-actions]`). A `conversation.input.dock` függőleges lista,
+     * ezért a költség gomb külön slot-bejegyzésként külön sorba került — a
+     * felhasználó jelzése szerint „más helyre van bedobva, nem a gombsorba”.
+     * A portál a MÁR LÉTEZŐ gombsorba rajzol, így marad egy sor.
+     *
+     * A befogadó a hero-példánnyal együtt jelenik meg/tűnik el, ezért 500 ms-onként
+     * újraolvassuk; a kör a komponens unmountjakor leáll (korlátos, §1.7).
+     */
+    /** A hero-gombsor befogadójának keresése (`[data-dsh-hero-actions]`). */
+    function readHeroActionsHost() {
+      try {
+        if (typeof document === "undefined") return null;
+        return document.querySelector("[data-dsh-hero-actions]");
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function useHeroActionsHost(enabled) {
+      var state = react.useState(function () { return enabled === true ? readHeroActionsHost() : null; });
+      var host = state[0];
+      var setHost = state[1];
+      react.useEffect(function () {
+        if (enabled !== true) { setHost(null); return undefined; }
+        setHost(readHeroActionsHost());
+        var timer = setInterval(function () {
+          var next = readHeroActionsHost();
+          setHost(function (previous) { return previous === next ? previous : next; });
+        }, 500);
+        return function () { clearInterval(timer); };
+      }, [enabled]);
+      return host;
+    }
+
+    /**
      * Pillanatkép-tár: a legutóbbi mérés azonnal látható, amíg az új lefut.
      *
      * MIÉRT (felhasználói visszajelzés, 2026-11-17): „minden megnyitásnál újra
@@ -1294,6 +1330,9 @@ window.__ModuleLoader__.load({
       var heroVariant = variant === "hero";
       var withLabel = variant === "dock";
       var phase = useConversationPhase();
+      // A hero-példány a `dsh-ui-extras` gombsorába portol; a fejléc-példány a
+      // helyén marad (ott nincs is befogadó).
+      var heroHost = useHeroActionsHost(heroVariant);
       var openState = react.useState(false);
       var open = openState[0];
       var setOpen = openState[1];
@@ -1393,7 +1432,17 @@ window.__ModuleLoader__.load({
         withLabel ? h("span", { style: { whiteSpace: "nowrap" } }, t("tab.title")) : null,
       );
 
-      if (!open) return button;
+      // Csak a GOMB megy a hero-portálba; a panel a `document.body`-ba kerül
+      // (position: fixed), tehát a gombsor nem mozdítja el.
+      var shownButton = button;
+      if (heroVariant && heroHost !== null && heroHost !== undefined && reactDom !== null && typeof reactDom.createPortal === "function") {
+        shownButton = reactDom.createPortal(
+          h("span", { style: { display: "inline-flex", alignItems: "center", order: 5 } }, button),
+          heroHost,
+        );
+      }
+
+      if (!open) return shownButton;
 
       var panel = h("div", {
         ref: panelRef,
@@ -1411,10 +1460,10 @@ window.__ModuleLoader__.load({
       );
 
       if (reactDom !== null && typeof reactDom.createPortal === "function" && typeof document !== "undefined" && document.body) {
-        return h(react.Fragment, null, button, reactDom.createPortal(panel, document.body));
+        return h(react.Fragment, null, shownButton, reactDom.createPortal(panel, document.body));
       }
       // Portál nélkül (régi kliens-környezet) a panel a gomb mellett jelenik meg.
-      return h("span", { style: { position: "relative", display: "inline-block" } }, button, panel);
+      return h("span", { style: { position: "relative", display: "inline-block" } }, shownButton, panel);
     }
 
     // ─────────────────────────────────────────── láthatatlan aktivitás-mérő

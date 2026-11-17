@@ -305,6 +305,67 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-17` (húszadik kör) — **a „két kattintás” indítás, az 1. asztal
+  kikényszerítése, és a hero gombsor egyetlen sorba rendezése.** (1) **MÉRT OK
+  (log `11:09:52`–`11:10:30`):** a tálca a launcher első kattintására indult, de
+  TISZTELTE a `state\window.closed` jelölőt („a felhasználó bezárta az ablakot —
+  a tálca-indulás NEM nyitja meg újra”), ezért csak a tálca-ikon jelent meg; a
+  MÁSODIK kattintás jelzésére az ablak a `window-desktop.txt`-ben maradt **2**-t
+  nyitotta. A gyökér: (a) a kifejezett indítás (launcher-ikon) ugyanúgy
+  viselkedett, mint a bejelentkezéskori autostart; (b) a „friss indítás”
+  feltétele a DshWindow **folyamatszám** volt — a 2. asztal ablaka rejtve életben
+  maradt, ezért hamis „van már ablak” választ adott, és nem írta vissza az 1-et
+  (§1.8); (c) a felügyelet 20 s-os ciklusa miatt az ablak a tickre várt (~24 s).
+  **Javítás:** a `DshLauncher` kifejezett indításkor `--show`-t ad át
+  (`DshTray.Main(string[])`); ilyenkor a tálca törli a bezárás-jelölőt, és ha
+  NINCS **látható** DshWindow (`AnyVisibleDshWindow`), a `window-desktop.txt` 1
+  lesz (az élő, rejtett ablak pid-fájlja megmarad, csak az elavultak törlődnek).
+  Új, kötött `StartStartupOpener()` szál: 500 ms-onként, max. 120× (60 s, §1.7) a
+  megszokott `EnsureWindow`-t hívja, amint a harness figyel — így az első
+  kattintásra megnyílik az ablak. Az autostart (Registry `Run` = `DshTray.exe`,
+  kapcsoló nélkül) változatlanul tiszteli a jelölőt. (2) **Hero gombsor:** a
+  `conversation.input.dock` FÜGGŐLEGES lista (a frontend `composerStack`
+  `flex-direction: column`), ezért a külön slot-bejegyzésként regisztrált
+  hero-gombok külön sorba estek (robot a bal szélre, költség lejjebb), a PHP /
+  1/2 / FTP pedig egyáltalán nem kapott hero-példányt. Most a `dsh-ui-extras`
+  hero-sora egy `[data-dsh-hero-actions]` befogadót rajzol, és a többi plugin a
+  `react-dom` portállal **oda** teszi a gombját (a slot-bejegyzés `null`):
+  `dsh-devadmin` (PHP 60, 1/2 61), `dsh-ftp-deploy` (62), `dsh-hazi-robot` (0),
+  `dsh-koltseg` (5) — a portált elemek CSS `order`-je a fejléc-sorrend, tehát a
+  hero sor ugyanaz, mint az aktív fejlécé. (3) **A „hanyag hiba” az új
+  beszélgetés felületén a GOMBOK elrendezése volt** (a felhasználó pontosítása
+  szerint), nem a lábléc összege — a (2) pont portál-javítása pont ezt szünteti
+  meg: a hero gombsor egy sorban, a fejléc-sorrenddel jelenik meg. **Az Alibaba
+  előtti mínusz NEM hiba, hanem egyeztetett működés:** a `-$0.00` szándékos,
+  mert az Alibaba-egyenleg negatívba megy (tartozás-oldal) — ezért a korábbi
+  „előjel-levágó” próbálkozást **visszavontuk** (`formatSignedUsd2` törölve, a
+  pill újra `"-" + formatUsd2(...)`; a kódban komment mondja ki, hogy senki ne
+  „javítsa”). (4) **Tesztek:** ui-extras 1 (hero-befogadó), devadmin 2, ftp 1,
+  robot 1, koltseg 10 — mind zöld; a valódi kiszolgált bundle ellenőrizve
+  (tartalmazza a `data-dsh-hero-actions` befogadót). (5) **Érvénybe lépés:**
+  `bin\DshLauncher.exe` újraépült (a következő kattintás már az); a
+  `bin\DshTray.exe.new` / `DshWindow.exe.new` csere a következő természetes
+  indításnál (`PendingUpdate.Apply`, §1.5 — a futó tálca/ablak nem lett
+  leállítva); a kliens-oldali változások panel-újratöltéssel élnek.
+
+- `2026-11-17` (tizenkilencedik kör) — **a tálca „Kilépés" mostantól MINDEN
+  háttérfolyamatot leállít (felhasználói döntés).** A 2026-11-16-i szabály
+  („a kilépés otthagyja a munkaablakokat, a következő tálca átveszi őket")
+  invazívnak bizonyult, ezért `src\DshTray.cs` → `ExitApp()` most ebben a
+  sorrendben állít le: felügyelet/ütemező/asztal-figyelő timerek (előbb, hogy a
+  20 s-os tick ne indítsa vissza) → munkaablakok (`HealDesktopPidFromRunningWindow`
+  + `StopDesktopWindows`, a ciklus már `DesktopCount()`-ig megy, nem 1..2-ig) →
+  harness (`StopPort(_cfg.Port)` = 3080) → LLM-proxy (`StopPort(4123)`) →
+  robot-szerver (4180, ha fut) → `state\harness.pid` és `state\harness.url`
+  törlése (a következő indítás ne higgye futónak, és ne a halott tokenre
+  navigáljon). Minden leállítás **ellenőrzött PID-del vagy port-tulajdonossal**
+  megy (§1.6: név szerint soha). A napló kimondja a maradék `DshWindow`
+  darabszámot (`tálca kilépés kész (maradék DshWindow: N)`).
+  **Érvénybe lépés:** a build `bin\DshTray.exe.new` (60 416 B) — a futó tálca
+  zárja a `DshTray.exe`-t, ezért a csere a **következő tálca-indításnál**
+  automatikus (`PendingUpdate.Apply`). Onnantól a „Kilépés" a futó sessionöket
+  is megszakítja — ez a kért viselkedés, a session-naplók tartósak.
+
 - `2026-11-17` (tizennyolcadik kör) — **MÉRVE: a küszöb-alapú (szelíd) tömörítés
   SOHA nem fut le; a `thresholdRatio` hatástalan knob.** A kiváltó eset: az
   Antikolt session (`session-5d611e3c`, 23 kör / 689 lépés) ágense azt írta,

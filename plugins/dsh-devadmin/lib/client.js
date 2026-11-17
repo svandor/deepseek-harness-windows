@@ -20,6 +20,19 @@ window.__ModuleLoader__.load({
     Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 
     const react = require("react");
+    /**
+     * A hero-gombsor befogadója a `dsh-ui-extras` CornerControls hero-példányában
+     * (`[data-dsh-hero-actions]`). A `conversation.input.dock` FÜGGŐLEGES lista:
+     * külön slot-bejegyzésként a gomb külön sorba kerülne (mért hiba: a PHP és
+     * az 1/2 ikon egyáltalán nem jelent meg az új beszélgetés felületén). A
+     * portál a MÁR LÉTEZŐ gombsorba rajzol, ezért marad egy sor.
+     */
+    let reactDom = null;
+    try {
+      reactDom = require("react-dom");
+    } catch (error) {
+      reactDom = null;
+    }
 
     /** A tab azonositoja es tipusa (a jobb oldalsavban jelenik meg). */
     const TAB_ID = "dsh-devadmin/admin";
@@ -27,6 +40,8 @@ window.__ModuleLoader__.load({
     /** A FELSO MENUSOR rekesze, ahova az ikon kerul (a ui-extras is ezt hasznalja). */
     const HEADER_SLOT = "conversation.session.header.utilities";
     const BODY_SLOT = "sidebar.right.pane.tab";
+    /** A composer fölötti sáv: MINDKÉT fázisban létezik (`hero` is). */
+    const INPUT_DOCK_SLOT = "conversation.input.dock";
     // A state válasz drága (HTTP-próba a dev oldalakra + portok), a host 15 s-ig
     // cache-eli; ezért a panel is 15 s-onként frissít (korábban 5 s volt).
     const POLL_MS = 15000;
@@ -769,6 +784,60 @@ window.__ModuleLoader__.load({
     // ── plugin ──────────────────────────────────────────────────────────
     const inject = ["slots", "sidebarRightTabs", "sidebarRight"];
 
+    /**
+     * A hero-gombsor befogadójának keresése (`[data-dsh-hero-actions]`).
+     */
+    function readHeroActionsHost() {
+      try {
+        if (typeof document === "undefined") return null;
+        return document.querySelector("[data-dsh-hero-actions]");
+      } catch (error) {
+        return null;
+      }
+    }
+
+    /**
+     * A hero-gombsor befogadója, élőben követve.
+     *
+     * A befogadó a `dsh-ui-extras` hero-példányával EGYÜTT jelenik meg (és tűnik
+     * el), ezért nem elég mountkor egyszer ránézni: 500 ms-onként újraolvassuk.
+     * A kör korlátos (a komponens unmountjakor leáll), és csak egy
+     * `querySelector` — a statisztika-sor frissülései nem terhelik.
+     */
+    function useHeroActionsHost() {
+      const [host, setHost] = react.useState(readHeroActionsHost);
+      react.useEffect(() => {
+        setHost(readHeroActionsHost());
+        const timer = setInterval(() => {
+          const next = readHeroActionsHost();
+          setHost((previous) => (previous === next ? previous : next));
+        }, 500);
+        return () => clearInterval(timer);
+      }, []);
+      return host;
+    }
+
+    /**
+     * Egy gomb bejegyzése a hero-sávba. A slot-bejegyzés maga `null`-t rajzol
+     * (nincs plusz sor), a gomb a portálon át a közös gombsorba kerül. A `order`
+     * a fejléc-sorrenddel azonos (PHP 60, 1/2 61).
+     */
+    function heroActionsEntry(slots, id, order, renderButton) {
+      slots.inject(INPUT_DOCK_SLOT, () =>
+        slots.register(
+          { name: INPUT_DOCK_SLOT, id: id, order: order },
+          function DevAdminHeroSeat() {
+            const host = useHeroActionsHost();
+            if (!reactDom || typeof reactDom.createPortal !== "function" || !host) return null;
+            return reactDom.createPortal(
+              h("span", { style: { display: "inline-flex", alignItems: "center", order: order } }, renderButton()),
+              host,
+            );
+          },
+        ),
+      );
+    }
+
     function apply(ctx) {
       // 1) tab tipus
       if (ctx.sidebarRightTabs && typeof ctx.sidebarRightTabs.register === "function") {
@@ -827,21 +896,27 @@ window.__ModuleLoader__.load({
       // MINDIG regisztraljuk a munkaasztal-ikonokat; a komponens maga donti el
       // (pollozva), hogy latszik-e — kulonben a 2. asztal paneljein nem jelentek
       // meg, mert azok kesobb toltodtek be (felhasznaloi jelzes, 2026-11-15).
+      const setDesktop = (n) => {
+        getJson(`/devadmin/desktop?n=${encodeURIComponent(n)}`).catch(() => {});
+      };
       ctx.slots.inject(HEADER_SLOT, () =>
         ctx.slots.register(
           {
             name: HEADER_SLOT,
             id: "devadmin-desktop",
             order: 61,
-            inject: () => ({
-              setDesktop: (n) => {
-                getJson(`/devadmin/desktop?n=${encodeURIComponent(n)}`).catch(() => {});
-              },
-            }),
+            inject: () => ({ setDesktop }),
           },
           DesktopSwitcher,
         ),
       );
+
+      // 3) HERO felület (üres, új beszélgetés): a beszélgetés fejléce REJTVE
+      // van, ezért a fenti két ikon ott nem jelenik meg. A `dsh-ui-extras` hero
+      // gombsorába portoljuk őket, ugyanazzal az `order`-rel, mint a fejlécben
+      // (PHP 60, 1/2 61) — így a gombsor ugyanazt a sorrendet mutatja.
+      heroActionsEntry(ctx.slots, "devadmin-hero-php", 60, () => h(AdminHeaderButton, { openTab }));
+      heroActionsEntry(ctx.slots, "devadmin-hero-desktop", 61, () => h(DesktopSwitcher, { setDesktop }));
 
     }
 

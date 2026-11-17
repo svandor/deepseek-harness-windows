@@ -297,3 +297,42 @@ test("kliens: a bundle a helyes végpontot és slotokat használja", () => {
   assert.equal(constants.TRACKER_SLOT, "conversation.composer.dock");
   assert.equal(constants.HEADER_ID, "koltseg-header");
 });
+
+test("kliens: a hero gomb a kozos gombsorba portol (nem kulon sorba)", () => {
+  const savedDocument = globalThis.document;
+  const HERO_HOST = { __marker: "hero-host" };
+  globalThis.document = {
+    body: { __body: true },
+    querySelector(selector) {
+      if (selector === "[data-dsh-hero-actions]") return HERO_HOST;
+      if (selector === "[data-conversation-scroll]") {
+        return { closest: (s) => (s === "[data-phase]" ? { getAttribute: () => "hero" } : null) };
+      }
+      return null;
+    },
+    querySelectorAll() { return []; },
+  };
+  try {
+    const { exported, react } = loadClient({ reactDom: true });
+    const { ctx, calls } = makeCtx();
+    exported.apply(ctx);
+    const heroEntry = calls.slots.find(
+      (entry) => entry.name === "conversation.input.dock" && entry.registration.meta.id === "koltseg-hero",
+    );
+    assert.ok(heroEntry, "a hero-regisztracio letezik");
+    const t = ctx.locale.bind("koltseg");
+    react.__reset();
+    const tree = heroEntry.registration.component({ sessionId: "session-abc", t });
+    assert.ok(tree, "a hero gomb renderel");
+    assert.equal(tree.__portal, true, "a gomb a hero gombsorba portol");
+    assert.equal(tree.container, HERO_HOST, "a portal celja a kozos gombsor");
+    const wrapper = tree.children;
+    assert.equal(wrapper.type, "span");
+    assert.equal(wrapper.props.style.order, 5, "a fejlec-sorrenddel azonos order");
+    assert.equal(wrapper.children[0].type, "button");
+    assert.equal(wrapper.children[0].props["data-koltseg-seat"], "hero");
+  } finally {
+    if (savedDocument === undefined) delete globalThis.document;
+    else globalThis.document = savedDocument;
+  }
+});

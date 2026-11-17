@@ -15,10 +15,25 @@ window.__ModuleLoader__.load({
     var react = require("react");
     var h = react.createElement;
 
+    /**
+     * A hero-gombsor befogadója a `dsh-ui-extras` CornerControls hero-példányában
+     * (`[data-dsh-hero-actions]`). A `conversation.input.dock` függőleges lista,
+     * ezért külön bejegyzésként az FTP ikon külön sorba kerülne (mért hiba: az
+     * új beszélgetés felületén hiányzott). A portál a meglévő gombsorba rajzol.
+     */
+    var reactDom = null;
+    try {
+      reactDom = require("react-dom");
+    } catch (error) {
+      reactDom = null;
+    }
+
     var TAB_ID = "dsh-ftp-deploy/ftp";
     var TAB_KIND = "ftp";
     var HEADER_SLOT = "conversation.session.header.utilities";
     var BODY_SLOT = "sidebar.right.pane.tab";
+    /** A composer fölötti sáv: MINDKÉT fázisban létezik (`hero` is). */
+    var INPUT_DOCK_SLOT = "conversation.input.dock";
     var NS = "ftp";
     var POLL_MS = 2000;
 
@@ -973,6 +988,57 @@ window.__ModuleLoader__.load({
     // ─── plugin ─────────────────────────────────────────────────────────
     const inject = ["slots", "locale", "sidebarRightTabs", "sidebarRight"];
 
+    /** A hero-gombsor befogadójának keresése (`[data-dsh-hero-actions]`). */
+    function readHeroActionsHost() {
+      try {
+        if (typeof document === "undefined") return null;
+        return document.querySelector("[data-dsh-hero-actions]");
+      } catch (error) {
+        return null;
+      }
+    }
+
+    /**
+     * A hero-gombsor befogadója, élőben követve. A befogadó a `dsh-ui-extras`
+     * hero-példányával együtt jelenik meg és tűnik el, ezért 500 ms-onként
+     * újraolvassuk; a kör a komponens unmountjakor leáll (korlátos, §1.7).
+     */
+    function useHeroActionsHost() {
+      var hostState = react.useState(readHeroActionsHost);
+      var host = hostState[0];
+      var setHost = hostState[1];
+      react.useEffect(function () {
+        setHost(readHeroActionsHost());
+        var timer = setInterval(function () {
+          var next = readHeroActionsHost();
+          setHost(function (previous) { return previous === next ? previous : next; });
+        }, 500);
+        return function () { clearInterval(timer); };
+      }, []);
+      return host;
+    }
+
+    /**
+     * Egy gomb bejegyzése a hero-sávba. A slot-bejegyzés `null`-t rajzol (nincs
+     * plusz sor), a gomb a portálon át a közös gombsorba kerül. Az `order` a
+     * fejléc-sorrenddel azonos (FTP 62).
+     */
+    function heroActionsEntry(slots, id, order, renderButton) {
+      slots.inject(INPUT_DOCK_SLOT, function () {
+        return slots.register(
+          { name: INPUT_DOCK_SLOT, id: id, order: order },
+          function FtpHeroSeat() {
+            var host = useHeroActionsHost();
+            if (!reactDom || typeof reactDom.createPortal !== "function" || !host) return null;
+            return reactDom.createPortal(
+              h("span", { style: { display: "inline-flex", alignItems: "center", order: order } }, renderButton()),
+              host,
+            );
+          },
+        );
+      });
+    }
+
     function apply(ctx) {
       ctx.locale.register(NS, { hu: HU, en: EN });
       var t = ctx.locale.bind(NS);
@@ -1026,6 +1092,13 @@ window.__ModuleLoader__.load({
           },
           FtpHeaderButton,
         );
+      });
+
+      // HERO felület (üres, új beszélgetés): a beszélgetés fejléce rejtve van,
+      // ezért az FTP ikon ott nem jelenik meg. A `dsh-ui-extras` hero gombsorába
+      // portoljuk, a fejléc-sorrenddel azonos `order`-rel (62).
+      heroActionsEntry(ctx.slots, "ftp-deploy-hero", 62, function () {
+        return h(FtpHeaderButton, { t: t, openTab: openTab });
       });
     }
 

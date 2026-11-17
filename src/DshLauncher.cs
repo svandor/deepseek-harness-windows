@@ -81,7 +81,7 @@ internal static class DshLauncher
 
         if (trayOnly)
         {
-            StartTray(trayExe, root);
+            StartTray(trayExe, root, false);
             return 0;
         }
 
@@ -92,13 +92,21 @@ internal static class DshLauncher
                 // The tray is alive but its event is missing (very old build):
                 // start it again, the second instance exits on the mutex and the
                 // window would never open — so fall back to the window itself.
-                StartTray(trayExe, root);
+                StartTray(trayExe, root, true);
             }
             return 0;
         }
 
         // No tray yet: start it so that it opens the window itself.
-        StartTray(trayExe, root);
+        //
+        // `--show` (MÉRT HIBA, 2026-11-17): a tálca indításkor eddig TISZTELTE a
+        // `state\window.closed` jelölőt („a felhasználó bezárta az ablakot”), ezért
+        // a kitűzött ikon ELSŐ kattintására csak a rendszertálca-ikon jelent meg,
+        // az ablak csak a második kattintásra (a jelzésre) nyílt meg. A kifejezett
+        // indítás viszont FELHASZNÁLÓI KÉRÉS: ilyenkor a jelölő nem érvényes.
+        // A jelölő továbbra is védi a bejelentkezéskori autostartot (az `--tray-only`,
+        // illetve a kapcsoló nélküli indítás nem adja át a `--show`-t).
+        StartTray(trayExe, root, true);
         return 0;
     }
 
@@ -211,7 +219,7 @@ internal static class DshLauncher
     /// és fókuszlopás (AGENTS.md 1.1/1.3, P0). A natív tálca WinExe: egyáltalán
     /// nem hoz létre konzolt.
     /// </summary>
-    private static void StartTray(string trayExe, string root)
+    private static void StartTray(string trayExe, string root, bool show)
     {
         var psi = new ProcessStartInfo
         {
@@ -219,7 +227,10 @@ internal static class DshLauncher
             WorkingDirectory = root,
             UseShellExecute = false,
             CreateNoWindow = true,
-            WindowStyle = ProcessWindowStyle.Hidden
+            WindowStyle = ProcessWindowStyle.Hidden,
+            // `--show`: kifejezett indítás — a tálca ilyenkor a bezárás-jelölő
+            // ellenére is megnyitja az ablakot (lásd a Main hívását).
+            Arguments = show ? "--show" : string.Empty
         };
         Process.Start(psi);
     }
