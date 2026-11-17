@@ -99,12 +99,17 @@ Két szinten; a felület a mérés alján kiírja, melyik élt:
 3. **Szöveg-alapú gépelés-becslés (visszamenőleg is működik):** a session-napló
    tartalmazza a **felhasználó által beírt** prompt hosszát, ebből a gépelés
    ideje becsülhető: `hossz / 150 leütés-perc` (a tempó profil-szintű,
-   `typingCharsPerMinute`). Csak a **hossz** olvasódik, a szöveg nem; a rövid
-   prompt (12 karakter alatt, pl. „ok”) nem számít, és a becslés soha nem
-   nagyobb a rendelkezésre álló szünetnél, a tétlenség-plafonnál, illetve a
-   kliens-mért gépelésnél (érvényes: `max(mért, becsült)`). Ezt a részt a
-   panel „becsült (a beírt szövegből)” jelöléssel mutatja, a mérés jegyzetei
-   pedig kiírják a perceket.
+   `typingCharsPerMinute`). Csak a **hossz** olvasódik, a szöveg nem; 4 karakter
+   alatt nincs becslés, és a becslés soha nem nagyobb a rendelkezésre álló
+   szünetnél, a tétlenség-plafonnál, illetve a kliens-mért gépelésnél
+   (érvényes: `max(mért, becsült)`).
+   **Az első prompt is számít:** a munkafolyamat legelső promptja a napló kezdete
+   *előtt* íródott, ezért nincs hozzá szünet — 40 karakter fölött mégis
+   becsüljük (a plafonig), különben a legfontosabb, leghosszabb prompt elveszne.
+   **A körönkénti táblában** az olvasás a *válasz* körénél, a gépelés a *beírt
+   prompt* körénél jelenik meg. A becsült részt a panel „becsült (a beírt
+   szövegből)” jelöléssel mutatja, a mérés jegyzetei pedig kiírják a perceket
+   (és azt is, mennyi az első promptokból).
 
 Ha nincs kliens-adat (másik kliens, terminálból indított session), a mérés
 automatikusan az 1. szintre esik vissza, és ezt ki is írja.

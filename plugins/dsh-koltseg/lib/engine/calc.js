@@ -235,6 +235,7 @@ export async function measure(options) {
   let readMs = 0;
   let typeMs = 0;
   let typeEstimatedMs = 0;
+  let firstPromptMs = 0;
   let grossMs = 0;
   let openTurns = 0;
   const wallIntervals = [];
@@ -259,6 +260,7 @@ export async function measure(options) {
     const bucket = activity.bySession.get(record.id);
     const human = humanTime(recordWithClosed, bucket, profile, window);
     typeEstimatedMs += Number.isFinite(human.estimatedTypeMs) ? human.estimatedTypeMs : 0;
+    firstPromptMs += Number.isFinite(human.firstPromptMs) ? human.firstPromptMs : 0;
     humanSources.add(human.source);
 
     agentMs += recordAgent;
@@ -285,23 +287,42 @@ export async function measure(options) {
     });
 
     if (scope === "session") {
+      // A humanTime KÉT tételt adhat ugyanarra a körre: az olvasást a válasz
+      // köré, a gépelést a beírt prompt köré teszi (2026-11-17) — ezért körönként
+      // ÖSSZEVONJUK, nem soronként pusholunk.
+      const rowsByTurn = new Map();
+      const rowFor = (turn) => {
+        let row = rowsByTurn.get(turn.turn);
+        if (row === undefined) {
+          row = {
+            turn: turn.turn,
+            start: turn.start,
+            end: turn.end,
+            open: turn.open === true,
+            agentMs: Math.max(0, Math.min(turn.end, window.to) - Math.max(turn.start, window.from)),
+            readMs: 0,
+            typeMs: 0,
+            estimated: false,
+            gapMs: 0,
+            humanSource: "none",
+          };
+          rowsByTurn.set(turn.turn, row);
+        }
+        return row;
+      };
       for (const item of human.items) {
         const turn = closed.find((entry) => entry.turn === item.turn);
         if (turn === undefined) continue;
-        const turnAgent = Math.max(0, Math.min(turn.end, window.to) - Math.max(turn.start, window.from));
-        turnRows.push({
-          turn: item.turn,
-          start: turn.start,
-          end: turn.end,
-          open: turn.open === true,
-          agentMs: turnAgent,
-          readMs: item.readMs,
-          typeMs: item.typeMs,
-          estimated: item.estimated === true,
-          gapMs: item.gapMs,
-          humanSource: item.source,
-        });
+        const row = rowFor(turn);
+        row.readMs += item.readMs;
+        row.typeMs += item.typeMs;
+        row.gapMs += item.gapMs;
+        if (item.estimated === true) row.estimated = true;
+        // A „prompt” a valós gépelést írja le (a felhasználó írta be) — ezt
+        // megtartjuk, mert ez a beszédesebb forrás a sorban.
+        if (row.humanSource === "none" || item.source === "prompt") row.humanSource = item.source;
       }
+      for (const row of rowsByTurn.values()) turnRows.push(row);
       // A legutolsó körnek nincs párja (nincs „következő prompt”), ezért külön sor.
       const last = closed[closed.length - 1];
       if (last !== undefined && !turnRows.some((row) => row.turn === last.turn)) {
@@ -361,7 +382,10 @@ export async function measure(options) {
     const cpm = Number.isFinite(profile.typingCharsPerMinute) && profile.typingCharsPerMinute > 0
       ? profile.typingCharsPerMinute
       : 150;
-    notes.push(`A gépelés ${Math.round(typeEstimatedMs / 60000)} perce a beírt promptok hosszából becsülve (${cpm} leütés/perc).`);
+    const firstPart = firstPromptMs > 0
+      ? ` — ebből ${Math.round(firstPromptMs / 60000)} perc a munkafolyamatok első promptjából`
+      : "";
+    notes.push(`A gépelés ${Math.round(typeEstimatedMs / 60000)} perce a beírt promptok hosszából becsülve (${cpm} leütés/perc)${firstPart}.`);
   }
   if (profile.roundToMinutes === 0) notes.push("Kerekítés: percre pontos (nincs felfelé kerekítés).");
   if (billable.billableMs !== billable.rawMs) {

@@ -33,7 +33,7 @@ window.__ModuleLoader__.load({
     }
 
     var NS = "koltseg";
-    var BUILD = "2026-11-17.2";
+    var BUILD = "2026-11-17.3";
     var ROUTE = "/koltseg";
     var HEADER_SLOT = "conversation.session.header.utilities";
     var TRACKER_SLOT = "conversation.composer.dock";
@@ -330,12 +330,18 @@ window.__ModuleLoader__.load({
       return (number < 0 ? "-" : "") + (text.length > 0 ? text : "0") + " Ft";
     }
 
+    /**
+     * USD összeg MAGYAR alakban: `$1,0407` (tizedesvessző, nem pont).
+     *
+     * MÉRT HIBA (2026-11-17, felhasználói jelzés): a `toFixed` pontot ad, ami a
+     * magyar felületen idegen (`$1.0407`) — ezért a tizedesjel vessző.
+     */
     function fmtUsd(value) {
       var number = toNumber(value);
       try {
-        return "$" + number.toFixed(4);
+        return "$" + String(number.toFixed(4)).replace(".", ",");
       } catch (error) {
-        return "$" + String(number);
+        return "$" + String(number).replace(".", ",");
       }
     }
 

@@ -363,3 +363,13 @@ test("kliens: a token-szám rövid alakja olvasható (M / Mrd)", () => {
   assert.equal(fmtTokens(987), "987");
   assert.equal(fmtTokens(0), "0");
 });
+
+test("kliens: a token költség magyar alakban (tizedesvessző, nem pont)", () => {
+  // MÉRT HIBA (2026-11-17, felhasználói jelzés): `$1.0407` — a `toFixed` pontot
+  // ad, a magyar felületen viszont vessző kell.
+  const { exported } = loadClient();
+  const { fmtUsd } = exported.__util;
+  assert.equal(fmtUsd(1.0407), "$1,0407");
+  assert.equal(fmtUsd(0), "$0,0000");
+  assert.equal(fmtUsd(133.7558), "$133,7558");
+});

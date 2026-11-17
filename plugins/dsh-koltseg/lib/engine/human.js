@@ -155,8 +155,20 @@ const ACTIVITY_TRUST_MILLISECONDS = 12 * 3600000;
  */
 export const TYPING_CHARS_PER_MINUTE = 150;
 
-/** Ez alatt a hossz alatt nincs értelme becsülni („ok”, „folytasd”, „igen”). */
-export const MIN_TYPING_CHARS = 12;
+/** Ez alatt a hossz alatt nincs értelme becsülni („ok”, „igen”). */
+export const MIN_TYPING_CHARS = 4;
+
+/**
+ * Az ELSŐ prompt külön szabálya.
+ *
+ * MIÉRT (2026-11-17, a felhasználó jelzése: „nem látom, hogy a korábbi
+ * promptokat beszámolná úgy, ahogy az olvasást”): a session első promptja a
+ * napló KEZDETE ELŐTT íródott, ezért nincs hozzá szünet — a legfontosabb,
+ * leghosszabb prompt beírása így teljesen elveszett (MÉRT: 2340 karakter = 15,6
+ * perc, 0 perc lett). Ezért az első promptot is becsüljük, de csak ha tényleg
+ * hosszú (40 karakter), és a szokásos tétlenség-plafonig.
+ */
+export const FIRST_PROMPT_MIN_CHARS = 40;
 
 /** Egy prompt beírásának felső becslése (a szöveg nem lehet órákig tartó gépelés). */
 const MAX_TYPING_ESTIMATE_MS = 30 * 60000;
@@ -221,6 +233,34 @@ export function humanTime(session, activity, profile, window) {
   // `0` = nincs plafon (a profil 0-t is enged), ezért külön kezeljük.
   const capOrInfinity = (value) => (Number.isFinite(value) && value > 0 ? value : Number.POSITIVE_INFINITY);
 
+  /**
+   * Az ELSŐ prompt beírása.
+   *
+   * MIÉRT (2026-11-17, felhasználói jelzés: „nem látom, hogy a korábbi
+   * promptokat beszámolná úgy, ahogy az olvasást”): a session első promptja a
+   * napló kezdete ELŐTT íródott, ezért nincs hozzá szünet, és a legfontosabb
+   * prompt beírása teljesen elveszett (MÉRT: 2340 karakter = 15,6 perc -> 0).
+   * Csak a hosszú (40+ karakter) első promptot becsüljük, a tétlenség-plafonig.
+   */
+  const firstTurn = turns[0];
+  let firstPromptMs = 0;
+  if (firstTurn !== undefined && Number.isFinite(firstTurn.promptChars) && firstTurn.promptChars >= FIRST_PROMPT_MIN_CHARS) {
+    firstPromptMs = typingEstimateMs(firstTurn.promptChars, charsPerMinute, capOrInfinity(idleCap));
+    if (firstPromptMs > 0) {
+      typeMs += firstPromptMs;
+      estimatedTypeMs += firstPromptMs;
+      items.push({
+        turn: firstTurn.turn,
+        gapMs: 0,
+        readMs: 0,
+        typeMs: firstPromptMs,
+        source: "prompt",
+        estimated: true,
+        firstPrompt: true,
+      });
+    }
+  }
+
   // Csak a LEZÁRT körök párosíthatók: a nyitott kör után még nincs „következő".
   for (let i = 0; i < turns.length - 1; i += 1) {
     const current = turns[i];
@@ -247,7 +287,10 @@ export function humanTime(session, activity, profile, window) {
       // felhasználó szabálya is („a hosszabb szünet nem számít”).
       const counted = idleCap > 0 && length > idleCap ? 0 : length;
       if (counted === 0) {
+        // A szünet egésze nem munkaidő („távol”), de a beírt prompt valós
+        // gépelés — ezért a gépelés-tétel ettől külön jelenik meg.
         items.push({ turn: current.turn, gapMs: length, readMs: 0, typeMs: 0, source: "away" });
+        if (estimate > 0) items.push({ turn: next.turn, gapMs: 0, readMs: 0, typeMs: estimate, source: "prompt", estimated: true });
         continue;
       }
       // A szünet összes ideje a rendelkezésre álló keret; a GÉPELÉS a beírt
@@ -257,14 +300,10 @@ export function humanTime(session, activity, profile, window) {
       readMs += reading;
       typeMs += typing;
       if (typing > 0) estimatedTypeMs += typing;
-      items.push({
-        turn: current.turn,
-        gapMs: length,
-        readMs: reading,
-        typeMs: typing,
-        source: "fallback",
-        estimated: typing > 0,
-      });
+      // Az olvasás a VÁLASZ (current) köré, a gépelés a BEÍRT PROMPT (next)
+      // köré kerül — így a körönkénti tábla azt mutatja, amit az ember tett.
+      items.push({ turn: current.turn, gapMs: length, readMs: reading, typeMs: 0, source: "fallback" });
+      items.push({ turn: next.turn, gapMs: 0, readMs: 0, typeMs: typing, source: typing > 0 ? "prompt" : "fallback", estimated: typing > 0 });
       continue;
     }
 
@@ -290,7 +329,8 @@ export function humanTime(session, activity, profile, window) {
         typeMs += typing;
         estimatedTypeMs += typing;
       }
-      items.push({ turn: current.turn, gapMs: length, readMs: 0, typeMs: typing, source: "away", estimated: typing > 0 });
+      items.push({ turn: current.turn, gapMs: length, readMs: 0, typeMs: 0, source: "away" });
+      if (typing > 0) items.push({ turn: next.turn, gapMs: 0, readMs: 0, typeMs: typing, source: "prompt", estimated: true });
       continue;
     }
 
@@ -314,11 +354,12 @@ export function humanTime(session, activity, profile, window) {
     if (typing > measured) estimatedTypeMs += typing - measured;
     readMs += read;
     typeMs += typing;
-    items.push({ turn: current.turn, gapMs: length, readMs: read, typeMs: typing, source: "client", estimated: typing > measured });
+    items.push({ turn: current.turn, gapMs: length, readMs: read, typeMs: 0, source: "client" });
+    items.push({ turn: next.turn, gapMs: 0, readMs: 0, typeMs: typing, source: typing > 0 ? "prompt" : "client", estimated: typing > measured });
   }
 
   const source = clientUsed > 0 && fallbackUsed > 0 ? "mixed" : (clientUsed > 0 ? "client" : "fallback");
-  return { items, readMs, typeMs, estimatedTypeMs, gapMs, source };
+  return { items, readMs, typeMs, estimatedTypeMs, firstPromptMs, gapMs, source };
 }
 
 /** Az aktivitás-mérés elérhető-e egyáltalán ebben az ablakban. */

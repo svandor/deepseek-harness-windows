@@ -104,11 +104,17 @@ At two levels; the bottom of the window states which one was used:
 3. **Text-based typing estimate (works retroactively too):** the session log
    carries the length of the prompt the **user typed**, so typing time can be
    estimated: `length / 150 characters per minute` (the pace is a profile field,
-   `typingCharsPerMinute`). Only the **length** is read, never the text; a short
-   prompt (under 12 characters, e.g. "ok") does not count, and the estimate never
-   exceeds the available gap, the idle cap, or the client-measured typing
-   (effective value: `max(measured, estimated)`). The panel marks that portion as
-   "estimated (from the typed text)" and the measurement notes state the minutes.
+   `typingCharsPerMinute`). Only the **length** is read, never the text; under 4
+   characters there is no estimate, and the estimate never exceeds the available
+   gap, the idle cap, or the client-measured typing (effective value:
+   `max(measured, estimated)`).
+   **The first prompt counts too:** a workflow's very first prompt was typed
+   *before* the log begins, so it has no gap — above 40 characters it is still
+   estimated (up to the cap), otherwise the most important, longest prompt would
+   disappear. **In the per-turn table** reading belongs to the *answer* and typing
+   to the *prompt that was typed*. The panel marks the estimated portion as
+   "estimated (from the typed text)", and the measurement notes state the minutes
+   (including how much came from the first prompts).
 
 Without client data (another client, a session started from a terminal) the
 measurement falls back to levels 1 and 3 automatically and says so.

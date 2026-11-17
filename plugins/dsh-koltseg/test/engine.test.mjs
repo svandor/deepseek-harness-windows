@@ -329,7 +329,10 @@ test("kliens nélkül a napló-alapú tartalék számol, a tétlenség-plafon fe
   // 10 perces szünet beszámít; a 30 perces (a 15 perces plafon fölött) NEM.
   assert.equal(human.readMs, 10 * MINUTE);
   assert.equal(human.typeMs, 0);
-  assert.equal(human.items[1].source, "away");
+  const away = human.items.find((item) => item.source === "away");
+  assert.ok(away, "a hosszú szünet „távol”");
+  assert.equal(away.turn, 2);
+  assert.equal(away.readMs, 0);
 });
 
 test("kliens-adattal az olvasás és a gépelés szétválik, a rejtett idő kimarad", () => {
@@ -387,13 +390,21 @@ test("a beírt prompt hosszából visszamenőleg is becsül gépelést (kliens n
   const human = humanTime(record, undefined, presetProfile("alap"), window);
   assert.equal(human.source, "fallback");
   assert.equal(record.turns[1].promptChars, 300);
-  // A 10 perces szünetből 2 perc gépelés, 8 perc olvasás (nem duplázódik).
-  assert.equal(human.typeMs, 2 * MINUTE);
+  // A szünetből 2 perc gépelés, 8 perc olvasás (nem duplázódik).
   assert.equal(human.readMs, 8 * MINUTE);
-  assert.equal(human.estimatedTypeMs, 2 * MINUTE);
-  assert.equal(human.items[0].estimated, true);
-  // Az első kör promptja a szünet ELŐTT volt, ezért nem a 2. szünet gépelése.
-  assert.equal(human.items[0].typeMs, 2 * MINUTE);
+  // Ezen FELÜL az ELSŐ prompt beírása is számít: 5000 karakter = 33 perc, de a
+  // tétlenség-plafon 15 percnél megállítja (2026-11-17, felhasználói kérés).
+  assert.equal(human.firstPromptMs, 15 * MINUTE);
+  assert.equal(human.typeMs, 17 * MINUTE);
+  assert.equal(human.estimatedTypeMs, 17 * MINUTE);
+  // A körönkénti bontásban a gépelés a BEÍRT PROMPT körénél van.
+  const typingItems = human.items.filter((item) => item.typeMs > 0);
+  assert.deepEqual(typingItems.map((item) => item.turn), [1, 2]);
+  assert.equal(typingItems[0].firstPrompt, true);
+  assert.equal(typingItems[1].estimated, true);
+  // Az olvasás a VÁLASZ körénél marad.
+  const readingItems = human.items.filter((item) => item.readMs > 0);
+  assert.deepEqual(readingItems.map((item) => item.turn), [1]);
 });
 
 test("a befecskendezett szöveg (emlékeztető, alügynök) NEM gépelés", () => {
@@ -417,8 +428,9 @@ test("a becslés a szünetre és a tétlenség-plafonra is vágódik", () => {
   // 5 000 000 karakter 150 leütés/perc-cel 33 333 perc lenne — a szünet 10 perc.
   assert.equal(typingEstimateMs(300, 150, 10 * MINUTE), 2 * MINUTE);
   assert.equal(typingEstimateMs(5000000, 150, 10 * MINUTE), 10 * MINUTE);
-  // Rövid prompt („ok”) alatt nincs becslés.
-  assert.equal(typingEstimateMs(8, 150, 10 * MINUTE), 0);
+  // Rövid prompt („ok”) alatt nincs becslés, a „folytasd” (8 karakter) már igen.
+  assert.equal(typingEstimateMs(3, 150, 10 * MINUTE), 0);
+  assert.ok(typingEstimateMs(8, 150, 10 * MINUTE) > 0);
   // Érvénytelen tempóra az alapérték lép.
   assert.equal(typingEstimateMs(300, 0, 10 * MINUTE), 2 * MINUTE);
 
@@ -451,7 +463,11 @@ test("a beírt szöveg gépelést ad akkor is, ha a kliens szerint a felhasznál
   assert.equal(human.readMs, 0);
   assert.equal(human.typeMs, 4 * MINUTE); // 600 / 150 = 4 perc
   assert.equal(human.items[0].source, "away");
-  assert.equal(human.items[0].estimated, true);
+  // A gépelés a beírt prompt körénél jelenik meg, becsült jelöléssel.
+  const typing = human.items.find((item) => item.typeMs > 0);
+  assert.ok(typing, "van gépelés-tétel");
+  assert.equal(typing.turn, 2);
+  assert.equal(typing.estimated, true);
 });
 
 test("a promptCharacters csak a felhasználói szöveget számolja", () => {
@@ -528,6 +544,54 @@ test("session-hatókör: agent + emberi idő, uniózott aktív idő, Ft", async 
   rmSync(workspace, { recursive: true, force: true });
 });
 
+test("session-hatókör: a körönkénti tábla a gépelést a beírt prompt körénél mutatja", async () => {
+  // MÉRT HIBA (2026-11-17): a gépelés a VÁLASZ körénél jelent meg (mint az
+  // olvasás), ezért a felhasználó nem látta, hogy a saját promptjai beírása
+  // benne van-e egyáltalán. Most az olvasás a válaszhoz, a gépelés a beírt
+  // prompthoz tartozik, és az első prompt is számít.
+  const root = tempDir("koltseg-root-");
+  const stateDir = tempDir("koltseg-state-");
+  const workspace = tempDir("koltseg-ws-");
+  const now = Date.now();
+  const start = now - 3 * 3600000;
+  writeSession(root, "ws", "session-abc", sessionEvents({
+    id: "session-abc",
+    cwd: workspace,
+    createdAt: start,
+    turns: [
+      // 450 karakter = 3 perc gépelés (150 leütés/perc)
+      { turn: 1, start, end: start + 10 * MINUTE, promptChars: 450 },
+      { turn: 2, start: start + 20 * MINUTE, end: start + 30 * MINUTE, promptChars: 300 },
+    ],
+  }));
+
+  const result = await measure({
+    scope: "session",
+    sessionId: "session-abc",
+    workspace,
+    from: start - 3600000,
+    to: now,
+    config: defaultConfig(),
+    stateDir,
+    root,
+  });
+
+  assert.equal(result.components.typeEstimatedMs, result.components.typeMs, "minden gépelés becsült (nincs kliens-adat)");
+  assert.equal(result.components.typeMs, 3 * MINUTE + 2 * MINUTE, "első prompt 3 perc + második prompt 2 perc");
+  assert.equal(result.components.readMs, 8 * MINUTE, "a 10 perces szünet mínusz a 2 perc gépelés");
+  // 1. kör: a saját promptjának beírása (első promptként, a napló előttről).
+  assert.equal(result.turns[0].turn, 1);
+  assert.equal(result.turns[0].typeMs, 3 * MINUTE);
+  assert.equal(result.turns[0].estimated, true);
+  // 2. kör: a 2. prompt beírása.
+  assert.equal(result.turns[1].typeMs, 2 * MINUTE);
+  // Az olvasás az 1. körnél van (a válasz elolvasása).
+  assert.equal(result.turns[0].readMs, 8 * MINUTE);
+
+  rmSync(root, { recursive: true, force: true });
+  rmSync(stateDir, { recursive: true, force: true });
+  rmSync(workspace, { recursive: true, force: true });
+});
 test("a delegált (alügynök) session nem duplázza az agent-időt", async () => {
   const root = tempDir("koltseg-root-");
   const stateDir = tempDir("koltseg-state-");

@@ -339,6 +339,22 @@ Kötelező:
   a fájlt élőben olvassa, ellenőrizve); a **host-oldali** számok (gépelés-becslés,
   szűrt token-sor) a **következő harness-indításnál** (§1.5 — a futó session
   miatt nem indítjuk újra).
+  **(4) Utólagos pontosítás ugyanezen a napon (a felhasználó másodszor is
+  jelezte: „a gépelésnél még mindig keveset számol, és nem látom, hogy a korábbi
+  promptokat beszámolná úgy, ahogy az olvasást”):** a mérés MÉRVE az Antikolt
+  sessionön (20 kör) **0,3 perc** gépelést adott, holott a naplóban ott van egy
+  **2340 karakteres első prompt** (= 15,6 perc). Két ok: (a) a session ELSŐ
+  promptja a napló kezdete ELŐTT íródott, ezért nem volt hozzá szünet — mostantól
+  40 karakter fölött a plafonig becsüljük (`firstPromptMs`); (b) a 12 karakteres
+  küszöb a „folytasd” (8 karakter) promptokat kihagyta — a küszöb **4**.
+  Emellett a körönkénti tábla **átrendezve**: az olvasás a *válasz* körénél, a
+  gépelés a *beírt prompt* körénél jelenik meg (eddig mindkettő a válasznál volt,
+  ezért tűnt úgy, hogy a promptok nincsenek benne). **MÉRVE** ugyanarra a
+  munkaterületre: gépelés **39,9 perc** (ebből 39,6 becsült, 24 perc az első
+  promptokból) a korábbi 14,9 helyett; az érintett session **0,3 → 16,2 perc**
+  (15,0 perc az első promptból). A token-sor tizedesjele **vessző** (`$1,0407`,
+  a `toFixed` pontot adott — magyar felületen hibás). Tesztek: **114/114**
+  (engine 37, kliens 13, host 12, ui-extras 7+3, ftp 9).
 
 - `2026-11-17` (huszonegyedik kör) — **az ágens-indította újraindítás INCIDENSE,
   és a WebView2-profil védelme.** (1) **MÉRT INCIDENS (13:45:59):** az ágens a
