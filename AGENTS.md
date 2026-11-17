@@ -305,6 +305,33 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-17` (tizennyolcadik kör) — **MÉRVE: a küszöb-alapú (szelíd) tömörítés
+  SOHA nem fut le; a `thresholdRatio` hatástalan knob.** A kiváltó eset: az
+  Antikolt session (`session-5d611e3c`, 23 kör / 689 lépés) ágense azt írta,
+  hogy „a munkamenet-tárhelyem gyakorlatilag elfogyott”. **A „tárhely” a
+  kontextus-ablak**, nem lemez: a kérés 255 662 token volt a DeepSeek valódi
+  1 048 576-os ablakából (**24%**), a harness mérője 1 000 000-hoz mér. A session
+  egyetlen kemény hibája a 13. körben (08:44:54): `CONTEXT_WINDOW_EXCEEDED`,
+  mert **792 685 (üzenetek) + 256 000 (completion) = 1 048 685 > 1 048 576** —
+  a `maxTokens` (a `dsh-llm-deepseek` gyári defaultja, `lib/index.js:1394`) az
+  ablak 24%-át lefoglalja, ezért a valódi üzenet-plafon **792 576**.
+  **A mérés (40 session, 57 compaction esemény, 2026-09-26 … 11-17):** minden
+  tömörítés 771–795 ezer tokennél történt, azaz a plafonnál, a 400-as válasz
+  UTÁN; egyetlen küszöb-alapú tömörítés sincs, akármi a `thresholdRatio`
+  (0.30 / 0.45 / 0.80). A kód szerint a döntés a `compactIfNeeded()`-ben van
+  (`measurement.totalTokens < spec.thresholdTokens`), a hibát a plugin csak
+  `logger.warn`-nal nyeli el, a harness stderr-je pedig nincs mentve — ezért
+  láthatatlan. **Folt (diagnosztika):** `tools\patch-compaction-diag.mjs`
+  (`--check|--apply|--revert`, mentés `*.diag-bak`) minden lépésnél egy sort ír
+  a `~/.dsh/compaction-diag.log`-ba: `measure=… threshold=… window=… ratio=…`,
+  illetve a kivétel szövegét és a „nincs cél” ágat. A viselkedést nem
+  változtatja; **a harness következő indulásakor** él (§1.5 — újraindítás csak
+  a felhasználó engedélyével). A mérés után jön a valódi javítás; a
+  `maxTokens`-t addig **nem** csökkentjük, mert az a gyári defaulttal az
+  egyetlen működő triggert (792 576) **későbbre** tolná (1 015 808).
+  Tanulság: a kontextus-problémára NE a `thresholdRatio`-t tekerjük tovább —
+  először azt kell bizonyítani, hogy a szelíd út egyáltalán lefut.
+
 - `2026-11-17` (tizenhetedik kör) — **költségelszámolás: pillanatkép + gyorsítótár,
   duplikált chip ki, és a maximalizált indulás javítása.** (1) **Pillanatkép:**
   a felhasználó jelezte, hogy „minden megnyitásnál újra generálja, várni kell”.
