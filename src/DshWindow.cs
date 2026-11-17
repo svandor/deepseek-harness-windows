@@ -979,6 +979,31 @@ namespace DshWindow
         private const int MaxInitAttempts = 8;
 
         /// <summary>
+        /// Hány próba használja a STABIL profilt, mielőtt a %TEMP% alatti
+        /// tartalék-mappára váltunk (2026-11-17).
+        ///
+        /// MIÉRT: gyors újraindításnál (ablak bezárása/leállítása után AZONNAL új
+        /// ablak) az előző ablak WebView2 folyamatai még fogják a `pane-N` mappát.
+        /// A régi kód ilyenkor már a MÁSODIK próbánál a tartalék profilra váltott,
+        /// amely a felhasználó munkamenet-állapotát (workspace, kiválasztott
+        /// beszélgetés, tördelés) NEM tartalmazza — a panel „nem visszaállított”
+        /// állapotban nyílt meg (mért panasz 2026-11-17: félig üres, új
+        /// beszélgetést mutató panelek). Most az első három próba UGYANAZT a stabil
+        /// mappát használja, növekvő várakozással (~5 s): a zárolás ennyi idő
+        /// alatt felszabadul, és a panel a saját profiljával indul.
+        /// </summary>
+        /// <summary>
+        /// MÉRVE (2026-11-17 14:30, a felhasználó jelzése): 3 stabil próba (~5 s)
+        /// NEM elég — a Kilépés után indult új ablaknál a 2–6. panelek a tartalék
+        /// (üres) profilra váltottak, ezért ÚJ munkamenetet nyitottak. A régi ablak
+        /// WebView2 folyamatai tovább fogták a `pane-N` mappákat. Ezért a stabil
+        /// próbák száma 3 → 6: az első tartalék csak ~13,5 s után jön, addig a
+        /// zárolás felszabadul, és minden panel a SAJÁT profiljával (a
+        /// munkamenet-állapotával) indul.
+        /// </summary>
+        private const int StableProfileAttempts = 6;
+
+        /// <summary>
         /// Várakozás a következő WebView2-próba előtt: 1 s, 1,5 s, 2,5 s, 3,5 s,
         /// majd 5 s (összesen ~25 s). Ennyi idő alatt a másik ablak WebView2
         /// folyamatai leállnak — ez okozta az E_UNEXPECTED sorozatot.
@@ -1087,7 +1112,12 @@ namespace DshWindow
             // E_UNEXPECTED hibát adott. Ezért a futás alatt EGY tartalék-mappa
             // van panelenként (a zárolt mappát nem kell újra megnyitni, de a
             // próbák nem szaporítják a folyamatokat).
-            if (attempt >= 1)
+            //
+            // 2026-11-17: a tartalék profil CSAK a stabil-próbák kimerülése után
+            // jön (StableProfileAttempts), mert a tartalék profil üres — a panel
+            // elvesztené a munkamenet-állapotát. A stabil mappa zárolása néhány
+            // másodperc alatt feloldódik, ezért előbb azt várjuk ki.
+            if (attempt >= StableProfileAttempts)
             {
                 baseDir = Path.Combine(Path.GetTempPath(), "DSH Harness", "WebView2");
             }
@@ -1106,14 +1136,14 @@ namespace DshWindow
             // „A kért erőforrás használatban van" hibával bukott el, a tartalék
             // időbélyeges mappa miatt pedig ~6 s-ig fehér/üres panel látszott.
             // Ezért a profil asztalonként külön: pane-<N>-d<asztal>.
-            if (_opts.Desktop > 1 && attempt == 0)
+            if (_opts.Desktop > 1 && attempt < StableProfileAttempts)
             {
                 folder += "-d" + _opts.Desktop.ToString(CultureInfo.InvariantCulture);
             }
 
             // A tartalék-mappa futásonként EGY: az első tartalék-próbánál kap
             // időbélyeget, a további próbák ugyanazt használják.
-            if (attempt >= 1)
+            if (attempt >= StableProfileAttempts)
             {
                 if (_runStamp == null)
                 {

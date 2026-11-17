@@ -340,7 +340,11 @@ namespace DshTray
             // Az indítási ablak AZONNAL nyíljon meg, ne a 20 s-os felügyeleti
             // tickre várjon (mért ~24 s késés → „első kattintásra semmi” tünet).
             StartStartupOpener();
-            EnsureOtherDesktopWindows(4000);
+            // 2026-11-17: 4 s → 8 s. A második ablak WebView2-környezetei ne
+            // induljanak egy időben az első ablakéval (mért E_UNEXPECTED-lavina
+            // gyors újraindításnál); a látható ablak paneljei ~2-3 s alatt
+            // elkészülnek, a ráhagyás ezt fedi.
+            EnsureOtherDesktopWindows(8000);
         }
 
         /// <summary>
@@ -1937,6 +1941,30 @@ namespace DshTray
                 }
                 catch (Exception ex) { Log.Error("munkaasztal " + desktop + " pid-takaritas: " + ex.Message); }
             }
+
+            // 2026-11-17: a BEZÁRT, de futva maradt ablak is álljon le.
+            // MÉRT ESET: a felhasználó bezárta a hibás ablakot (a WPF Closing
+            // lefutott, a pid-fájl törlődött), a folyamat viszont életben maradt
+            // — a Kilépés a pid-fájlokból dolgozik, ezért ezt már nem találta
+            // meg, és a „leállított” rendszerben ott maradt egy félholt ablak.
+            // A folyamatnév ÉS a saját exe-útvonal ellenőrzött (§1.6): csak a
+            // mi DshWindow.exe-nkra hat.
+            try
+            {
+                string ourExe = Path.GetFullPath(_cfg.WindowExe);
+                foreach (Process p in Process.GetProcessesByName("DshWindow"))
+                {
+                    try
+                    {
+                        string path = p.MainModule.FileName;
+                        if (!string.Equals(Path.GetFullPath(path), ourExe, StringComparison.OrdinalIgnoreCase)) continue;
+                        p.Kill();
+                        Log.Info("maradék munkaablak (pid " + p.Id + ") leállítva");
+                    }
+                    catch { }
+                }
+            }
+            catch (Exception ex) { Log.Error("maradék munkaablak takarítás: " + ex.Message); }
         }
 
         /// <summary>

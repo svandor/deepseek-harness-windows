@@ -305,6 +305,74 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-17` (huszonkettedik kör) — **költségelszámolás: sötét legördülő,
+  visszamenőleges gépelés-becslés a beírt szövegből, és a token-sor
+  munkaterület-szűrése + cache-kedvezmény kimondva.** (1) **Sötét legördülő:**
+  a natív `<select>` a `transparent` hátteret nem örökli, ezért a profil-választó
+  fehér listát rajzolt a sötét panelen (mért, képernyőképen). Javítás: konkrét
+  háttér + `colorScheme: "dark"` a panelen ÉS a selecten, valamint explicit
+  háttér/szín az `<option>`-ökön. (2) **Gépelés visszamenőleg:** a kliens-mérés
+  csak a most futó felületre él, ezért a korábbi időszakokra 0 gépelés jött ki
+  (MÉRT: 4,8 perc 2492 perc olvasás mellett). A napló viszont tartalmazza a
+  **felhasználó által beírt** prompt hosszát (`user/message` → `content[].text`,
+  csak `source.kind === "user"`; a befecskendezett AGENTS-emlékeztető 61 ezer
+  karakter, azt KI KELL zárni), ebből a gépelés becsülhető:
+  `hossz / 150 leütés-perc` (profil-mező: `typingCharsPerMinute`, 30–600),
+  12 karakter alatt nincs becslés, plafon a szünet és a tétlenség-plafon, és a
+  kliens-mért értéknél nem kisebb (`max(mért, becsült)`). **MÉRVE** a valódi
+  naplókon: 30 nap, 36 munkafolyamat, 416 kör → gépelés **3,75 h** (ebből
+  **3,25 h** becsült) a korábbi 4,8 perc helyett; a panel „becsült (a beírt
+  szövegből)” jelölést tesz a sorra. (3) **Token-sor: a 98% cache-kedvezmény
+  valóban érvényesült** (`requestCost` a találati árat használja: a
+  DeepSeek-flash találat a miss-ár 2%-a), a panasz oka a **hatókör** volt: a
+  panel a `/ui-extras/usage` válaszának GLOBÁLIS 30 napos összegét mutatta a
+  kiválasztott munkaterület helyett (MÉRT: 2 session / $0.62 helyett $133.76).
+  Mostantól a végpont `workspace=` paramétert fogad (a session-napló fejlécének
+  `cwd` mezője alapján szűr, a cache-kulcsban is benne van), a panel ezt küldi,
+  és a sor alatt **ki van mondva** a cache-találat mennyisége, a kedvezmény
+  százaléka és a megtakarítás (`cacheReadCost` a hoston). **MÉRVE:** ez a
+  munkaterület $19.94 (globális $134.05), cache-kedvezmény **98%**, megtakarítás
+  $451.66. Tesztek: **112/112** (koltseg engine 36, kliens 12, host 12,
+  ui-extras 7+3, ftp 9), a kétnyelvű ellenőrző **23/23** (`exit 0`).
+  **Érvénybe lépés:** a kliens-oldali rész (sötét legördülő, cache-sor
+  formázása, „becsült” jelölés) **panel-újratöltéssel** él (a kiszolgált bundle
+  a fájlt élőben olvassa, ellenőrizve); a **host-oldali** számok (gépelés-becslés,
+  szűrt token-sor) a **következő harness-indításnál** (§1.5 — a futó session
+  miatt nem indítjuk újra).
+
+- `2026-11-17` (huszonegyedik kör) — **az ágens-indította újraindítás INCIDENSE,
+  és a WebView2-profil védelme.** (1) **MÉRT INCIDENS (13:45:59):** az ágens a
+  DSH sandboxából indította a launchert; az így indult tálca/ablak megörökölte a
+  sandbox PRIVÁT `TEMP`-jét (`C:\Users\info\AppData\Local\Temp\dsh-ECvtxu\...`),
+  és mivel az előző ablak WebView2 folyamatai még fogták a stabil profilokat,
+  a panel a MÁSODIK próbánál a `%TEMP%` alatti ÜRES tartalék-profilra váltott →
+  a munkamenet-állapot (workspace, kiválasztott beszélgetés) elveszett, több
+  pane-nél pedig a vezérlő E_UNEXPECTED (0x8000FFFF) hibával elszállt → FEHÉR
+  panelek. Ez NEM a tálca-javítás hibája: a napló szerint a 13:45:59-es indítás
+  helyesen futott (`kifejezett indítás (--show)`, `friss indítás: az 1.
+  munkaasztal lesz a látható`, `indítási ablak megnyitva (0 ms)`), és a
+  13:46:22-es Kilépés leállította a munkaablakot, a harness-t (3080), a proxyt
+  (4123) és a robot-szervert (4180). A felhasználó saját indítása (13:46:25,
+  Explorerből) már hibátlan lett: mind a 6 panel `controller ready`, stabil
+  profilokkal, a munkamenetek visszaálltak. **ÜZEMELTETÉSI SZABÁLY:** az
+  alkalmazást SOHA nem indítja ágens-parancs (a sandbox TEMP/ACL-je
+  kontaminálja a WebView2-t); a megbízható újraindítás a tálca „Kilépés" →
+  ikon (a felhasználó kattintása). (2) **Javítás (DshWindow):**
+  `StableProfileAttempts = 3` — az első három próba UGYANAZT a stabil profilt
+  használja (~5 s, növekvő várakozással), és csak utána vált a `%TEMP%` alatti
+  tartalékra; a `-d<asztal>` utótag mostantól MINDEN stabil próbára jár (eddig
+  csak az elsőre). Így egy gyors újraindítás nem veszíti el a panel
+  munkamenet-állapotát. (3) **Javítás (DshTray):** a második asztal ablaka
+  4 s helyett **8 s** múlva indul (ne concurrent WebView2-környezetek);
+  `StopDesktopWindows` a pid-fájlok után **sweepet** is futtat: a bezárt, de
+  futva maradt DshWindow (a Closing törölte a pid-fájlját, a folyamat élt)
+  is leáll, folyamatnév + saját exe-útvonal ellenőrzéssel (§1.6).
+  (4) **Élesítve:** `bin\DshWindow.exe` (104 448 B) és `bin\DshTray.exe`
+  (61 440 B) — a futó példányok a régi képet használják, a következő indítás
+  (Kilépés → ikon) már az új kódot futtatja. A kliens-oldali hero gombsor
+  javítása a futó ablakban ELLENŐRIZVE (képernyőkép: HU…⚙ + 🤖 + érme + PHP +
+  1 + 2 + FTP egy sorban; a láblécben a szándékos `-$0.00`).
+
 - `2026-11-17` (húszadik kör) — **a „két kattintás” indítás, az 1. asztal
   kikényszerítése, és a hero gombsor egyetlen sorba rendezése.** (1) **MÉRT OK
   (log `11:09:52`–`11:10:30`):** a tálca a launcher első kattintására indult, de
