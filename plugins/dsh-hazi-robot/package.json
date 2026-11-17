@@ -1,6 +1,6 @@
 {
   "name": "dsh-hazi-robot",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "private": true,
   "description": "Házirobot panel a DeepSeek Harness felületén: állapot, jobok és beállítás-űrlap.",
   "type": "module",

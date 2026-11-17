@@ -1,6 +1,6 @@
 {
   "name": "dsh-ftp-deploy",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "private": true,
   "description": "FTP deploy panel and quick button for DeepSeek Harness: git-diff based upload to a hosting FTP account (engine ported from Felpuffanto 0.1.5).",
   "type": "module",

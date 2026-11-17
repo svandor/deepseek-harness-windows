@@ -1,6 +1,6 @@
 {
   "name": "dsh-koltseg",
-  "version": "0.1.0",
+  "version": "0.2.9",
   "private": true,
   "description": "Fejlesztesi koltsegelszamolas a DeepSeek Harnesshez: a munkafolyamatok (session) es a munkaterulet idejenek merese a tartos session-naplokbol, profilokkal es reponkeni oradijjal.",
   "type": "module",
