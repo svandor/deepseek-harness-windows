@@ -10174,7 +10174,134 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       });
 
       // Auto-modell Elő címkéje PANELENKÉNT (a panel a saját sessionje id-ját küldi).
-      safeRun("auto live target overlay", function () { startAutoTargetOverlay(ctx); });
+      /**
+     * 2026-11-17: „az elküldött üzenet eltűnik, és csak később jelenik meg"
+     * (felhasználói panasz, kétszer). A host-oldali válaszidő mérve 2–3 ms,
+     * tehát a késés vagy a kliens festése, vagy a host esemény-szállítása.
+     * EZ A SZONDA MÉRI: az Enter/submit pillanatától addig, amíg a beírt szöveg
+     * a felületen (a composerben KÍVÜL) megjelenik. Az eredmény a
+     * state\ui-extras-client.log-ba kerül `probe: composer->visible N ms`
+     * formában. A ciklus kötött (max 200 × 150 ms = 30 s, AGENTS §1.7).
+     */
+    function installComposerProbe() {
+      if (window.__dshComposerProbe) return;
+      window.__dshComposerProbe = true;
+
+      function composerText() {
+        var el = document.activeElement;
+        if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT" || el.isContentEditable)) {
+          return String(el.value != null ? el.value : (el.textContent || "")).trim();
+        }
+        return "";
+      }
+
+      function watch(sent, t0) {
+        var tries = 0;
+        var timer = setInterval(function () {
+          tries += 1;
+          try {
+            var body = document.body ? String(document.body.innerText || "") : "";
+            // Ha a szöveg MÉG a composerben van, nem indult el a küldés.
+            if (composerText() !== sent && body.indexOf(sent) >= 0) {
+              clearInterval(timer);
+              // 2026-11-17: az is számít, HOL találta meg — az oldalsáv
+              // előnézete és a beszélgetés-sáv is tartalmazhatja ugyanazt a
+              // szöveget, és a kettő késése más.
+              var at = body.indexOf(sent);
+              var where = body.substring(Math.max(0, at - 40), at).replace(/\s+/g, " ");
+              reportToHost("probe", "composer->visible " + (Date.now() - t0) + " ms | @" + where);
+              // 2026-11-17: a felhasználó „eltűnik és később jön vissza"-t ír,
+              // a mérés viszont 234 ms-ot ad — vagyis a szöveg megjelenik, majd
+              // ELTŰNHET (fázisváltás újrarenderelése), és később visszajön. Ezt
+              // az UTÓLAGOS eltűnést méri tovább, 10 s-ig (kötött ciklus, §1.7).
+              var outAt = 0;
+              var ticks = 0;
+              var again = setInterval(function () {
+                ticks += 1;
+                try {
+                  var text2 = String(document.body ? document.body.innerText || "" : "");
+                  var present = text2.indexOf(sent) >= 0;
+                  if (!present && outAt === 0) {
+                    outAt = Date.now();
+                  } else if (present && outAt !== 0) {
+                    reportToHost("probe", "reappear after " + (Date.now() - outAt) + " ms hidden");
+                    outAt = 0;
+                  }
+                  if (ticks > 66) clearInterval(again);
+                } catch (error) {
+                  clearInterval(again);
+                }
+              }, 150);
+              return;
+            }
+            if (tries > 200) {
+              clearInterval(timer);
+              reportToHost("probe", "composer->visible TIMEOUT (>30000 ms)");
+            }
+          } catch (error) {
+            clearInterval(timer);
+          }
+        }, 150);
+      }
+
+      /**
+       * 2026-11-17: MÉRVE (16:39) az üzenet 412 ms alatt megjelenik a
+       * beszélgetés-sávban, tehát az adat nem késik. A felhasználói panasz
+       * („eltűnik és csak később jelenik meg") így nagy valószínűséggel a
+       * GÖRGETÉS: a beszélgetés nézete nem az új üzenetnél áll, és csak a
+       * válasz indulásakor ugrik oda. Ez a blokk: (a) megméri, hogy a
+       * beszélgetés-görgető az alján van-e a beküldés pillanatában, (b) a
+       * gépelés/beküldés után kötött ideig az alján tartja (§1.7: max 12 × 150 ms).
+       */
+      function scrollKeeper() {
+        var t0 = Date.now();
+        var tries = 0;
+        var reported = false;
+        var timer = setInterval(function () {
+          tries += 1;
+          try {
+            // A composer őse a görgethető beszélgetés-tároló.
+            var el = document.activeElement;
+            var box = null;
+            while (el && el !== document.body) {
+              if (el.scrollHeight > el.clientHeight + 8 && el.clientHeight > 80) { box = el; break; }
+              el = el.parentElement;
+            }
+            if (!box) {
+              if (tries > 12) clearInterval(timer);
+              return;
+            }
+            var delta = box.scrollHeight - box.clientHeight - box.scrollTop;
+            if (!reported) {
+              reported = true;
+              reportToHost("probe", "scroll at submit: " + Math.round(delta) + " px from bottom");
+            }
+            if (delta > 4) box.scrollTop = box.scrollHeight;
+            if (tries > 12) clearInterval(timer);
+          } catch (error) {
+            clearInterval(timer);
+          }
+        }, 150);
+        return t0;
+      }
+
+      function start(how) {
+        var text = composerText();
+        if (text.length < 8) return;
+        reportToHost("probe", "submit (" + how + ") len=" + text.length + " phase=" + String(readConversationPhase()));
+        scrollKeeper();
+        watch(text, Date.now());
+      }
+
+      document.addEventListener("keydown", function (e) {
+        if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.altKey) return;
+        start("enter");
+      }, true);
+      document.addEventListener("submit", function () { start("form"); }, true);
+    }
+
+    safeRun("auto live target overlay", function () { startAutoTargetOverlay(ctx); });
+    safeRun("composer probe", installComposerProbe);
     }
     var inject = ["slots", "locale", "theme", "sessions", "workspaces", "settingsScope", "sidebarRightTabs", "sidebarRight"];
 
