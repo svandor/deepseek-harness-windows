@@ -782,11 +782,26 @@ namespace DshTray
         {
             if (Process.GetProcessesByName("DshWindow").Length > 0)
             {
-                // Élő ablak mellett a korábbi bezárás-jelölő elavult (pl. a régi
-                // PowerShell-tálca hagyta itt). Ha bennmaradna, egy későbbi
-                // összeomlást tévesen "felhasználói bezárásnak" minősítenénk, és
-                // nem állna helyre az ablak.
-                if (File.Exists(_cfg.WindowClosedMarker)) ClearCloseMarker();
+                // MÉRT HIBA (2026-11-17, a felhasználó jelzése: „X-szel bezárom, és
+                // magától újra megnyílik”): a két ablakos felállásban a MÁSIK asztal
+                // ablaka életben marad (rejtve), ezért ez az ág futott, törölte a
+                // bezárás-jelölőt, majd „látható ablak helyreállítása” címen INDÍTOTT
+                // egy új ablakot. Mért napló (native-tray.log):
+                //   02:17:46  munkaasztal 1 inditas (3 panel)
+                //   02:17:46  munkaasztal 1 pid=18868
+                //   02:17:47  lathato ablak helyreallitasa (asztal 1)
+                // A jelölő mostantól ELSŐBBSÉGET élvez: ha a felhasználó bezárta az
+                // ablakot, a felügyelet nem indít újat. Újranyitás kizárólag
+                // kifejezett kérésre (tálcaikon, „Ablak megnyitása”, asztalváltás).
+                if (File.Exists(_cfg.WindowClosedMarker))
+                {
+                    if (!_closeLogged)
+                    {
+                        _closeLogged = true;
+                        Log.Info("az ablakot a felhasználó bezárta — a felügyelet nem indít újat (újranyitás: tálcaikon)");
+                    }
+                    return;
+                }
                 // MERT HIBA (2026-11-16): ha fut ablak, de EGY SEM LATHATO (az
                 // asztalvaltas elrejtette az utolsot), a regi kod itt visszatert,
                 // es az ablak soha nem jott vissza. Ilyenkor allitsuk helyre.
@@ -992,6 +1007,7 @@ namespace DshTray
                         NativeMethods.SetForegroundWindow(h);
                     }
                     HideOtherDesktopWindows(desktop, h);
+                    EnsureMaximized(desktop);
                     return;
                 }
                 StartWindow();
@@ -1306,6 +1322,11 @@ namespace DshTray
                 if (NativeMethods.GetWindow(h, NativeMethods.GW_OWNER) != IntPtr.Zero) continue;
                 string title = NativeMethods.GetWindowTextString(h);
                 string cls = NativeMethods.GetClassNameString(h);
+                // MÉRT HIBA (2026-11-17): a segédablakok LÁTHATÓVÁ tehetők, ha
+                // rájuk hívunk `ShowWindow`-t — soha nem választhatjuk őket.
+                if (title.StartsWith("MediaContextNotification", StringComparison.Ordinal)) continue;
+                if (title.StartsWith("CiceroUIWndFrame", StringComparison.Ordinal)) continue;
+                if (title.StartsWith("SystemResourceNotifyWindow", StringComparison.Ordinal)) continue;
                 if (string.Equals(title, "DeepSeek Harness", StringComparison.Ordinal))
                 {
                     byTitle = h;
@@ -1360,6 +1381,43 @@ namespace DshTray
             IntPtr h = WindowHandleOf(desktop);
             if (h == IntPtr.Zero) return;
             Activate(h);
+            EnsureMaximized(desktop);
+        }
+
+        /// <summary>
+        /// A maximalizált állapot érvényesítése minden MEGJELENÍTÉSI úton.
+        ///
+        /// MIÉRT (felhasználói visszajelzés, 2026-11-17): „számítógép-újraindítás
+        /// után nem teljes képernyőn indul, pedig be van kapcsolva”. A beállítás
+        /// (`tray-config.json` → `maximized: true`) az indításnál érvényesül, de
+        /// egy későbbi megjelenítés (tálcaikon, asztalváltás, helyreállítás)
+        /// `SW_SHOW`/`SW_RESTORE` hívása visszaviheti normál méretre. Ezért a
+        /// láthatóvá tétel UTÁN, ha a beállítás aktív és az ablak nincs
+        /// maximalizálva, újra maximalizáljuk. Csak megjelenítéskor fut, tehát a
+        /// felhasználó kézi „visszaállítását” nem írja felül a felügyelet.
+        /// </summary>
+        private void EnsureMaximized(int desktop)
+        {
+            if (!_cfg.Maximized) return;
+            try
+            {
+                IntPtr h = WindowHandleOf(desktop);
+                if (h == IntPtr.Zero) return;
+                // MÉRT HIBA (2026-11-17, a felhasználó jelzése: „egy
+                // MediaContextNotification ablak van előtte, a tálca befagyott”):
+                // a frissen indult ablaknál a KERET címe még nem áll, ezért a
+                // keresés a `MediaContextNotificationWindow` segédablakra esett —
+                // a `SW_MAXIMIZE` pedig LÁTHATÓVÁ tette azt a valódi ablak előtt.
+                // Ezért itt csak IGAZOLT keretablakon dolgozunk: LÁTHATÓ ablak,
+                // pontos termékcím. Ha bizonytalan, nem teszünk semmit.
+                if (!NativeMethods.IsWindowVisible(h)) return;
+                string title = NativeMethods.GetWindowTextString(h);
+                if (!string.Equals(title, "DeepSeek Harness", StringComparison.Ordinal)) return;
+                if (NativeMethods.IsZoomed(h)) return;
+                NativeMethods.ShowWindow(h, NativeMethods.SW_MAXIMIZE);
+                Log.Info("ablak maximalizalva (asztal " + desktop + ", a beallitas szerint)");
+            }
+            catch (Exception ex) { Log.Error("maximalizalas: " + ex.Message); }
         }
 
         private static void Activate(IntPtr h)
@@ -1551,6 +1609,9 @@ namespace DshTray
                 Log.Error("asztalvaltas: a(z) " + target + ". asztal ablaka nem jelent meg");
                 return;
             }
+            // A célablak megjelenítése után a maximalizált állapot érvényesítése
+            // (a beállítás szerint) — különben egy váltás normál méretre viheti.
+            EnsureMaximized(target);
             // A régi ablak rejtése CSAK a cél megjelenése után, hogy a képernyő
             // ne maradjon üresen (ez volt a „bezár, aztán kinyit" élmény).
             IntPtr activeHandle = WindowHandleOf(target);
@@ -1868,6 +1929,10 @@ namespace DshTray
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         public static extern bool IsWindowVisible(IntPtr hWnd);
+
+        /// <summary>Maximalizált-e az ablak (a `showCmd == SW_MAXIMIZE` megfelelője).</summary>
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern bool IsZoomed(IntPtr hWnd);
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         public static extern bool IsIconic(IntPtr hWnd);
