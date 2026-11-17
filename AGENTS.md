@@ -305,6 +305,158 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-17` (tizenhetedik kör) — **költségelszámolás: pillanatkép + gyorsítótár,
+  duplikált chip ki, és a maximalizált indulás javítása.** (1) **Pillanatkép:**
+  a felhasználó jelezte, hogy „minden megnyitásnál újra generálja, várni kell”.
+  Két réteg: a **host** `measure` válasza **90 s-ig gyorsítótárazott** (a kulcs a
+  KÉRÉS paramétereiből épül — a feloldott `from`/`to` között ms-ok telnek el,
+  ezért azzal a kulcs sosem találna; `?fresh=1` megkerüli, a config mentése
+  törli), a **kliens** pedig a legutóbbi eredményt `sessionStorage`-ban tartja, és
+  megnyitáskor **azonnal kirajzolja** („Pillanatkép: HH:MM — a friss mérés fut…”),
+  a friss mérés a háttérben fut és felülírja; hibánál a pillanatkép MARAD. A
+  „Frissítés” gomb egyszer `fresh=1`-gyel kér. (2) **Duplikált chip ki:** a
+  composer dock (a panelek alja) már csak aktivitást mér, gombot nem rajzol — a
+  gomb a menüsorban (fejléc-ikon), illetve üres beszélgetésnél a composer fölötti
+  sávban van. (3) **A maximalizált indulás visszatérő hibája** („számítógép
+  újraindítás után nem teljes képernyőn indul, pedig be van kapcsolva”): a
+  beállítás (`tray-config.json` → `maximized: true`) az INDÍTÁSNÁL érvényesült,
+  de a későbbi **megjelenítési utak** (`ShowWindow` tálcaikonra, asztalváltás,
+  „látható ablak helyreállítása”) `SW_SHOW`/`SW_RESTORE`-t hívtak, ami normál
+  méretre viheti az ablakot. Új `EnsureMaximized(asztal)` fut a
+  `ShowDesktopWindow`-ban, a `ShowWindow(true)`-ban és az `ApplyDesktopOnce`
+  végén: ha a beállítás aktív és az ablak nincs zoomolva, `SW_MAXIMIZE`. Csak
+  megjelenítéskor fut, tehát a felhasználó kézi visszaállítását nem írja felül.
+  **MÉRVE** (valódi ablakon, Win32 `GetWindowPlacement`/`IsZoomed`): előtte
+  `zoomed=True` → `SW_RESTORE` → `False` → tálca-jelzés (`DshHarnessShowWindow`)
+  → **`True`**, napló: `ablak maximalizalva (asztal 1, a beallitas szerint)`.
+  Tálca újraindítva (a felhasználó kérésére, §1.5): `tray.pid` **3476**,
+  `bin\DshTray.exe` **58 880 B / 05:58:54**; a `DshWindow.exe.new` a következő
+  ablaknyitásnál lép életbe. Tesztek: **52/52** (engine 31, kliens 9, host 12,
+  köztük az új gyorsítótár-teszt). Kliens-változás → **panel-újratöltés**.
+  **INCIDENS UGYANEBBEN A KÖRBEN (a felhasználó azonnal jelezte): „egy
+  MediaContextNotification ablak van előtte, a tálca befagyott”.** OK: az új
+  `EnsureMaximized` a `WindowHandleOf`-fal kérte a fogantyút, az pedig a frissen
+  indult ablaknál (a keret címe még nem áll) a `HwndWrapper[…]` osztályú
+  **segédablakra** esett — a `SW_MAXIMIZE` azt tette LÁTHATÓVÁ a valódi ablak
+  előtt (mért: `pid=… vis=True title='MediaContextNotificationWindow'` a
+  `title='DeepSeek Harness'` keret mellett). **Javítás:** (a) a segédablakot
+  `SW_HIDE`-dal elrejtettem (azonnali helyreállítás), (b) az `EnsureMaximized`
+  mostantól **csak igazolt keretablakon** dolgozik: LÁTHATÓ + pontos termékcím
+  (`DeepSeek Harness`), különben nem tesz semmit, (c) a `FindWindowForProcess`
+  soha nem választja a `MediaContextNotificationWindow` / `CiceroUIWndFrame` /
+  `SystemResourceNotifyWindow` című ablakokat. Újraépítés + tálca-újraindítás:
+  `tray.pid` **12052**, `bin\DshTray.exe` **59 392 B / 06:16:36**. **MÉRVE
+  utána:** látható ablak **egy** (`pid=14232 zoomed=True title='DeepSeek
+  Harness'`, előtérben), a tálca-jelzésre (`DshHarnessShowWindow`) sem helper,
+  sem új ablak nem jelent meg, napló: `asztalvaltas kesz: aktiv=1
+  lathato=[14232]`. **Tanulság:** a `FindWindowForProcess` „HwndWrapper”
+  tartaléka a WPF segédablakokra is illik — minden `ShowWindow`-előtti
+  műveletnél cím-ellenőrzés kell.
+
+- `2026-11-17` (tizenhatodik kör) — **a költségelszámolás panel megjelent, de nem
+  mért; ezres tagolás.** (1) **A panel látszik** (a mérő regisztrációjából
+  renderelt seat), de minden érték 0 volt, és a fejléc **„Munkaterület: lib”**-et
+  írt: a mérés a host saját munkakönyvtárára esett
+  (`…\@deepseek-ai\dsh\lib`), ezért 0 session-t talált. **OK:** a slot-props NEM
+  tartalmazza a `sessions` szolgáltatást, a plugin pedig a `inject`-tel átadott
+  props miatt nem is renderelt — ezért a szolgáltatásokat most az `apply(ctx)`
+  menti el (`pluginServices`), és a munkaterületet ebből oldjuk fel, a
+  `dsh-ui-extras` `resolveWorkspace` három fokozatával (session `cwd` →
+  kiválasztott workspace → első workspace). A **host** is feloldja, ha a kérés
+  nem mondja meg: a session naplófejlécének `cwd` mezőjéből (`resolveWorkspace`
+  most `async`), és a session-keresés **fájlnév-egyezéssel** megy (az összes
+  napló kibontása 20+ s volt — mért). (2) **MÉRVE** a javítás után, közvetlen
+  host-hívással a mostani session-re: 7 kör, agent **89,1 perc**, olvasás
+  **50,5**, gépelés **1,8**, aktív 126,1 perc → elszámolható **141 perc** =
+  **29 375 Ft** — tehát a motor jó, csak a munkaterület volt rossz. (3) **A
+  nyitott kör nem fújódik fel:** eddig a „mostani idővel” zártuk, ezért egy
+  órákig nyitva hagyott kör felfújt agent-időt adott; mostantól az **utolsó
+  naplózott esemény** idejével zárul (dolgozó körnél friss, elhagyottnál ott áll
+  meg, ahol a szerver abbahagyta) — teszt is őrzi. (4) **Ezres tagolás kis
+  hézaggal:** az óradíj mező mostantól `type="text"` + csoportosítás
+  (`12 500`, U+00A0), a végösszegek ugyanazzal a `groupDigits`-szel mennek (a
+  `type="number"` nem enged szóközt — ezért nem lehetett eddig). (5) **JSON
+  kulcs-ütközés javítva:** a válasz `toDay` ÉS `today` kulcsot is adott, amit a
+  PowerShell `ConvertFrom-Json` (kis/nagybetű-érzéketlen) nem tudott olvasni →
+  `currentDay`. (6) **Host-oldali változások** (munkaterület-feloldás,
+  nyitott-kör szabály, `/koltseg/log` végpont, JSON-kulcs) a **következő
+  harness-indításnál** élnek; a kliens-oldali feloldás és a formázás
+  **panel-újratöltéssel**. Tesztek: **51/51** (engine 31, kliens 9, host 11).
+
+- `2026-11-17` (tizenötödik kör) — **a becsukott ablak újranyitása: a tálca
+  régi binárisa + a jelölőt felülíró ág; és a költségelszámolás ikonja a `hero`
+  fázisban.** (1) **A panasz:** „X-szel bezárom, és magától újra megnyílik”.
+  **MÉRT OK:** a futó `bin\DshTray.exe` a **10:30-as** build (57 856 B), amely
+  NEM ismeri a `state\window.closed` jelölőt; a javított forrás 17:12-kor kész
+  volt, de a `.new` (58 368 B) sosem lépett életbe, mert a tálca 17:06 óta
+  folyamatosan futott. A napló kimondja a láncot: `02:17:32 asztalvaltas -> 1`,
+  majd `02:17:46 munkaasztal 1 inditas (3 panel)` / `02:17:47 lathato ablak
+  helyreallitasa (asztal 1)` — a MÁSIK asztal ablaka élt (rejtve), ezért a
+  „nincs látható ablak” valódi hibának látszott. (2) **Forrásjavítás
+  (`src\DshTray.cs`):** az `EnsureWindow()` élő-ablak ágában eddig FELTÉTLENÜL
+  törölte a jelölőt (`ClearCloseMarker()`, 789. sor) — mostantól a jelölő
+  **elsőbbséget élvez** (korai `return`, egyszeri naplózással); az explicit
+  asztalváltás (`ApplyDesktopOnce`) viszont törli, mert az kifejezett kérés.
+  (3) **Újraépítés + élesítés:** `build.ps1` → `bin\DshTray.exe.new` 58 880 B;
+  a tálca újraindítva (a felhasználó engedélyével, §1.5): új `tray.pid` 18816,
+  `bin\DshTray.exe` most 58 880 B / 02:24, a `DshWindow.exe.new` a következő
+  ablaknyitásnál lép életbe; **a DSH-ablak és a session végig élt** (mért:
+  `asztalvaltas kesz: aktiv=1 lathato=[18868]`, harness pid 15432 változatlan).
+  (4) **A `tools\restart-tray.ps1` HALOTT VOLT:** csak `powershell.exe`-t
+  keresett, ezért a C# tálcát (`DshTray.exe`) nem találta meg, és „csak
+  elindítom” ágon egy második példányt indított — a javítás így sosem lépett
+  volna életbe. Mostantól a PID-fájlból (ellenőrzött útvonallal, meghajtóbetű
+  nélkül egyezve — a repó `C:` alatt is elérhető), folyamatnévből, illetve a
+  régi naplóból azonosít, leállítás után **kicseréli a `.new`-t** (copy+delete,
+  mert a `Move-Item -Force` nem ír felül), és csak akkor nyúl a
+  `DshWindow.exe.new`-hez, ha nem fut ablak. (5) **A költségelszámolás ikonja
+  nem látszott:** a host FÉL élt (a `cordis` loader a patch-fájl változására
+  betöltötte: `/koltseg/ping` → **200**, a kliens-modul benne van a kiszolgált
+  HTML-ben `dsh-koltseg/client.js&rev=23479dae18db`, az aktivitás-mérő pedig
+  02:21-kor írt a `state\koltseg\activity.jsonl`-ba) — a gomb viszont csak a
+  fejlécben volt regisztrálva, a fejlécet pedig a **`hero` fázis elrejti**. Így
+  a gombnak most **két példánya** van (`conversation.session.header.utilities`
+  + `conversation.input.dock`, `heroVariant`, a `dsh-ui-extras` mintájára), és
+  az aktivitás-mérő is mindkét slotban regisztrálva van, **referenciaszámlálóval
+  (egyszerre egy figyelő)**. Kliens-változás → **panel-újratöltés** elég.
+  (6) **Teszt-higiénia:** a host teszt a valódi `state\koltseg.log`-ba írt, és a
+  napló alapján úgy tűnt, mintha a host elindult volna — mostantól a
+  `DSH_KOLTSEG_STATE_DIR` ideiglenes könyvtárat ad, tehát a teszt nem hagy
+  nyomot. Tesztek: **48/48** (engine 31, kliens 8, host 9).
+
+- `2026-11-16` (tizennegyedik kör) — **fejlesztési költségelszámolás (új plugin).**
+  Új plugin `plugins\dsh-koltseg` (host + kliens): a menüsor **érme-ikonjára**
+  (tooltip) nyíló **lebegő ablak**, alap óradíj **12 500 Ft**, repónként
+  felülírható a felületről (a díj a központi `state\koltseg\config.json`-ban él —
+  a repókba nem írunk). (1) **Mérés:** szerver oldali munkaidő = `turn/start` →
+  `turn/end` a tartós session-naplóból (a helyi Ollama is benne; a delegált
+  session a szülő idejében van, ezért nem duplázunk), háttérmunkák (becslés,
+  0 súly), olvasás/gépelés (kliens-oldali aktivitás-vödrök + napló-alapú
+  tartalék), valós aktív idő (intervallum-unió). (2) **Profilok:** `alap`
+  (gépidő + emberi), `gepido`, `emberi`, `brutto` + egyedi súlyozott profil;
+  a felhasználó döntése szerint **percre pontos, kerekítés nélkül**, ÁFA
+  kapcsolható, a token-önköltség **opcionális** (alapból ki, mert az óradíj
+  magában foglalja). (3) **Hatókörök:** munkafolyamat / munkaterület / dátum
+  intervallum (magyar naphatárral, DST-helyesen). (4) **MÉRVE** a valódi
+  naplókon (`node tools\check-koltseg.mjs`): 30 nap, 33 munkafolyamat, 387 kör →
+  agent **27,26 h**, olvasás **15,52 h** (napló-alapú), aktív idő **43,29 h**,
+  elszámolható **2567 perc** → **534 792 Ft** 12 500 Ft/órán; a mérés 6,5 s.
+  Tesztek: **48/48** (`engine` 31, `client` 8, `host` 9), a host végpontok a
+  valódi handlerekkel, a kliens stubolt React-tel. Telepítés megtörtént
+  (`install.ps1`: junction + `- insert: koltseg`, `-Check` zöld: `webServer`,
+  `measure=function`, `kliens=ok`); a host végpontok a **következő
+  harness-indításnál** élnek (§1.5 — futó munka közben tilos újraindítani), a
+  kliens fél panel-újratöltéssel. Dokumentáció: `docs\KOLTSEG-ELSZAMOLAS.md`
+  (használat) + `docs\KOLTSEG-ELSZAMOLAS-TERV.md` (terv és döntések), angol
+  tükörrel. **A kétnyelvűség teljes:** a hiányzó `docs\FTP-DEPLOY.md` és
+  `docs\FTP-DEPLOY-TERV.md` angol tükör is pótolva, a
+  `node tools\check-docs-bilingual.mjs` **23 magyar · 23 tükör · 0 hiányzó**
+  (`exit 0`); mind a 6 érintett doksiban oda-vissza nyelvi hivatkozás van.
+  **Tanulság:** a legfrissebb napló lehet FUTÓ session (nincs lezárt
+  kör), ezért a mérés a nyitott kört a mostani idővel zárja; a munkaterület-
+  szűrés a fejlécből (első zstd frame) megy, különben a több száz megás naplók
+  lassítanák a felületet.
+
 - `2026-11-16` (tizenharmadik kör) — **három javítás.** (1) **A becsukott ablak
   nem nyílik újra:** a tálca induláskor feltétel nélkül törölte a
   `state\window.closed` jelölőt, ezért egy tálca-újraindulás után az ablak
