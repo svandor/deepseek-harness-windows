@@ -1,5 +1,7 @@
 # FTP deploy — panel + gyorsgomb (TERV)
 
+[English](FTP-DEPLOY-TERV.en.md) | Magyar
+
 Állapot: **terv, jóváhagyásra vár** (2026-11-16). Kiindulás: a `D:\Szerver\Felpuffanto`
 projekt **működő, élesben használt** FTP-motorja (0.1.5, commit `bcf25fd`
 „Ship Felpuffanto 0.1.5: FTP push retry, phase logging, MLSD dir check").

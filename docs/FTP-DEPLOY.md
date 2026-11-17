@@ -1,5 +1,7 @@
 # FTP deploy — használat
 
+[English](FTP-DEPLOY.en.md) | Magyar
+
 A `dsh-ftp-deploy` plugin git-diff alapú FTP-feltöltést ad a Git panel mellé: a
 tárhelyre csak a **változás** megy fel (a törlések is lekövetve), a jelszó pedig
 Windows DPAPI-val titkosítva, a gépen marad.
