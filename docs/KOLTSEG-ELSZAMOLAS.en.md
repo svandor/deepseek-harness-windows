@@ -135,6 +135,11 @@ measurement falls back to levels 1 and 3 automatically and says so.
   of the miss price → 98%), and how much it saved — without that the number is
   unverifiable. The hourly rate already covers tokens by default — this line is
   informational only.
+  **While measuring**, the line reads "Measuring the token cost…" (the cold scan
+  is MEASURED at about a minute over 1,300 logs); "unavailable" only appears
+  after three failed attempts. The last aggregate is also kept on disk
+  (`state\usage-snapshot.json`, 10 minutes), so a DSH restart shows a value
+  immediately and the refresh runs in the background.
 
 ## 6. Configuration
 

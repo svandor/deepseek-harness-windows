@@ -107,6 +107,11 @@ window.__ModuleLoader__.load({
       "options.material.cache.saved": "Kedvezmény nélkül {baseline} lenne — a cache ennyit hozott: {saved}.",
       "options.material.scope": "A token-sor a kiválasztott munkaterületre/harmonikára szűrve.",
       "options.material.unavailable": "A token költség ehhez nem érhető el.",
+      // MÉRT HIBA (2026-11-18): a token-sor a mérés ELSŐ ~1 percében
+      // „nem érhető el”-t írt, mert nem volt külön betöltő állapot — a hideg
+      // szkennelés (~1300 session-napló) addig tart. Most ki van mondva, hogy
+      // mérés van folyamatban, nem hiba.
+      "options.material.loading": "A token költség mérése folyamatban… (az első mérés hideg szkennelés, akár ~1 perc)",
       "actions.refresh": "Frissítés",
       "actions.freeze": "Rögzítés",
       "actions.frozen": "Rögzítve.",
@@ -193,6 +198,7 @@ window.__ModuleLoader__.load({
       "options.material.cache.saved": "Without the discount it would be {baseline} — the cache saved {saved}.",
       "options.material.scope": "The token line is filtered to the selected workspace/session.",
       "options.material.unavailable": "Token cost is unavailable here.",
+      "options.material.loading": "Measuring the token cost… (the first scan is cold and can take about a minute)",
       "actions.refresh": "Refresh",
       "actions.freeze": "Freeze",
       "actions.frozen": "Frozen.",
@@ -912,10 +918,20 @@ window.__ModuleLoader__.load({
         var url = "/ui-extras/usage?days=" + String(days)
           + (scope === "session" && sessionId.length > 0 ? "&session=" + encodeURIComponent(sessionId) : "")
           + (workspace.length > 0 ? "&workspace=" + encodeURIComponent(workspace) : "");
-        // EGYSZERI ÚJRAPRÓBÁLKOZÁS (2026-11-17, mért eset: „A token költség
-        // ehhez nem érhető el”, mert az első kérés a session-napló Kibontása
-        // közben elhalt). Kötött: legfeljebb 2 próba, 3 s várakozás (§1.7).
+        // BETÖLTŐ ÁLLAPOT (2026-11-18, mért hiba: „a token költség eltűnt”):
+        // a sor eddig a kérés TELJES ideje alatt „nem érhető el”-t írt, mert nem
+        // volt loading állapot. A hideg usage-szkennelés (~1300 session-napló
+        // zstd-kibontása) MÉRVE ~58 s, tehát a panel első kb. egy perce mindig
+        // ezt a hibaszöveget mutatta. Most a várakozás alatt „mérés folyamatban”
+        // áll ott, és csak a valódi hiba után lesz „nem érhető el”.
+        //
+        // ÚJRAPRÓBÁLKOZÁS kötött (§1.7): legfeljebb 3 próba, 5 s / 15 s
+        // várakozással; a várakozás alatt is loading állapot látszik.
         var attempts = 0;
+        var maxAttempts = 3;
+        var retryDelays = [5000, 15000];
+
+        setMaterial({ status: "loading", usd: 0, error: "" });
 
         function loadMaterial() {
           attempts += 1;
@@ -923,11 +939,11 @@ window.__ModuleLoader__.load({
             .then(function (data) {
               if (!alive) return;
               if (!data || data.ok !== true) {
-                if (attempts < 2) {
-                  setTimeout(function () { if (alive) loadMaterial(); }, 3000);
+                if (attempts < maxAttempts) {
+                  setTimeout(function () { if (alive) loadMaterial(); }, retryDelays[attempts - 1] || 15000);
                   return;
                 }
-                setMaterial({ status: "unavailable", usd: 0, error: "" });
+                setMaterial({ status: "unavailable", usd: 0, error: (data && data.error) || "" });
                 return;
               }
               // A session-hatókör a saját session számát használja, a
@@ -950,8 +966,8 @@ window.__ModuleLoader__.load({
             })
             .catch(function () {
               if (!alive) return;
-              if (attempts < 2) {
-                setTimeout(function () { if (alive) loadMaterial(); }, 3000);
+              if (attempts < maxAttempts) {
+                setTimeout(function () { if (alive) loadMaterial(); }, retryDelays[attempts - 1] || 15000);
                 return;
               }
               setMaterial({ status: "unavailable", usd: 0, error: "" });
@@ -1266,7 +1282,11 @@ window.__ModuleLoader__.load({
           body.push(h("div", { key: "material", style: S.note },
             material.status === "ready"
               ? t("options.material.usd", { usd: fmtUsd(material.usd) })
-              : t("options.material.unavailable")));
+              // A várakozás alatt (hideg szkennelés) NEM hiba, hanem mérés:
+              // a „nem érhető el” csak a 3 sikertelen próba után jelenik meg.
+              : material.status === "unavailable"
+                ? t("options.material.unavailable")
+                : t("options.material.loading")));
           // A cache-kedvezmény KIMONDVA (2026-11-17, felhasználói észrevétel:
           // „a 98% cache kedvezményt nem vonja le”). A kedvezmény érvényesül,
           // de eddig nem lehetett ellenőrizni — most a cache-elt bemenet, a

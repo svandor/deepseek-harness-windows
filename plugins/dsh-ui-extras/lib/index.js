@@ -4018,11 +4018,71 @@ function budapestDay(time) {
   }
 }
 
-/** The last scan, kept for a short while: the wait is noticeable otherwise. */
-const usageCache = { key: null, at: 0, value: null, running: null };
+/**
+ * A kibontott használati összesítés KULCSONKÉNT, rövid ideig.
+ *
+ * MIÉRT KULCSONKÉNT (2026-11-18, mért hiba): a korábbi EGYSLOTOS cache és a
+ * KÖZÖS `running` ígéret azt okozta, hogy egy MÁS kulcsra futó szkennelés
+ * szolgálta ki ezt a kérést — a `days=29&workspace=D:\Szerver\Antikolt` kérés
+ * a GLOBÁLIS összesítést adta vissza (mért: 5959 bájt a szűrt 2974 helyett),
+ * azaz a munkaterület token-költsége csendben a teljes deployment száma lett.
+ * A közös `running` miatt pedig egy lassú globális szkennelés BLOKKOLTA a
+ * munkaterület-szűrt kérést (a panel token-sora emiatt tűnt el).
+ */
+const usageCache = { entries: new Map(), running: new Map(), maxEntries: 8 };
 
 /** How long one usage scan stays fresh. */
 const USAGE_CACHE_MILLISECONDS = 120000;
+
+/**
+ * A legutóbbi összesítés LEMEZEN is: DSH-újraindítás után a panel token-sora
+ * különben megint egy hideg szkennelést várna (~58 s), és addig nem mutat
+ * semmit. A lemezes pillanatkép azonnal ad értéket, a frissítés a háttérben fut.
+ *
+ * Miért biztonságos: a kulcs a kérés paramétereiből épül (napok + munkaterület),
+ * a pillanatkép legfeljebb 10 percig érvényes, és a háttérben induló szkennelés
+ * hamarosan felülírja — a számok 30 napos összegek, tehát pár perc késés nem
+ * téveszt meg senkit.
+ */
+const USAGE_SNAPSHOT_MAX_AGE_MILLISECONDS = 600000;
+const USAGE_SNAPSHOT_MAX_KEYS = 4;
+
+/** A pillanatkép fájlja (tesztben `DSH_USAGE_STATE_DIR`-rel átirányítható). */
+function usageSnapshotFile() {
+  const override = typeof process.env.DSH_USAGE_STATE_DIR === "string" ? process.env.DSH_USAGE_STATE_DIR : "";
+  const dir = override.length > 0 ? override : join(PACKAGE_ROOT, "..", "..", "state");
+  return join(dir, "usage-snapshot.json");
+}
+
+function readUsageSnapshots() {
+  try {
+    const file = usageSnapshotFile();
+    if (!existsSync(file)) return {};
+    const raw = readFileSync(file, "utf8").replace(/^\uFEFF/u, "");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || !parsed.entries || typeof parsed.entries !== "object") return {};
+    return parsed.entries;
+  } catch {
+    return {};
+  }
+}
+
+function writeUsageSnapshot(key, at, value) {
+  try {
+    const file = usageSnapshotFile();
+    const entries = readUsageSnapshots();
+    entries[key] = { at, value };
+    const keys = Object.keys(entries);
+    if (keys.length > USAGE_SNAPSHOT_MAX_KEYS) {
+      keys.sort((left, right) => Number(entries[left]?.at ?? 0) - Number(entries[right]?.at ?? 0));
+      while (keys.length > USAGE_SNAPSHOT_MAX_KEYS) delete entries[keys.shift()];
+    }
+    mkdirSync(join(file, ".."), { recursive: true });
+    writeFileSync(file, JSON.stringify({ version: 1, entries }), "utf8");
+  } catch (error) {
+    appendClientLog(`usage snapshot write failed: ${String(error?.message ?? error)}`);
+  }
+}
 
 /**
  * Two workspace paths are the same directory (drive-letter and case
@@ -4389,34 +4449,64 @@ async function scanUsage(days, sessionId, workspace) {
   };
 }
 
-/** Cached wrapper around {@link scanUsage}; one scan at a time. */
+/**
+ * Elindít (vagy újrahasznál) EGY szkennelést a kulcsra. A `running` térkép
+ * kulcsonként tartja a futó ígéretet, tehát más kulcs munkája nem szolgálhatja
+ * ki ezt a kérést, és nem is blokkolhatja.
+ */
+function startUsageScan(key, days, workspace) {
+  const existing = usageCache.running.get(key);
+  if (existing !== undefined) return existing;
+  const running = scanUsage(days, null, workspace)
+    .then((value) => {
+      const at = Date.now();
+      usageCache.entries.set(key, { at, value });
+      writeUsageSnapshot(key, at, value);
+      // Csak néhány kulcs maradjon (a panel 1-2 kulcsot használ).
+      while (usageCache.entries.size > usageCache.maxEntries) {
+        const oldest = usageCache.entries.keys().next().value;
+        usageCache.entries.delete(oldest);
+      }
+      return value;
+    })
+    .catch((error) => {
+      appendClientLog(`usage scan failed: ${String(error?.stack ?? error)}`);
+      return null;
+    })
+    .finally(() => {
+      usageCache.running.delete(key);
+    });
+  usageCache.running.set(key, running);
+  return running;
+}
+
+/** Cached wrapper around {@link scanUsage}; one scan per cache key at a time. */
 async function usageSnapshot(days, sessionId, workspace) {
   const wantedWorkspace = typeof workspace === "string" ? workspace : "";
   // A kulcsban a munkaterulet is benne van: kulonben egy globalis szkennelés
   // kiszolgalna egy munkaterulet-szurt kérést (forditva is).
   const key = `${days}|${wantedWorkspace.toLowerCase()}`;
   const now = Date.now();
-  if (usageCache.value !== null && usageCache.key === key && now - usageCache.at < USAGE_CACHE_MILLISECONDS) {
-    return withSessionFigures(usageCache.value, sessionId);
+  const cached = usageCache.entries.get(key);
+  if (cached !== undefined && now - cached.at < USAGE_CACHE_MILLISECONDS) {
+    return withSessionFigures(cached.value, sessionId, cached.at);
   }
-  if (usageCache.running === null) {
-    usageCache.running = scanUsage(days, null, wantedWorkspace)
-      .then((value) => {
-        usageCache.key = key;
-        usageCache.at = Date.now();
-        usageCache.value = value;
-        return value;
-      })
-      .catch((error) => {
-        appendClientLog(`usage scan failed: ${String(error?.stack ?? error)}`);
-        return null;
-      })
-      .finally(() => {
-        usageCache.running = null;
-      });
+  // Lemezes pillanatkép: azonnal ad értéket, a frissítés a háttérben fut, így a
+  // panel token-sora DSH-újraindítás után sem tűnik el egy percig.
+  if (cached === undefined) {
+    const stored = readUsageSnapshots()[key];
+    if (stored !== undefined && stored !== null
+      && typeof stored.at === "number" && stored.value !== null && typeof stored.value === "object"
+      && now - stored.at < USAGE_SNAPSHOT_MAX_AGE_MILLISECONDS) {
+      usageCache.entries.set(key, { at: now, value: stored.value });
+      startUsageScan(key, days, wantedWorkspace); // háttérben frissül (kötött: egy fut kulcsonként)
+      return withSessionFigures(stored.value, sessionId, stored.at);
+    }
   }
-  const value = await usageCache.running;
-  return value === null ? { ok: false, error: "a használati adat nem olvasható" } : withSessionFigures(value, sessionId);
+  const value = await startUsageScan(key, days, wantedWorkspace);
+  if (value === null) return { ok: false, error: "a használati adat nem olvasható" };
+  const fresh = usageCache.entries.get(key);
+  return withSessionFigures(value, sessionId, fresh === undefined ? Date.now() : fresh.at);
 }
 
 /**
@@ -4426,14 +4516,20 @@ async function usageSnapshot(days, sessionId, workspace) {
  * throw it away: this reads just that session's log and prices it with the same
  * engine. The result is memoized per (scan, session).
  */
-async function withSessionFigures(value, sessionId) {
+async function withSessionFigures(value, sessionId, scanAt) {
   const wanted = typeof sessionId === "string" && sessionId.length > 0 ? sessionId : null;
   if (wanted === null) return { ...value, session: null };
   if (value.session !== null && value.session !== undefined && value.session.id === wanted) return value;
+  const stamp = typeof scanAt === "number" ? scanAt : Date.now();
   const cached = sessionFigureCache.get(wanted);
-  if (cached !== undefined && cached.scan === usageCache.at) return { ...value, session: cached.session };
+  if (cached !== undefined && cached.scan === stamp) return { ...value, session: cached.session };
   const session = await scanOneSession(wanted, value.since);
-  sessionFigureCache.set(wanted, { scan: usageCache.at, session });
+  sessionFigureCache.set(wanted, { scan: stamp, session });
+  // A session-figura gyorsítótár is kötött méretű maradjon.
+  while (sessionFigureCache.size > 64) {
+    const oldest = sessionFigureCache.keys().next().value;
+    sessionFigureCache.delete(oldest);
+  }
   return { ...value, session };
 }
 
@@ -5571,7 +5667,7 @@ export { approvalPathKey, approvalPathOf, approvalPathWithin, approvalPathScopeO
  * holiday table is exported so `tools/check-plugin.mjs` can prove the client's
  * copy of it has not drifted from this one.
  */
-export { isPeakInstant, modelPrices, requestCost, cacheReadCost, scanUsage, sessionsRoot };
+export { isPeakInstant, modelPrices, requestCost, cacheReadCost, scanUsage, usageSnapshot, sessionsRoot };
 export { isFreeModel };
 
 /**

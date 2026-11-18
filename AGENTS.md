@@ -305,6 +305,66 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-18` (első kör) — **a DSH-leállítás utáni indítás: a munkamenetek
+  visszaállítása (a „Az ismeretlenbe” hiba), a halott tokennel induló ablak,
+  és a költségelszámolás token-sorának eltűnése.** (1) **MÉRT OK a
+  munkamenet-vesztésre (felhasználói jelzés, 15:03):** a DSH kliensben
+  **nincs** perzisztencia a megnyitott beszélgetésre — az egyetlen
+  localStorage-kulcs a `dsh.conversation.*` (nézet, szélesség). A boot a
+  `dsh-client-ui-workspace` `watchNavigation()`-ján a `recentWorkspace()`-re
+  esik, és ott a `connectWorkspace()` egy ÜRES sessiont nyit/csinál, ezért
+  egy teljes oldalbetöltés **mindig** üres beszélgetésre visz. A DshWindow
+  viszont minden indításnál újratölti a paneleket → DSH-leállítás + indítás
+  után MINDEN panel „Az ismeretlenbe” volt, más-más (a legutóbbi)
+  munkaterületen. **Javítás:** a `dsh-ui-extras` kliens új
+  „munkamenet-emlékezet” része panelekent (a WebView2-profil saját
+  localStorage-a, `dsh-ui-extras.last-session`) elmenti az utolsó VALÓDI
+  beszélgetést, és oldalbetöltésenként EGYSZER visszaállítja
+  (`uiWorkspace.openSession`, tartalék: `sessions.open`); az üres sessiont
+  SOHA nem menti, archiváltat nem nyit, a próbák kötöttek (4 időzített próba,
+  max. 3 megnyitás, §1.7), és a lista későbbi betöltésére is reagál. Tesztek:
+  `plugins\dsh-ui-extras\test\session-memory.test.mjs` **8/8**. (2) **MÉRT
+  második hiba (idővonal a naplókból):** a tálca a harness indítása után **a
+  régi, halott tokent** adta át az ablaknak (15:03:51, `--url …qNw…`), majd a
+  friss token 15:03:59-kor érkezett, és a panelek 15:04:00-kor RELOADOLTAK rá
+  — vagyis két teljes oldalbetöltés, az első kör munkamenet-választása
+  elveszett, a félbeszakadt kérések pedig a költség-panel token-sorát is
+  elbuktaták. **Javítás (`src\DshTray.cs`):** a harness indításakor
+  `_awaitToken = true` (a `CurrentUrl()` addig üres, tehát nem esik vissza a
+  régi `harness.url`/`harness.log` tokenre), a `CaptureTokenUrl()` pedig a
+  friss token megérkezésekor kapcsolja vissza; az indítási szál/felügyelet
+  addig vár (max. 60 s), és csak utána nyit ablakot. **Biztonsági korlát
+  (§1.7):** ha a friss token 45 s alatt nem érkezik meg (pl. a harness kimenete
+  nem olvasható), a tálca visszaesik a mentett URL-re, tehát az ablaknyitás
+  nem blokkolódik örökre — a napló kimondja
+  (`token-varakozas: 45 s alatt nem erkezett friss token`). **Érvénybe lépés:**
+  `bin\DshTray.exe.new` (61 440 B, exit 0), a csere a következő
+  tálca-indításnál (`PendingUpdate.Apply`). (3) **A token-költség sor
+  eltűnése:** a panel a `material.status !== "ready"` esetén eddig MINDIG „A
+  token költség ehhez nem érhető el.”-t írt — betöltő állapot nem volt, a
+  hideg `/ui-extras/usage` szkennelés pedig MÉRVE **~58 s** (1 303 napló).
+  Most van `loading` állapot („mérés folyamatban… akár ~1 perc”), a várakozás
+  alatt is az látszik, és 3 kötött próba (5 s / 15 s) után lesz csak „nem
+  érhető el”. **MÉRT host-hiba ugyanitt:** a `usageSnapshot` egyetlen
+  cache-slotot és KÖZÖS `running` ígéretet használt, ezért egy MÁS kulcsra
+  futó szkennelés kiszolgálta a munkaterület-szűrt kérést — MÉRVE a futó
+  hoston: `days=28&workspace=D:\Szerver\Antikolt` és a globális kérés is
+  `requests=77082`, a szűrt válaszban `workspace: null` (a globális 5 959
+  bájtos válasz a szűrt 2 974 helyett). **Javítás:** kulcsonkénti cache és
+  kulcsonkénti futó szkennelés, lemezes pillanatkép
+  (`state\usage-snapshot.json`, 10 perc, max. 4 kulcs) azonnali értékkel és
+  háttér-frissítéssel; a teszt `DSH_USAGE_STATE_DIR`-rel ideiglenes
+  könyvtárba ír (nincs state-szennyezés). Tesztek: ui-extras usage **6/6**,
+  session-memory **8/8**, hero/git/run-log **7/7**, koltseg **13+37+12**.
+  **Érvénybe lépés:** a kliens-oldali rész (loading szöveg)
+  **panel-újratöltéssel**, a host-oldali (kulcs-izoláció, lemezes
+  pillanatkép) a **következő harness-indításnál** (§1.5 — a futó session
+  miatt nem indítjuk újra). **FIGYELEM az első újraindításra:** az emlékezet
+  az ELSŐ olyan oldalbetöltésnél íródik ki, amikor a panel már valódi
+  beszélgetést mutat — ezért érdemes a paneleket egyszer újratölteni, vagy az
+  első restart után a munkamenetet kézzel megnyitni, különben az első restart
+  még üres beszélgetésre eshet.
+
 - `2026-11-17` (huszonkettedik kör) — **költségelszámolás: sötét legördülő,
   visszamenőleges gépelés-becslés a beírt szövegből, és a token-sor
   munkaterület-szűrése + cache-kedvezmény kimondva.** (1) **Sötét legördülő:**

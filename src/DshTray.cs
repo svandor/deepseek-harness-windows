@@ -200,6 +200,7 @@ namespace DshTray
         private int _desktop = 1;            // utoljara latott munkaasztal
         private string _windowUrl = string.Empty;
         private volatile bool _awaitToken;   // harness-újraindítás után az új tokenre várunk
+        private DateTime _awaitTokenSince = DateTime.MinValue; // mikor kezdtük a token-várást
         private readonly bool _explicitShow; // kifejezett indítás (DshLauncher --show)
 
         public TrayApp(bool explicitShow)
@@ -803,6 +804,18 @@ namespace DshTray
                     return;
                 }
                 Log.Info("harness nem válaszol a " + _cfg.Port + " porton — indítás");
+                // ÚJ TOKENRE VÁRÁS (2026-11-18, mért hiba): a state\harness.url és
+                // a harness.log UTOLSÓ sora a most leállított harness HALOTT
+                // tokenjét hordozza. Ha ezzel indul az ablak, minden panel a régi
+                // tokenre tölt, majd ~10 s múlva a friss tokenre RELOADOL — két
+                // teljes oldalbetöltés, és az első kör munkamenet-választása
+                // elveszik (mért: 15:03:51 régi token → 15:04:00 reload).
+                // Ezért az új példány indításakor a `_awaitToken` bekapcsol, a
+                // `CurrentUrl()` pedig addig üres marad, amíg a friss token meg
+                // nem érkezik; az indítási szál/ felügyelet addig vár és utána
+                // nyit ablakot (legfeljebb 60 s, §1.7).
+                _awaitToken = true;
+                _awaitTokenSince = DateTime.UtcNow;
                 int pid = StartNode(_cfg.DshBin,
                     "web --host 127.0.0.1 --port " + _cfg.Port + " --no-open",
                     Path.GetDirectoryName(_cfg.DshBin),
@@ -837,6 +850,11 @@ namespace DshTray
             {
                 File.WriteAllText(_cfg.UrlFile, url, new UTF8Encoding(false));
                 _windowUrl = url;
+                // A friss token megérkezett: innentől a token-váró ágak (indítási
+                // szál, felügyelet) azonnal nyithatják az ablakot — a régi tokenre
+                // már nem eshetnek vissza.
+                _awaitToken = false;
+                _awaitTokenSince = DateTime.MinValue;
                 Log.Info("uj token elmentve: " + url.Substring(0, Math.Min(60, url.Length)) + "...");
             }
             catch (Exception ex) { Log.Error("token mentes: " + ex.Message); }
@@ -965,7 +983,25 @@ namespace DshTray
         {
             // Újraindítás után a régi URL halott: addig nem adunk vissza semmit,
             // amíg az új token meg nem érkezik (különben 401 -> újraindítási hurok).
-            if (_awaitToken) return _windowUrl.Length == 0 ? string.Empty : _windowUrl;
+            if (_awaitToken)
+            {
+                if (_windowUrl.Length > 0) return _windowUrl;
+                // BIZTONSÁGI KORLÁT (§1.7): ha a friss token 45 s alatt nem érkezik
+                // meg (pl. a harness kimenete nem olvasható), nem blokkoljuk ÖRÖKRE
+                // az ablaknyilast — visszaesünk a mentett URL-re, és az ablak saját
+                // token-figyelője/401-kezelése veszi át.
+                if (_awaitTokenSince != DateTime.MinValue
+                    && (DateTime.UtcNow - _awaitTokenSince).TotalSeconds > 45)
+                {
+                    _awaitToken = false;
+                    _awaitTokenSince = DateTime.MinValue;
+                    Log.Info("token-varakozas: 45 s alatt nem erkezett friss token — visszaeses a mentett URL-re");
+                }
+                else
+                {
+                    return string.Empty;
+                }
+            }
             try
             {
                 if (File.Exists(_cfg.UrlFile))
@@ -1098,6 +1134,7 @@ namespace DshTray
             {
                 ClearCloseMarker();      // kifejezett kérés: az ablak újra megnyílik
                 _awaitToken = true;      // a régi token halott: várjuk az újat
+                _awaitTokenSince = DateTime.UtcNow;
                 _windowUrl = string.Empty;
                 foreach (Process p in Process.GetProcessesByName("DshWindow")) { try { p.Kill(); } catch { } }
                 StopPort(_cfg.Port);

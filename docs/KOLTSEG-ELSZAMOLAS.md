@@ -129,6 +129,11 @@ automatikusan az 1. szintre esik vissza, és ezt ki is írja.
   százalék a kedvezmény (a DeepSeek-flash találati ár a miss-ár 2%-a → 98%),
   és mennyit hozott — enélkül a szám ellenőrizhetetlen. Az óradíj alapból
   magában foglalja a tokeneket — ez a sor csak kimutatás.
+  **Mérés közben** a sor „A token költség mérése folyamatban…” szöveget ír
+  (a hideg szkennelés MÉRVE ~1 perc az 1 300 naplóval); a „nem érhető el”
+  csak három sikertelen próba után jelenik meg. A legutóbbi összesítés
+  lemezen is megmarad (`state\usage-snapshot.json`, 10 perc), ezért
+  DSH-újraindítás után is azonnal van érték, a frissítés a háttérben fut.
 
 ## 6. Konfiguráció
 

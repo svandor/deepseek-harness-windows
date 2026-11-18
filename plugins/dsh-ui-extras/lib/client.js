@@ -9138,6 +9138,190 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       });
     }
 
+    // ── munkamenet-emlékezet (2026-11-18) ──────────────────────────────────
+    //
+    // MIÉRT KELL: a DSH kliens maga NEM tartja meg a megnyitott beszélgetést egy
+    // teljes oldal-újratöltés után. A boot a `dsh-client-ui-workspace`
+    // `watchNavigation()`-ján megy: ha nincs `sessions.current`, a
+    // `recentWorkspace()`-re esik, és ott a `connectWorkspace()` egy ÜRES
+    // sessiont nyit/csinál — ez a képernyőn a „Az ismeretlenbe” hero.
+    //
+    // A DshWindow viszont minden indításnál (és friss token érkezésekor)
+    // ÚJRATÖLTI a paneleket, ezért egy DSH-leállítás + indítás után MINDEN panel
+    // üres beszélgetésre esett, a korábbi munkamenetek elvesztek (mért eset:
+    // 2026-11-18 15:03, a felhasználó jelzése). A kliensben nincs is rá
+    // perzisztencia: egyetlen localStorage-kulcs van (`dsh.conversation.*`,
+    // nézet és szélesség), a session-választás nem.
+    //
+    // A megoldás panelekent él: a paneleknek külön WebView2-profiljuk van
+    // (state\webview2\pane-N), tehát a localStorage is külön — ide mentjük az
+    // utolsó VALÓDI beszélgetést, és oldalbetöltésenként EGYSZER
+    // visszaállítjuk. Így a token-újratöltés és a DSH-újraindítás is a helyére
+    // tesz, nem az „Az ismeretlenbe” képernyőre.
+    var SESSION_MEMORY_KEY = "dsh-ui-extras.last-session";
+
+    /**
+     * A visszaállítás időzített próbái (ms) — kötött szám, növekvő várakozás
+     * (§1.7: nincs korlátlan újrapróbálkozás). A boot alatt a session-lista és a
+     * `current` később áll be, ezért kell néhány késleltetett próba.
+     */
+    var SESSION_MEMORY_DELAYS = [500, 1500, 3000, 6000];
+
+    /** Legfeljebb ennyi tényleges megnyitási kísérlet történhet. */
+    var SESSION_MEMORY_MAX_OPEN = 3;
+
+    /** Az elmentett munkamenet: `{ id, cwd, at }`, vagy null. */
+    function readSessionMemory() {
+      try {
+        var raw = window.localStorage.getItem(SESSION_MEMORY_KEY);
+        if (raw === null || raw === "") return null;
+        var parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed.id !== "string" || parsed.id.length === 0) return null;
+        return parsed;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    /** Elmementi a megnyitott munkamenetet (változás esetén ír). */
+    function writeSessionMemory(id, cwd) {
+      try {
+        var next = {
+          id: String(id),
+          cwd: typeof cwd === "string" ? cwd : "",
+          at: Date.now()
+        };
+        var current = readSessionMemory();
+        if (current !== null && current.id === next.id && current.cwd === next.cwd) return;
+        window.localStorage.setItem(SESSION_MEMORY_KEY, JSON.stringify(next));
+      } catch (error) { }
+    }
+
+    /** A jelenleg megnyitott session összegzése (byId bejegyzés), vagy null. */
+    function sessionMemoryCurrent(sessions) {
+      try {
+        var snapshot = sessions.list.getSnapshot();
+        if (!snapshot || snapshot.current === undefined || snapshot.current === null) return null;
+        var entry = snapshot.byId ? snapshot.byId[snapshot.current] : undefined;
+        return entry && typeof entry === "object" ? entry : null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    /**
+     * Megnyit egy sessiont a hivatalos navigáción át.
+     *
+     * A `uiWorkspace.openSession` ugyanaz, amit a bal oldalsáv kattintása hív
+     * (session megnyitása + a jobb oldali panel bezárása); ha az a szolgáltatás
+     * nem érhető el, a `sessions.open` a tartalék.
+     *
+     * @returns a használt út neve, vagy null, ha egyik sem működött.
+     */
+    function openRememberedSession(ctx, id) {
+      try {
+        var nav = null;
+        try { nav = ctx.uiWorkspace || null; } catch (error) { }
+        if (!nav && typeof ctx.get === "function") {
+          try { nav = ctx.get("uiWorkspace"); } catch (error) { }
+        }
+        if (nav && typeof nav.openSession === "function") {
+          nav.openSession(id);
+          return "uiWorkspace";
+        }
+      } catch (error) {
+        reportToHost("session memory: uiWorkspace.openSession", String(error && error.message ? error.message : error));
+      }
+      try {
+        if (ctx.sessions && typeof ctx.sessions.open === "function") {
+          var result = ctx.sessions.open(id);
+          if (result && typeof result.catch === "function") result.catch(function () { });
+          return "sessions.open";
+        }
+      } catch (error) {
+        reportToHost("session memory: sessions.open", String(error && error.message ? error.message : error));
+      }
+      return null;
+    }
+
+    /**
+     * Panelekent megjegyzi az utolsó valódi beszélgetést, és oldalbetöltésenként
+     * egyszer visszaállítja.
+     *
+     * A „valódi” a lényeg: a boot által nyitott ÜRES sessiont (`blank: true`)
+     * soha nem mentjük el helyként, különben a visszaállítás önmagát rontaná el.
+     * Amint a felhasználó valódi beszélgetésbe lép, az lesz az emlékezet, és a
+     * visszaállítás lezárul — a felhasználó későbbi navigálását nem bántjuk.
+     *
+     * @param ctx - a kliens gyökér-kontextusa.
+     */
+    function installSessionMemory(ctx) {
+      var sessions = ctx && ctx.sessions ? ctx.sessions : null;
+      if (!sessions || !sessions.list || typeof sessions.list.subscribe !== "function") return;
+      var settled = false;
+      var openAttempts = 0;
+
+      /** Archivált-e a session (archiváltat nem nyitunk meg). */
+      function isArchived(id) {
+        try {
+          var snapshot = ctx.workspaces && ctx.workspaces.list ? ctx.workspaces.list.getSnapshot() : null;
+          if (!snapshot || !Array.isArray(snapshot.archivedSessionIds)) return false;
+          return snapshot.archivedSessionIds.indexOf(id) !== -1;
+        } catch (error) {
+          return false;
+        }
+      }
+
+      /** Ha már valódi session van megnyitva, azt menti és lezár. */
+      function rememberCurrent() {
+        var entry = sessionMemoryCurrent(sessions);
+        if (entry === null || entry.blank === true) return false;
+        writeSessionMemory(entry.id, entry.cwd);
+        settled = true;
+        return true;
+      }
+
+      function restoreOnce() {
+        if (settled) return;
+        var snapshot;
+        try { snapshot = sessions.list.getSnapshot(); } catch (error) { return; }
+        if (!snapshot || snapshot.phase !== "ready") return;
+        if (rememberCurrent()) return;
+        var saved = readSessionMemory();
+        if (saved === null) { settled = true; return; }
+        if (isArchived(saved.id)) { settled = true; return; }
+        var summary = snapshot.byId ? snapshot.byId[saved.id] : undefined;
+        // A lista a boot alatt még töltődhet: ilyenkor a következő próbáig várunk.
+        if (summary === undefined || summary === null) return;
+        if (summary.blank === true) { settled = true; return; }
+        if (openAttempts >= SESSION_MEMORY_MAX_OPEN) { settled = true; return; }
+        openAttempts += 1;
+        var via = openRememberedSession(ctx, saved.id);
+        if (via === null) { settled = true; return; }
+        reportToHost("session memory", "visszaallitas: " + saved.id + " (" + via + ", proba " + openAttempts + ")");
+      }
+
+      function tick() {
+        try { restoreOnce(); } catch (error) { }
+      }
+
+      // 1) A lista minden változására: ha valódi session lesz a `current`, az az
+      //    emlékezet; ha üres session áll be, egyszer visszaállítunk.
+      try {
+        var dispose = sessions.list.subscribe(tick);
+        if (typeof dispose === "function") {
+          ctx.effect(function () { return dispose; }, "ui-extras: session memory");
+        }
+      } catch (error) {
+        reportToHost("session memory: subscribe", String(error && error.message ? error.message : error));
+      }
+
+      // 2) Induló próbák: a boot során a `current` csak később áll be.
+      for (var i = 0; i < SESSION_MEMORY_DELAYS.length; i++) {
+        try { window.setTimeout(tick, SESSION_MEMORY_DELAYS[i]); } catch (error) { }
+      }
+    }
+
     /**
      * Register the extended row below the composer card, the corner controls,
      * hide the built-in pills, and publish the dictionaries.
@@ -9148,6 +9332,10 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       // defined outside this function can reach it.
       themeServiceRef.current = ctx.theme || null;
       sessionsServiceRef.current = ctx.sessions || null;
+      // Munkamenet-emlékezet: a panelek WebView2-profiljában (localStorage)
+      // megjegyzi az utolsó valódi beszélgetést, és oldalbetöltésenként egyszer
+      // visszaállítja. Enélkül minden DSH-újraindítás „Az ismeretlenbe” volt.
+      installSessionMemory(ctx);
       // A Git panel „FTP deploy" gombja ezen át nyitja meg az FTP fület (a fület a
       // `dsh-ftp-deploy` plugin regisztrálja, ezért itt csak a nyitó hívást adjuk).
       ftpOpenRef.current = function () {
@@ -10334,6 +10522,18 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
     exports.peakWindowsLocalText = peakWindowsLocalText;
     exports.apply = apply;
     exports.inject = inject;
+    // A munkamenet-emlékezet (2026-11-18) külön exporton, hogy a teszt a teljes
+    // `apply` (slot- és szótár-regisztrációk) nélkül tudja hajtani: a
+    // visszaállítás szabálya (üres sessiont soha nem mentünk, archívumot nem
+    // nyitunk, kötött számú próba) önmagában is tesztelhető.
+    exports.__sessionMemory = {
+      key: SESSION_MEMORY_KEY,
+      delays: SESSION_MEMORY_DELAYS,
+      maxOpen: SESSION_MEMORY_MAX_OPEN,
+      read: readSessionMemory,
+      write: writeSessionMemory,
+      install: installSessionMemory
+    };
     // Exported so tools/check-plugin.mjs can pin the workspace resolution: the
     // terminal ran "npm run dev" in the Harness's own directory because a panel
     // fell back to the host cwd while a session with its own cwd was selected.
