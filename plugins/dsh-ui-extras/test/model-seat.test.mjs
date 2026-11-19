@@ -125,6 +125,16 @@ function walk(node, visit) {
   for (const child of node.children ?? []) walk(child, visit);
 }
 
+/** Szövegek összegyűjtése (a walk() szándékosan csak objektum-csomópontokat lát). */
+function collectText(node, out) {
+  if (node === null || node === undefined || node === false) return;
+  if (typeof node === "string") { out.push(node); return; }
+  if (Array.isArray(node)) { for (const child of node) collectText(child, out); return; }
+  if (typeof node !== "object") return;
+  if (node.props && node.props.children) collectText(node.props.children, out);
+  if (node.children) collectText(node.children, out);
+}
+
 const reasoning = { efforts: [{ id: "low", name: "Low" }, { id: "high", name: "High" }], defaultEffort: "medium" };
 
 function state() {
@@ -235,6 +245,37 @@ test("modellfészek: az effort lista a kiválasztott modell szintjeit adja", () 
   const choices = rows.filter((row) => row.kind === "choice");
   assert.deepEqual(choices.map((row) => row.label), ["Low", "High"]);
   assert.equal(choices[0].selection.reasoningEffort, "low");
+});
+
+test("modellfészek: hiba esetén LÁTSZÓ tartalék marad (nem tűnik el a választó)", () => {
+  const { exported, react } = loadBundle();
+  const savedDocument = globalThis.document;
+  globalThis.document = fakeDocument();
+  try {
+    react.__reset();
+    const broken = {
+      available: true,
+      directory: {
+        getSnapshot() { throw new Error("szándékos hiba a tesztben"); },
+        subscribe() { return () => {}; },
+      },
+      load() {},
+      select: () => Promise.resolve(true),
+    };
+    let tree;
+    assert.doesNotThrow(() => {
+      tree = exported.ModelSeat(broken);
+    }, "a fészek NEM dobhat kivételt (különben eltűnik a compose-ból)");
+    // A tartalék SZÁNDÉKOSAN külön komponens (hook-ütközés miatt) — a stubolt
+    // React nem rendereli a komponenseket, ezért itt hívjuk meg.
+    const rendered = tree && typeof tree.type === "function" ? tree.type(tree.props) : tree;
+    const texts = [];
+    collectText(rendered, texts);
+    assert.ok(texts.length > 0 && texts.some((text) => text.length > 0), `a tartalék felirat látszik: ${texts.join(" | ")}`);
+    assert.ok(!texts.some((text) => /Anthropic|Claude/i.test(text)), "hibánál nincs modellnév, csak tartalék felirat");
+  } finally {
+    globalThis.document = savedDocument;
+  }
 });
 
 test("modellfészek: a zárt fészek a jelenlegi modellt írja, alügynök-sessionben nincs", () => {

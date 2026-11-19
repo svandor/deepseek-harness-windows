@@ -9562,10 +9562,52 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
     }
 
     /**
+     * Tartalék fészek, ha a menü felépítése elszáll: a modell NEVE látszik,
+     * a vezérlő letiltva. Azért külön komponens, mert így a React a hook-
+     * állapotot eldobja (nincs hook-sorszám-ütközés), és a compose NEM törik el.
+     * MÉRT HIBA (2026-11-19): a modellválasztó teljesen eltűnt a compose-ból,
+     * mert a fészek renderelése kivételt dobott.
+     * @param props - { label, reason }.
+     */
+    function SeatFallback(props) {
+      var label = (props && props.label) || "Modell";
+      var title = (props && props.reason) ? ("A modellválasztó nem épült fel: " + props.reason) : "A modellválasztó nem épült fel; a hiba a host naplójában van.";
+      return seatH("div", { style: SEAT.root },
+        seatH("button", { type: "button", style: SEAT.trigger, disabled: true, title: title }, label));
+    }
+
+    /**
+     * Hibatűrő burok a fészek körül: hiba esetén LÁTSZÓ felirat marad, mert az
+     * árnyékolt gyári bejegyzés nem tud visszajönni.
+     * @param props - a gyári slot-szerződés.
+     */
+    function ModelSeat(props) {
+      try {
+        return ModelSeatInner(props);
+      } catch (error) {
+        var reason = String((error && error.message) || error);
+        safeRun("model seat render", function () {
+          reportToHost("model seat", reason);
+        });
+        var label = "Modell";
+        try {
+          var snapshot = props && props.directory && typeof props.directory.getSnapshot === "function"
+            ? props.directory.getSnapshot()
+            : undefined;
+          var groups = seatGroups(snapshot);
+          var hit = seatCurrent(groups, snapshot && snapshot.current);
+          if (hit) label = hit.model.name;
+          else if (snapshot && snapshot.current && snapshot.current.model) label = String(snapshot.current.model);
+        } catch (inner) { /* marad a "Modell" felirat */ }
+        return seatH(SeatFallback, { label: label, reason: reason });
+      }
+    }
+
+    /**
      * A composer modellfészke: szolgáltató-választó, majd azon belül modell.
      * @param props - a gyári slot-szerződés: available/directory/load/select/t.
      */
-    function ModelSeat(props) {
+    function ModelSeatInner(props) {
       var directory = props.directory;
       var available = props.available !== false;
       var load = typeof props.load === "function" ? props.load : function () {};
@@ -10043,40 +10085,46 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       // itt MI adjuk tovább, ugyanazzal a szerződéssel, hogy a `select` a közös
       // ModelDirectory-n menjen (a /model popuppal közös állapot).
       safeRun("model seat: provider first", function () {
-        ctx.slots.inject("conversation.input.model", function () {
-          return ctx.slots.register({
-            name: "conversation.input.model",
-            priority: -100,
-            locale: NS,
-            inject: function (sessionId) {
-              var models = null;
-              try { models = ctx.get("modelDirectories"); } catch (error) { models = null; }
-              var sessions = ctx.sessions || null;
-              if (!models || typeof models.directoryFor !== "function") {
-                return { available: false, t: function (key) { return key; } };
+        // FONTOS (mért hiba, 2026-11-19): a szolgáltatást NEM `ctx.get(...)`-tel
+        // kell kérni — ilyen accessor nincs, ezért a fészek `available:false`-t
+        // kapott és `null`-t renderelt, az árnyékolt gyári bejegyzés miatt pedig
+        // ELTŰNT a modellválasztó. A gyári plugin is `ctx.inject([...])`-tel
+        // szerzi meg ugyanezeket; a callback csak akkor fut, ha MINDKÉT
+        // szolgáltatás él — így hiba esetén a gyári fészek marad.
+        ctx.inject(["slots", "modelDirectories"], function (scope) {
+          var models = scope.modelDirectories;
+          if (!models || typeof models.directoryFor !== "function") {
+            reportToHost("model seat", "a modelDirectories szolgáltatás nem ad directoryFor-t; a gyári fészek marad");
+            return;
+          }
+          scope.slots.inject("conversation.input.model", function () {
+            return scope.slots.register({
+              name: "conversation.input.model",
+              priority: -100,
+              locale: NS,
+              inject: function (sessionId) {
+                var directory = models.directoryFor(sessionId);
+                var available = true;
+                try {
+                  var sessions = scope.sessions;
+                  if (sessions && typeof sessions.subagentAddress === "function") {
+                    available = sessions.subagentAddress(sessionId) === undefined;
+                  }
+                } catch (error) { /* maradjon elérhető */ }
+                return {
+                  available: available,
+                  directory: directory.store,
+                  load: function () {
+                    if (available) directory.load().catch(function () { });
+                  },
+                  select: function (selection) {
+                    if (!available) return Promise.resolve(false);
+                    return directory.select(selection).then(function () { return true; }, function () { return false; });
+                  }
+                };
               }
-              var directory = null;
-              try { directory = models.directoryFor(sessionId); } catch (error) { directory = null; }
-              if (!directory) return { available: false };
-              var available = true;
-              try {
-                if (sessions && typeof sessions.subagentAddress === "function") {
-                  available = sessions.subagentAddress(sessionId) === undefined;
-                }
-              } catch (error) { /* maradjon elérhető */ }
-              return {
-                available: available,
-                directory: directory.store,
-                load: function () {
-                  if (available) directory.load().catch(function () { });
-                },
-                select: function (selection) {
-                  if (!available) return Promise.resolve(false);
-                  return directory.select(selection).then(function () { return true; }, function () { return false; });
-                }
-              };
-            }
-          }, ModelSeat);
+            }, ModelSeat);
+          });
         });
       });
 

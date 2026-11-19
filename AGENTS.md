@@ -528,6 +528,28 @@ Kötelező:
   `alibaba-compat/qwen3.7-flash`) — ezeket nem töröltem, csak a futás jelzi
   őket; szigorítás egy paranccsal: a két bejegyzés törlése az
   `allowedModels`-ból. **MÉRVE:** audit → „NINCS hiba”, 8 tétel, 2 figyelmeztetés.
+  **(14) A modellválasztó ELTŰNT a compose-ból — a szolgáltatás rossz elérési
+  útja (2026-11-19, kilencedik kérés; felhasználói jelzés: „nem elég a panel
+  újratöltés, nincs modellkiválasztó”).** **MÉRT OK:** a (9) pont fészkében
+  `ctx.get("modelDirectories")` állt — ilyen accessor NINCS a kliens-Cordison
+  (a szolgáltatások property-ként vagy `ctx.inject([...])`-tel érhetők el), ezért
+  az `inject` `{available:false}`-t adott, a fészek `null`-t renderelt, és mert
+  a priority −100-as bejegyzés ÁRNYÉKOLTA a gyárit, **a modellválasztó teljesen
+  eltűnt**. **Javítás:** a gyári minta szerinti `ctx.inject(["slots",
+  "modelDirectories"], scope => …)` (a callback csak akkor fut, ha MINDKÉT
+  szolgáltatás él — így hiba esetén a gyári fészek marad), PLUSZ a fészek
+  **hibatűrő burokba** került (`ModelSeat` → `ModelSeatInner` + külön
+  `SeatFallback` komponens, hogy a hook-sorszám ne ütközzön): kivétel esetén a
+  jelenlegi modell NEVE látszik, letiltott gombbal, a hiba pedig a host
+  naplójába megy (`reportToHost("model seat", …)`) — a compose nem törhet el
+  csendben. **MÉRVE:** `plugins/dsh-ui-extras/test/model-seat.test.mjs` **8/8**
+  (új eset: „hiba esetén LÁTSZÓ tartalék marad”), a teljes ui-extras készlet
+  **29/29** zöld, `node --check` OK. **Érvénybe lépés:** kliens-oldali változás →
+  panel-újratöltés; ha a fészek így sem jön vissza, a következő lépés a tálca
+  „Kilépés” → ikon (a felhasználó kattintása, §1.5). **TANULSÁG:** slotot
+  árnyékolni csak akkor szabad, ha a saját komponens MINDEN ágon renderel
+  valamit — a „néma null” egy árnyékolt slotnál azt jelenti, hogy a funkció
+  eltűnik.
 
 - `2026-11-18` (első kör) — **a DSH-leállítás utáni indítás: a munkamenetek
   visszaállítása (a „Az ismeretlenbe” hiba), a halott tokennel induló ablak,
