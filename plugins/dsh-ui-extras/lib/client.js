@@ -9326,6 +9326,439 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
      * Register the extended row below the composer card, the corner controls,
      * hide the built-in pills, and publish the dictionaries.
      */
+    // ═══════════════════════════════════════════════════════════════════════
+    // MODELLFÉSZEK (composer): SZOLGÁLTATÓ → MODELL — KÉTSZINTŰ választás
+    //
+    // MIÉRT: a gyári választó (dsh-client-ui-model-selection,
+    // `conversation.input.model`) egyetlen görgethető listába ömleszti MINDEN
+    // szolgáltató modelljeit — a csoportcímek csak elválasztók. A felhasználó
+    // 2026-11-19-én kérte: előbb SZOLGÁLTATÓT válasszon, és azon belül modellt.
+    //
+    // HOGYAN: a fészek a `conversation.input.model` slot EGYETLEN bejegyzése, a
+    // slot-propsot a gyári plugin `inject`-je adja:
+    //   { available, directory (store: getSnapshot/subscribe), load, select, t }
+    // A gyári bejegyzés priority 0; a slot a LEGALACSONYABB prioritást
+    // rendereli, ezért a miénk -100 — így árnyékolunk (lásd ui-extras „hide core
+    // job chip” minta: azonos id + azonos priority = dob, más priority = csere).
+    //
+    // VISELKEDÉS: gyökér = „Modell: <jelenlegi> ›” (+ „Gondolkodás ›”, ha van
+    // effort); „Modell” → szolgáltató-lista (név + darabszám) → az adott
+    // szolgáltató modelljei (pipával) → kiválasztás ugyanazzal a `select`-tel,
+    // amit a gyári fészek használ. Hiba/adathiány esetén a fészek LÁTHATÓ marad
+    // (soha nem tűnik el csendben), a menü pedig magyarázó sort ír ki.
+    // ═══════════════════════════════════════════════════════════════════════
+    var seatH = react.createElement;
+
+    var SEAT = {
+      root: { minWidth: 0, position: "relative" },
+      trigger: {
+        minWidth: 0,
+        maxWidth: "min(360px, 45cqw)",
+        height: 28,
+        color: "var(--dsw-alias-label-secondary)",
+        cursor: "pointer",
+        background: "transparent",
+        border: "none",
+        borderRadius: 24,
+        outline: "none",
+        display: "flex",
+        alignItems: "center",
+        gap: 4,
+        padding: "0 4px 0 8px",
+        fontSize: 13,
+        fontWeight: 500,
+        lineHeight: "20px",
+      },
+      label: { textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, overflow: "hidden" },
+      effort: { color: "var(--dsw-alias-label-tertiary)", fontSize: 12, whiteSpace: "nowrap", flex: "0 0 auto" },
+      chevron: { color: "var(--dsw-alias-label-tertiary)", flex: "0 0 auto", paddingRight: 4, fontSize: 11 },
+      menu: {
+        zIndex: 1100,
+        background: "var(--dsw-specific-menu)",
+        width: "min(340px, calc(100vw - 24px))",
+        maxHeight: "min(360px, calc(100vh - 96px))",
+        boxShadow: "var(--dsw-elevation-prominent)",
+        color: "var(--dsw-alias-label-primary)",
+        border: 0,
+        borderRadius: 20,
+        display: "flex",
+        flexDirection: "column",
+        padding: 4,
+        position: "fixed",
+        overflow: "hidden",
+      },
+      scroll: { overflowY: "auto", display: "flex", flexDirection: "column", minHeight: 0 },
+      groupTitle: { color: "var(--dsw-alias-label-tertiary)", fontSize: 12, lineHeight: "18px", padding: "8px 10px 4px" },
+      cell: {
+        width: "100%",
+        minHeight: 40,
+        color: "var(--dsw-alias-label-primary)",
+        cursor: "pointer",
+        textAlign: "left",
+        background: "transparent",
+        border: "none",
+        borderRadius: 10,
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "0 10px",
+        fontSize: 14,
+        lineHeight: "22px",
+        boxSizing: "border-box",
+      },
+      back: { color: "var(--dsw-alias-label-tertiary)", fontSize: 13 },
+      cellLabel: { whiteSpace: "nowrap", flex: "0 0 auto" },
+      cellValue: {
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        textAlign: "right",
+        minWidth: 0,
+        color: "var(--dsw-alias-label-tertiary)",
+        flex: "1 1 auto",
+        overflow: "hidden",
+      },
+      check: { color: "var(--dsw-alias-label-primary)", flex: "0 0 18px", textAlign: "center", fontSize: 13 },
+      empty: { color: "var(--dsw-alias-label-tertiary)", padding: 10, fontSize: 13, lineHeight: "20px" },
+    };
+
+    /** A store pillanatképéből normalizált csoportok (szolgáltató → modellek). */
+    function seatGroups(state) {
+      var groups = (state && state.groups) || [];
+      var out = [];
+      for (var i = 0; i < groups.length; i += 1) {
+        var group = groups[i] || {};
+        var models = group.models || [];
+        var list = [];
+        for (var j = 0; j < models.length; j += 1) {
+          var model = models[j] || {};
+          if (!model.id) continue;
+          list.push({ id: String(model.id), name: String(model.name || model.id), reasoning: model.reasoning });
+        }
+        if (list.length === 0) continue;
+        out.push({ id: String(group.id || ""), name: String(group.name || group.id || "?"), models: list });
+      }
+      return out;
+    }
+
+    /** A jelenleg kiválasztott modell (csoport + modell), ha a listában van. */
+    function seatCurrent(groups, current) {
+      if (!current || !current.provider || !current.model) return undefined;
+      for (var i = 0; i < groups.length; i += 1) {
+        var group = groups[i];
+        if (group.id !== current.provider) continue;
+        for (var j = 0; j < group.models.length; j += 1) {
+          if (group.models[j].id === current.model) return { group: group, model: group.models[j] };
+        }
+      }
+      return undefined;
+    }
+
+    /** Egy kattintható menüsor (az inline stílusok miatt nincs CSS-osztály). */
+    function seatRow(key, style, onClick, children, extra) {
+      var props = { key: key, type: "button", onClick: onClick, style: style };
+      if (extra) {
+        for (var name in extra) {
+          if (Object.prototype.hasOwnProperty.call(extra, name)) props[name] = extra[name];
+        }
+      }
+      return seatH.apply(null, ["button", props].concat(children));
+    }
+
+    /**
+     * A menü sorai pane-enként — TISZTA függvény, ezért böngésző nélkül
+     * tesztelhető. A sorok: link (tovább egy pane-re), back, choice (kiválaszt),
+     * title/note (magyarázat).
+     * @param pane - "root" | "providers" | "provider:<id>" | "effort".
+     * @param view - { groups, current, reasoning, effort, effortLabel, modelLabel }.
+     */
+    function seatPaneRows(pane, view) {
+      var rows = [];
+      var groups = view.groups || [];
+      var current = view.current;
+      if (pane === "root") {
+        rows.push({ key: "row-model", kind: "link", label: "Modell", value: view.modelLabel, target: "providers" });
+        if (view.reasoning) {
+          rows.push({
+            key: "row-effort",
+            kind: "link",
+            label: "Gondolkodás",
+            value: view.effortLabel === undefined ? "szolgáltató szerint" : view.effortLabel,
+            target: "effort",
+          });
+        }
+        rows.push({ key: "hint", kind: "note", text: "Előbb szolgáltató, utána modell." });
+        return rows;
+      }
+      if (pane === "providers") {
+        rows.push({ key: "back", kind: "back", label: "‹ Vissza", target: "root" });
+        if (groups.length === 0) {
+          rows.push({ key: "empty", kind: "note", text: "Nincs betöltött szolgáltató — hálózati hiba vagy hiányzó kulcs." });
+        }
+        for (var i = 0; i < groups.length; i += 1) {
+          var group = groups[i];
+          var here = current && current.provider === group.id;
+          rows.push({
+            key: "group:" + group.id,
+            kind: "link",
+            label: group.name + (here ? " •" : ""),
+            value: group.models.length + " modell",
+            target: "provider:" + group.id,
+          });
+        }
+        return rows;
+      }
+      if (pane.indexOf("provider:") === 0) {
+        var wanted = pane.slice("provider:".length);
+        var active = null;
+        for (var j = 0; j < groups.length; j += 1) {
+          if (groups[j].id === wanted) active = groups[j];
+        }
+        rows.push({ key: "back", kind: "back", label: "‹ Szolgáltatók", target: "providers" });
+        rows.push({ key: "title", kind: "title", text: active ? active.name : wanted });
+        if (active) {
+          for (var m = 0; m < active.models.length; m += 1) {
+            var model = active.models[m];
+            var selected = current && current.provider === active.id && current.model === model.id;
+            rows.push({
+              key: "model:" + model.id,
+              kind: "choice",
+              label: model.name,
+              selected: selected === true,
+              selection: { provider: active.id, model: model.id },
+            });
+          }
+        }
+        return rows;
+      }
+      if (pane === "effort") {
+        var efforts = (view.reasoning && view.reasoning.efforts) || [];
+        rows.push({ key: "back", kind: "back", label: "‹ Vissza", target: "root" });
+        if (view.reasoning && view.reasoning.defaultEffort === undefined) {
+          rows.push({
+            key: "effort:default",
+            kind: "choice",
+            label: "szolgáltató szerint",
+            selected: view.effort === undefined,
+            selection: { provider: current && current.provider, model: current && current.model },
+          });
+        }
+        for (var e = 0; e < efforts.length; e += 1) {
+          var level = efforts[e];
+          rows.push({
+            key: "effort:" + level.id,
+            kind: "choice",
+            label: level.name,
+            selected: view.effort === level.id,
+            selection: {
+              provider: current && current.provider,
+              model: current && current.model,
+              reasoningEffort: level.id,
+            },
+          });
+        }
+        return rows;
+      }
+      return rows;
+    }
+
+    /**
+     * A composer modellfészke: szolgáltató-választó, majd azon belül modell.
+     * @param props - a gyári slot-szerződés: available/directory/load/select/t.
+     */
+    function ModelSeat(props) {
+      var directory = props.directory;
+      var available = props.available !== false;
+      var load = typeof props.load === "function" ? props.load : function () {};
+      var select = typeof props.select === "function" ? props.select : function () { return Promise.resolve(false); };
+
+      var versionState = react.useState(0);
+      var setVersion = versionState[1];
+      var openState = react.useState(false);
+      var open = openState[0];
+      var setOpen = openState[1];
+      var paneState = react.useState("root");
+      var pane = paneState[0];
+      var setPane = paneState[1];
+      var posState = react.useState(null);
+      var pos = posState[0];
+      var setPos = posState[1];
+      var triggerRef = react.useRef(null);
+      var menuRef = react.useRef(null);
+      var noticeState = react.useState("");
+      var notice = noticeState[0];
+      var setNotice = noticeState[1];
+
+      react.useEffect(function () {
+        if (!directory || typeof directory.subscribe !== "function") return undefined;
+        var stop = directory.subscribe(function () {
+          setVersion(function (value) { return value + 1; });
+        });
+        return function () {
+          if (typeof stop === "function") stop();
+        };
+      }, [directory]);
+
+      var snapshot = directory && typeof directory.getSnapshot === "function" ? directory.getSnapshot() : undefined;
+      var groups = seatGroups(snapshot);
+      var current = snapshot && snapshot.current;
+      var hit = seatCurrent(groups, current);
+      var modelLabel = hit ? hit.model.name : current && current.model ? String(current.model) : "Modell választása";
+      var reasoning = hit ? hit.model.reasoning : undefined;
+      var effort = current && current.reasoningEffort;
+      var effortLabel;
+      if (reasoning && effort !== undefined) {
+        var effortsAll = reasoning.efforts || [];
+        for (var eli = 0; eli < effortsAll.length; eli += 1) {
+          if (effortsAll[eli].id === effort) { effortLabel = effortsAll[eli].name; break; }
+        }
+        if (effortLabel === undefined) effortLabel = effort;
+      }
+
+      react.useEffect(function () {
+        if (!open) return undefined;
+        function outside(event) {
+          var target = event && event.target;
+          var trigger = triggerRef.current;
+          if (trigger && typeof trigger.contains === "function" && trigger.contains(target)) return;
+          if (target && typeof target.closest === "function" && target.closest("[data-dsh-model-seat]")) return;
+          setOpen(false);
+          setPane("root");
+        }
+        function keydown(event) {
+          if (event && (event.key === "Escape" || event.keyCode === 27)) {
+            setOpen(false);
+            setPane("root");
+          }
+        }
+        document.addEventListener("mousedown", outside);
+        document.addEventListener("keydown", keydown);
+        return function () {
+          document.removeEventListener("mousedown", outside);
+          document.removeEventListener("keydown", keydown);
+        };
+      }, [open]);
+
+      react.useEffect(function () {
+        if (!open) { setPos(null); return undefined; }
+        function place() {
+          var trigger = triggerRef.current;
+          if (!trigger || typeof trigger.getBoundingClientRect !== "function") return;
+          var rect = trigger.getBoundingClientRect();
+          var width = 340;
+          var height = menuRef.current && menuRef.current.offsetHeight ? menuRef.current.offsetHeight : 320;
+          var margin = 12;
+          var viewportW = (typeof window !== "undefined" && window.innerWidth) || 1280;
+          var viewportH = (typeof window !== "undefined" && window.innerHeight) || 800;
+          var left = Math.max(margin, Math.min(rect.right - width, viewportW - width - margin));
+          var top = Math.max(margin, Math.min(rect.top - 8 - height, viewportH - height - margin));
+          setPos({ left: left, top: top });
+        }
+        place();
+        if (typeof window !== "undefined" && window.addEventListener) window.addEventListener("resize", place);
+        return function () {
+          if (typeof window !== "undefined" && window.removeEventListener) window.removeEventListener("resize", place);
+        };
+      }, [open, pane, snapshot]);
+
+      if (!available) return null;
+
+      function close() {
+        setOpen(false);
+        setPane("root");
+      }
+
+      function choose(selection) {
+        var result = select(selection);
+        if (result && typeof result.then === "function") {
+          result.then(function (ok) {
+            if (ok === false) setNotice("A váltás nem sikerült — a szolgáltató katalógusa nem töltődött be.");
+            else { setNotice(""); close(); }
+          });
+        } else {
+          close();
+        }
+      }
+
+      function openMenu() {
+        setPane("root");
+        setNotice("");
+        setOpen(true);
+        load();
+      }
+
+      var trigger = seatH("div", { style: SEAT.root },
+        seatH("button", {
+          ref: triggerRef,
+          type: "button",
+          style: SEAT.trigger,
+          title: modelLabel,
+          "aria-haspopup": "menu",
+          "aria-expanded": open,
+          disabled: props.locked === true,
+          onClick: function () { if (open) close(); else openMenu(); },
+        },
+          seatH("span", { key: "lbl", style: SEAT.label }, modelLabel),
+          effortLabel !== undefined ? seatH("span", { key: "eff", style: SEAT.effort }, effortLabel) : null,
+          seatH("span", { key: "chev", style: SEAT.chevron }, open ? "▴" : "▾")));
+
+      if (!open) return trigger;
+
+      // A pane-ek SORAI tisztán számolhatók (seatPaneRows), így a
+      // „előbb szolgáltató, utána modell” viselkedés böngésző nélkül tesztelhető.
+      var rows = seatPaneRows(pane, {
+        groups: groups,
+        current: current,
+        reasoning: reasoning,
+        effort: effort,
+        effortLabel: effortLabel,
+        modelLabel: modelLabel,
+      });
+      var body = [];
+      for (var ri = 0; ri < rows.length; ri += 1) {
+        (function (row) {
+          if (row.kind === "note" || row.kind === "title") {
+            body.push(seatH("div", { key: row.key, style: row.kind === "title" ? SEAT.groupTitle : SEAT.empty }, row.text));
+            return;
+          }
+          if (row.kind === "back") {
+            body.push(seatRow(row.key, SEAT.cell, function () { setPane(row.target); }, [
+              seatH("span", { key: "b", style: SEAT.back }, row.label),
+            ], { role: "menuitem" }));
+            return;
+          }
+          if (row.kind === "link") {
+            body.push(seatRow(row.key, SEAT.cell, function () { setPane(row.target); }, [
+              seatH("span", { key: "n", style: SEAT.cellLabel }, row.label),
+              seatH("span", { key: "v", style: SEAT.cellValue }, row.value),
+              seatH("span", { key: "c", style: SEAT.cellChevron }, "›"),
+            ], { role: "menuitem" }));
+            return;
+          }
+          // kind === "choice": modell vagy effort szint, pipával
+          body.push(seatRow(row.key, SEAT.cell, function () { choose(row.selection); }, [
+            seatH("span", { key: "n", style: SEAT.label, title: row.label }, row.label),
+            seatH("span", { key: "c", style: SEAT.check }, row.selected ? "✓" : ""),
+          ], { role: "menuitemradio", "aria-checked": row.selected === true, title: row.label }));
+        })(rows[ri]);
+      }
+
+      if (notice) body.push(seatH("div", { key: "notice", style: SEAT.empty }, notice));
+
+      var menu = seatH("div", {
+        key: "menu",
+        ref: menuRef,
+        "data-dsh-model-seat": "menu",
+        role: "menu",
+        style: Object.assign({}, SEAT.menu, pos ? { left: pos.left + "px", top: pos.top + "px" } : { visibility: "hidden", left: 0, top: 0 }),
+      }, seatH("div", { key: "scroll", style: SEAT.scroll }, body));
+
+      var portal = reactDom && typeof reactDom.createPortal === "function"
+        ? reactDom.createPortal(menu, document.body)
+        : menu;
+
+      return seatH("div", { style: SEAT.root }, trigger, portal);
+    }
+
     function apply(ctx) {
       // The terminal paints its own paper (see TERM_PALETTES) and asks the theme
       // service which scheme to paint; the module-level ref is how a component
@@ -9599,6 +10032,51 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
             priority: -100,
             locale: NS
           }, function HiddenLineage() { return null; });
+        });
+      });
+
+      // ─────────── a composer modellfészke: SZOLGÁLTATÓ → MODELL (kétszintű)
+      //
+      // A gyári bejegyzés (priority 0) helyett a miénk renderel, mert a slot a
+      // legalacsonyabb prioritású bejegyzést rajzolja. Az adatokat (elérhető-e,
+      // directory-store, load, select) a gyári plugin `inject`-je adja — azt
+      // itt MI adjuk tovább, ugyanazzal a szerződéssel, hogy a `select` a közös
+      // ModelDirectory-n menjen (a /model popuppal közös állapot).
+      safeRun("model seat: provider first", function () {
+        ctx.slots.inject("conversation.input.model", function () {
+          return ctx.slots.register({
+            name: "conversation.input.model",
+            priority: -100,
+            locale: NS,
+            inject: function (sessionId) {
+              var models = null;
+              try { models = ctx.get("modelDirectories"); } catch (error) { models = null; }
+              var sessions = ctx.sessions || null;
+              if (!models || typeof models.directoryFor !== "function") {
+                return { available: false, t: function (key) { return key; } };
+              }
+              var directory = null;
+              try { directory = models.directoryFor(sessionId); } catch (error) { directory = null; }
+              if (!directory) return { available: false };
+              var available = true;
+              try {
+                if (sessions && typeof sessions.subagentAddress === "function") {
+                  available = sessions.subagentAddress(sessionId) === undefined;
+                }
+              } catch (error) { /* maradjon elérhető */ }
+              return {
+                available: available,
+                directory: directory.store,
+                load: function () {
+                  if (available) directory.load().catch(function () { });
+                },
+                select: function (selection) {
+                  if (!available) return Promise.resolve(false);
+                  return directory.select(selection).then(function () { return true; }, function () { return false; });
+                }
+              };
+            }
+          }, ModelSeat);
         });
       });
 
@@ -10546,6 +11024,12 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
     // the footer looks like a wrong balance, so the rule gets a test.
     exports.balanceFigures = balanceFigures;
     exports.formatMoney = formatMoney;
+    // A composer modellfészke (szolgáltató → modell) — a sorokat TISZTA
+    // függvény adja, ezért a viselkedés böngésző nélkül tesztelhető.
+    exports.ModelSeat = ModelSeat;
+    exports.seatGroups = seatGroups;
+    exports.seatCurrent = seatCurrent;
+    exports.seatPaneRows = seatPaneRows;
     return module.exports;
   }
 });

@@ -305,6 +305,230 @@ Kötelező:
 
 ## 4. Változásnapló
 
+- `2026-11-19` (modell-lista rendezés) — **a `~/.dsh/settings.yaml` llm-pi-ai
+  modell-listái élő katalógusból ellenőrizve és rendberakva; az OpenRouter
+  új ingyenes modelljei felvéve; a DeepSeek V4.1 Flash a legújabb flash.**
+  (1) **MÉRT állapot (élő `/models` + kulcsok, 2026-11-19):** OpenRouter **444**
+  modell (16 ingyenes), NVIDIA **32**, Google **50**, Groq **11**, Alibaba EU
+  **49**, DeepSeek hivatalos **2** (`deepseek-flash`, `deepseek-v4-pro`),
+  a helyi proxy **7** route. (2) **TÖRLÉS — nem elérhető / elavult (83 db):**
+  a `nvidia` listából a végponton már nem szolgált `meta/llama-3.2-90b-vision-instruct`,
+  valamint a 3 téves duplikátum (a `nvidia/riva-translate-4b-instruct-v2`
+  háromszor, más-más Llama/Mistral névvel, és a `nvidia/nemotron-3-ultra-550b-a55b`
+  kétszer); az `alibaba` ÉS `alibaba-compat` listából **39-39** olyan id
+  (qwen3-vl-flash/32b/235b, qwen3-max*, qwen3-coder-*, qwen3-next-*, qwen3-8b/32b,
+  qwen-plus-2025-*, qwen-mt-turbo, `llm-3.7-drillrun-5-deepseek-v4.1-flash`,
+  `llm-3.6-drillrun-4-kimi-k3`, `deepseek-v4-flash`), amit az Alibaba EU
+  végpontja már nem listáz. (3) **OPENROUTER újragenerálva az élő katalógusból
+  (`node tools/model-list-tidy.mjs`):** a korábbi lista 3 bejegyzése tévesen a
+  `cohere/north-mini-code:free` id-re mutatott (Poolside Laguna S/XS, Thinking
+  Machines Inkling), egyszer pedig a `:free` utótag hiányzott
+  (`thinkingmachines/inkling-small`) — ezek helyett a **tényleges ingyenes**
+  készlet él: 13 ingyenes chat-modell + `openrouter/free` router. **ÚJ:** 
+  `inclusionai/ling-3.2-flash:free`, `baidu/ernie-5.5-flash-preview:free`,
+  `nvidia/nemotron-3.5-super-vl:free` (a proxy vision-láncának első tagja, eddig
+  hiányzott a listáról!), `particle-ai/particle-1:free`,
+  `recursive/flint-v1.0:free`; a név/kontextus/kimeneti keret a katalógusból jön,
+  a multimodálisaknál `input: [text, image]`. A **428 fizetős** modell
+  szándékosan NINCS a listán (a delegálási lánc ingyenes célokra épül), a 2
+  `google/lyria-*` kép/hang generáló, ezért kimaradt. **FIGYELEM (mért):** a
+  `thinkingmachines/inkling-2-small` a nap folyamán FIZETŐSSÉ vált (0,3 $/M be) —
+  ezért nem került be; az ingyenes készlet a napon belül is változik, a
+  listát ezért csak mérés után szabad alkalmazni. (4) **Javított hivatkozás:**
+  a `subagent-model-selection.allowedModels` egy `subagent-worker/vision-worker`
+  célra hivatkozott, ami a listából hiányzott (a proxy viszont szolgálja) —
+  most felvéve, így a kép-delegálás nem metaadat nélküli (text-only) úton megy.
+  (5) **DeepSeek V4.1 Flash = a legújabb flash (bizonyíték):** a hivatalos
+  `/models` a `deepseek-flash` id-t **„DeepSeek-V4.1-Flash”** néven adja
+  (1 048 576 kontextus, 393 216 max kimenet, text+image, `in-history` system
+  prompt); a gateway szerint a támogatott nevek: `deepseek-flash`,
+  `deepseek-v4-pro`; a `deepseek-v4.2-flash` és `deepseek-v5-flash` próba
+  **400**-at ad („supported API model names are deepseek-flash, deepseek-v4-pro”).
+  A `deepseek-v4-flash` és `deepseek-v4-flash-vision-exp` **alias** (200, a válasz
+  `model=deepseek-flash`), tehát nem halott. Az OpenRouteren a legfrissebb
+  DeepSeek a `deepseek/deepseek-v4.1-flash` (2026-09-10) és a
+  `deepseek-v4.1-flash-1017` snapshot (2026-10-17); **V4.2 nem létezik**, és az
+  NVIDIA már nem szolgál `deepseek-ai/*` modellt (a korábbi „DeepSeek V4.1
+  Flash” nevű nvidia-bejegyzés valójában `minimaxai/minimax-m3.1-flash` volt —
+  átnevezve). (6) **Eszközök:** új `tools/model-list-tidy.mjs` (dry-run
+  tervezet → `--apply` írás időbélyeges mentéssel) és `tools/model-inventory.mjs`
+  (élő katalógus-pillanatkép a `state/model-catalog/` alá); a
+  `providers/check-providers.mjs` listaelemzése javítva (a kommentsorok eddig
+  megszakították a `models:` blokkot, ezért a felvett modellek egy részét nem is
+  látta). A `providers/settings.llm-pi-ai.yaml` sablon OpenRouter/NVIDIA blokkja
+  az új, ellenőrzött listát tartalmazza. **ELLENŐRZÉS:** `node
+  providers/check-providers.mjs` → **8 provider, 0 hibás modell-id**, a
+  settings.yaml YAML-je érvényes, a top-level kulcsok és a provider-mezők
+  változatlanok. **Érvénybe lépés:** a settings.yaml a pi-ai adapterben
+  újraregisztráláskor él (nincs harness-restart), a fájl mentése után a
+  modellválasztó a friss listát mutatja.
+  **(7) Eszkalációs engedély (2026-11-19, második kérés): „nem tud openrouterre
+  eszkalálni”.** MÉRT OK (a másik repó session-naplója, `session-cdd5140f`,
+  14:00:36): `Error: child LLM route "openrouter/claude-haiku-5.5" is not
+  allowed for this Session` — nem a modell-lista hibája: az eszkalációt a
+  `subagent-model-selection.allowedModels` ENGEDÉLYLISTA dönti el, abban pedig
+  csak egy OpenRouter-route volt (`nvidia/nemotron-3.5-lightning:free`). Ráadásul
+  a kért id `anthropic/` előtag nélkül szerepelt, és így még a katalógusban sem
+  létezik. Ugyanebben a sessionben korábban `Error: LLM provider "deepseek" is not
+  allowed for this Session` (13:06) — a helyes providernév `deepseek-official`.
+  **Javítás:** `tools/model-list-add.mjs` (új eszköz, élő katalógusból vesz fel
+  modellt) felvette az `openrouter` providerek közé az `anthropic/claude-haiku-5.5`
+  tételt (1M kontextus, 128k kimenet, text+image, FIZETŐS: $0,10/M be, $0,50/M ki,
+  cache-read $0,01/M) ÉS a `allowedModels` listába. MÉRVE: élő OpenRouter-hívás
+  `HTTP 200` („OK”, 648 ms), `check-providers.mjs` → openrouter **15/15**,
+  YAML érvényes, mentés: `settings.yaml.bak-2026-11-19T13-12-02-modell-felvetel`.
+  **FONTOS (mért viselkedés, ne téveszd össze „hibával”):** az engedélylista
+  **munkamenet-indításkor** rögzül a session naplójába
+  (`subagent/model-selection-policy`, a `selectForSession` egyszer írja, a
+  gyerek-session a szülő listáját örökli), ezért **a MÁR FUTÓ beszélgetések nem
+  látják az új tételt** — saját magamon is ellenőrizve: a settings szerkesztése
+  után ugyanaz a session továbbra is `not allowed`-t ad. Ezért az eszkaláláshoz
+  **ÚJ beszélgetést kell indítani** abban a repóban; a modellválasztó listája
+  viszont élőben frissül. Az ingyenes alternatíva továbbra is
+  `openrouter/nvidia/nemotron-3.5-lightning:free` (mért 200).
+  **(8) A models beállítás oldal HIBÁI (2026-11-19, harmadik kérés): a route
+  `api:` mező hiányzott — ez blokkolta a mentést és a választót.** A GUI két
+  hibaüzenetet mutatott: `provider "nvidia" lists model
+  "nvidia/riva-translate-4b-instruct-v2" more than once` (ez a RÉGI, még
+  betöltött dokumentumé volt — a 13:03-as rendezés már dedupálta) és
+  `provider "openrouter" model "liquid/lfm-3-1.7b:free" needs an api…`, illetve
+  az „Add model" ablakban `model "anthropic/claude-haiku-5.5" needs an api`.
+  **MÉRT OK (a `dsh-llm-pi-ai` `resolveRouteModels` szerint):** a modell
+  drótprotokollja `route.api → katalógusbeli api → a route KÖZÖS api-ja`; az
+  OpenRouter katalógusa viszont **két** protokollt használ
+  (openai-completions 351 + anthropic-messages 15), ezért nincs „közös" api, és
+  minden katalóguson kívüli modell (a haiku, a baidu/ernie, a ling-3.2, a
+  particle, a flint, a nemotron-3.5-super-vl, és már korábban a liquid is)
+  elutasításra került → **a settings-dokumentum soha nem lett elfogadva**, ezért
+  a választó a régi listát mutatta („Inkling Small (free)") és a mentés
+  elbukott. **Javítás:** `api: openai-completions` az `openrouter` route-on (az
+  `/api/v1/chat/completions` OpenAI-kompatibilis, a Claude is ezen megy);
+  ugyanez a sablonba is bekerült. **ÚJ ESZKÖZ:** `tools/check-model-config.mjs`
+  — a pi-ai szabályait (duplikált id, api-feloldás, baseURL, kontextus/keret)
+  HELYBEN reprodukálja a valódi katalógussal, tehát a settings szerkesztése
+  előtt/után azonnal látszik, mit fog a GUI elutasítani. **MÉRVE:** a
+  checker „Minden route érvényes"; `check-providers.mjs` → 8 provider, 0 hibás
+  id (openrouter 15/15); a route az api-váltás után is válaszol (subagent
+  `openrouter/nvidia/nemotron-3.5-lightning:free` → „OK"). **Érvénybe lépés:** a
+  settings-dokumentum most már elfogadható, ezért a `settings/document-updated`
+  eseményre a kliens katalógus frissül (a `ModelDirectoryResolver` figyeli), és
+  a választó a 15 OpenRouter-modellt mutatja; a haiku eszkalálásához továbbra is
+  **új beszélgetés** kell ((7) pont: a allowlist munkamenet-indításkor rögzül).
+  **(9) Kétszintű modellválasztó (2026-11-19, negyedik kérés): szolgáltató →
+  modell.** A felhasználó képernyőképe szerint a gyári választó egyetlen
+  görgethető listába ömlesztette MINDEN szolgáltató modelljeit (a csoportcímek
+  csak elválasztók) — „így nem lehet eligazodni”. **Megvalósítás
+  (`plugins/dsh-ui-extras/lib/client.js`):** a composer fészke a
+  `conversation.input.model` slot EGYETLEN bejegyzése, ezért a gyári
+  (priority 0) bejegyzést egy **priority −100**-as saját bejegyzéssel
+  árnyékoljuk (ugyanaz a minta, mint a „hide core job chip”-nél: azonos
+  priority = dob, más priority = csere, a legalacsonyabb renderel). A
+  slot-szerződést (`available/directory/load/select/t`) VÁLTOZATLANUL a gyári
+  `inject` adja, ezért a kiválasztás ugyanazon a közös `ModelDirectory`-n megy,
+  mint a `/model` popupé. A menü: gyökér = „Modell: <jelenlegi> ›” +
+  „Gondolkodás ›” (ha van effort) → **szolgáltató-lista** (név + „N modell” +
+  ›) → **az adott szolgáltató modelljei** (pipával) → kiválasztás. A sorokat a
+  **`seatPaneRows(pane, view)` TISZTA függvény** állítja elő, ezért böngésző
+  nélkül tesztelhető; a stílusok inline-ok a téma-tokenekkel
+  (`--dsw-specific-menu`, `--dsw-elevation-prominent`, `--dsw-alias-*`), így
+  nincs CSS-modul függés. Hiba esetén a fészek LÁTHATÓ marad (magyarázó sor a
+  menüben), alügynök-sessionben pedig nem renderel (mint a gyári).
+  **MÉRVE:** `node plugins/dsh-ui-extras/test/model-seat.test.mjs` **7/7**
+  (köztük: a gyökérben NINCS modell-sor, a szolgáltató-választó csak
+  szolgáltatókat sorol darabszámmal, a `provider:openrouter` pane-en CSAK annak
+  a szolgáltatónak a modelljei látszanak — a másiké nem szivárog be —, a
+  kiválasztás a helyes `{provider, model}` objektumot adja), a meglévő ui-extras
+  tesztek **21/21** zöldek, `node --check` OK. **Érvénybe lépés:** kliens-oldali
+  változás → **panel-újratöltés** (a kiszolgált bundle a fájlt élőben olvassa);
+  visszavonás egy lépés: a `safeRun("model seat: provider first", ...)` blokk
+  törlése (vagy `git checkout plugins/dsh-ui-extras/lib/client.js`) +
+  panel-újratöltés — a gyári fészek ilyenkor azonnal visszatér.
+  **(10) „Nem működik a Claude Sonnet” — 404 a hiányzó `/v1` miatt, és a GUI
+  által behúzott 102 halott modell (2026-11-19, ötödik kérés).** A kérés
+  `404: {"message":"Not Found","code":404}` + `PI_AI_ERROR` hibával esett el.
+  **MÉRT OK:** a route `api: openai-completions` beállítása után a
+  **katalógusbeli** modellek a saját baseUrl-jüket használták
+  (`https://openrouter.ai/api`, `/v1` NÉLKÜL), és az openai-completions út csak
+  `/chat/completions`-t fűz hozzá → `https://openrouter.ai/api/chat/completions`
+  = **404**; ugyanaz `/api/v1/chat/completions`-en **200** (közvetlen mérés,
+  `anthropic/claude-sonnet-5`). **Javítás:** `baseURL:
+  https://openrouter.ai/api/v1` a route-on (a fájlban kommentben az indoklás).
+  Emellett kiderült, hogy a GUI „Add model / Fetch” útja a **beépített pi-ai
+  katalógusból** dolgozik, ami elavult: a settings.yaml-ba **373** OpenRouter-
+  bejegyzés került, ebből **102 nem létezik** a valódi OpenRouteren
+  (claude-3-haiku, gpt-3.5-turbo, `:batch` változatok, kivezetett modellek,
+  `openrouter/auto`). **ÚJ ESZKÖZ:** `tools/model-list-prune.mjs` (száraz próba
+  → `--apply`, élő `/models` ellen; a bejegyzést a fölötte álló kommenttel
+  együtt törli, időbélyeges mentéssel). **MÉRVE utána:** `check-providers.mjs`
+  → **8 provider, 0 hibás id** (openrouter **271/271**), `check-model-config.mjs`
+  → „Minden route érvényes”. **TANULSÁG:** a GUI-ból felvett modelllistát MINDIG
+  futtasd át a prune + check-model-config + check-providers hármason — a
+  beépített katalógus nem az élő kínálat.
+  **(11) Teljes modell-lista audit — a maradék hibák is javítva (2026-11-19,
+  hatodik kérés: „minden hibát javítottál?”).** A zöld checkerek után is volt
+  **28 valódi metaadat-hiba**: a bejegyzések több kimenetet/kontextust kértek,
+  mint amit az élő OpenRouter enged (pl. `google/gemma-3-27b-it`: 117 964 kért,
+  élő plafon **16 384**; `openai/gpt-oss-120b`: 117 964 → 65 536;
+  `minimax/minimax-m2.7`: 204 800 → 196 608) — ez a kérésnél **400**-at ad.
+  **Javítás:** `tools/model-meta-sync.mjs` (a bejegyzést a MÉRT plafonra
+  szorítja, soha nem emeli; `--apply` + időbélyeges mentés) → **28 mező**
+  szinkronizálva (`settings.yaml.bak-2026-11-19T13-32-30-metaadat`). **ÚJ
+  AUDIT-ESZKÖZ:** `tools/check-model-list.mjs` — providerek, `allowedModels` /
+  `agent-default-model` hivatkozások (a `deepseek-official` BEÉPÍTETT route a
+  profil-patchből, ezért NEM hiba, hogy nincs a `llm-pi-ai` blokkban),
+  duplikátumok, hiányzó kulcsok, és a metaadat az élő katalógus ellen.
+  **A NÉGYES ELLENŐRZŐ-SOR (mind zöld, MÉRVE):** `check-model-list.mjs` →
+  „NINCS hiba”; `check-model-config.mjs` → „Minden route érvényes”;
+  `providers/check-providers.mjs` → 8 provider, **0 hibás id** (openrouter
+  **271/271**); `model-list-prune.mjs` (száraz) → **0 törlendő**;
+  `model-meta-sync.mjs` (száraz) → **0 szorítandó**. A settings:
+  **62 407 B / 1 759 sor**, 10 top-level kulcs változatlan; `openrouter`: 271
+  modell + `api: openai-completions` + `baseURL …/api/v1`. **Amit a checkerek
+  NEM fednek (tudatosan):** a szolgáltató oldali viselkedés (rate limit,
+  tier-korlát) és az árazás — azt csak élő hívás méri.
+  **(12) „Ami nem használható, azt töröld” (2026-11-19, hetedik kérés) — ÉLŐ
+  HASZNÁLHATÓSÁGI SZKANNEL, nem szemre.** A statikus ellenőrzők (létezik az id,
+  van api/baseURL, nem lóg túl a keret) NEM mondják meg, hogy a modell
+  tényleg válaszol-e a `chat/completions` végponton. **ÚJ ESZKÖZ:**
+  `tools/model-usability-scan.mjs` — 1 próbahívás modellenként (16 max token,
+  6 párhuzamos, 20 s-os újrapróbálkozás 429/5xx-re), és CSAK bizonyított hibát
+  töröl: batch-only (`:batch`), kivezetett (`Invalid model`, „reached the end of
+  its life”), audio-kötelező („requires that either input content or output
+  modality contain audio”), régió-tiltott („not available in your region”).
+  429/5xx esetén **bizonytalan → NEM töröl** (átmeneti rate limit lehet).
+  **MÉRVE (237 modell, 243 → 237):** 234 OK, **6 törölve** —
+  `amazon/nova-premier-v1` (EOL), `mistralai/mistral-medium-3` és `-3.1`
+  (upstream `Invalid model`), `openai/gpt-audio` + `gpt-audio-mini`
+  (audio-kötelező), `sakana/fugu-ultra` (régió-tiltás); mentés:
+  `settings.yaml.bak-2026-11-19T13-39-50-nem-hasznalhato`. **3 bizonytalant
+  SZÁNDÉKOSAN megtartottam** (`google/gemma-4-31b-it:free`,
+  `inclusionai/ling-3.2-flash:free`, `particle-ai/particle-1:free` — 429
+  upstream rate limit, a delegálási lánc tagjai!). **A teljes záró ellenőrzés
+  MIND zöld:** `check-model-list` „NINCS hiba” (237 modell, 0 metaadat-eltérés),
+  `check-model-config` „Minden route érvényes”, `check-providers` **8 provider /
+  0 hibás id** (openrouter **237/237**), `model-list-prune` száraz → 0,
+  `model-meta-sync` száraz → 0. **Tanulság:** a `:batch` és az audio-modellek
+  ÉLŐ id-k, a statikus checkerek átengedik őket — csak a próbahívás buktatja le
+  őket; a használhatóság-szkennel ezért a lista rendezésének KÖTELEZŐ utolsó
+  lépése.
+  **(13) SZABÁLY: fizetős modell NEM kerülhet a delegálási listára (2026-11-19,
+  nyolcadik kérés — a felhasználó szó szerint: „semmilyen fizetős modell nem
+  kerülhet delegálási listára, ilyet soha nem kértem!!! csak eszkalálásra
+  mehetnek fizetős modellek külön utasításra”).** A (7) pontban ÉN vettem fel az
+  `openrouter/anthropic/claude-haiku-5.5`-öt ($0,10/M be, $0,50/M ki) a
+  `subagent-model-selection.allowedModels`-be — ez SZABÁLYSÉRTÉS volt, ezért
+  **TÖRÖLVE** (a lista 9 → 8 tétel; a haiku a modell-listán megmarad, tehát
+  beszélgetés-modellként választható). **Beépített őr:** a
+  `tools/check-model-list.mjs` mostantól minden `allowedModels` tételre kiszámolja
+  a fizetőséget (OpenRouter = élő árazás; `deepseek-official`/`alibaba*` =
+  számlázott; proxy route-ok + Groq = ingyenes lánc) és **figyelmeztetésként
+  KIÍRJA** — így új fizetős cél nem csúszhat be észrevétlenül. **A listán maradt
+  két fizetős tétel a felhasználó KORÁBBI, a fájlban dokumentált döntése**
+  (`deepseek-official/deepseek-v4-pro` a tömör brief-eszkalációhoz ~$0,02;
+  `alibaba-compat/qwen3.7-flash`) — ezeket nem töröltem, csak a futás jelzi
+  őket; szigorítás egy paranccsal: a két bejegyzés törlése az
+  `allowedModels`-ból. **MÉRVE:** audit → „NINCS hiba”, 8 tétel, 2 figyelmeztetés.
+
 - `2026-11-18` (első kör) — **a DSH-leállítás utáni indítás: a munkamenetek
   visszaállítása (a „Az ismeretlenbe” hiba), a halott tokennel induló ablak,
   és a költségelszámolás token-sorának eltűnése.** (1) **MÉRT OK a

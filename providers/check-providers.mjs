@@ -65,6 +65,8 @@ function readProviders(text) {
     if ((m = raw.match(/^\s+api:\s*(\S+)/))) { cur.api = m[1]; continue; }
     if (/^\s+models:\s*$/.test(raw)) { inModels = true; continue; }
     if (inModels && (m = raw.match(/^\s+-\s+id:\s*(\S+)/))) { cur.models.push(m[1]); continue; }
+    if (inModels && /^\s*#/.test(raw)) continue;                   // komment a listában
+    if (inModels && /^\s*$/.test(raw)) continue;                   // üres sor a listában
     if (inModels && /^\s{6}[a-zA-Z]+:/.test(raw)) continue;       // modell mezői
     if (inModels && !/^\s{8}/.test(raw)) inModels = false;
   }
