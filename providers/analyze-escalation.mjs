@@ -13,6 +13,11 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createZstdDecompress } from "node:zlib";
 import { homedir } from "node:os";
 import { join } from "node:path";
+// A szorzók EGY helyen élnek (plugin ártáblája): BRUTTÓ ár = listaár × szorzó.
+// DeepSeek: 27% magyar áfa + 6% DSH-pótdíj = ×1,3462.
+import { GROSS_RATES } from "../plugins/dsh-ui-extras/lib/index.js";
+
+const GROSS = GROSS_RATES.dsh;
 
 const DAYS = Number(process.argv[2] ?? 30);
 const ROOT = join(homedir(), ".dsh", "sessions");
@@ -30,7 +35,7 @@ function cost(usage, p, t) {
   const peak = isPeak(t);
   return ((usage.inputTokens || 0) * (peak ? p.missPeak : p.missOff)
     + (usage.cacheReadTokens || 0) * (peak ? p.hitPeak : p.hitOff)
-    + (usage.outputTokens || 0) * (peak ? p.outPeak : p.outOff)) / 1e6;
+    + (usage.outputTokens || 0) * (peak ? p.outPeak : p.outOff)) / 1e6 * GROSS;
 }
 async function frame(b) {
   return new Promise((res) => {
@@ -112,6 +117,7 @@ const avgCtx = med(sessions.flatMap((s) => s.ctxSamples.length ? [s.ctxSamples[s
 const usd = (n) => "$" + n.toFixed(4);
 
 console.log(`=== FO SESSIONOK (utolso ${DAYS} nap) ===`);
+console.log(`  (minden osszeg BRUTTO ar: DSH ×${GROSS} — 27% afa + 6% DSH-potdij)`);
 console.log(`  sessionok: ${sessions.length} | lepes: ${totalSteps.toLocaleString("hu-HU")} | koltseg: ${usd(totalCost)}`);
 console.log(`  atlagos koltseg/session: ${usd(totalCost / Math.max(1, sessions.length))} | lepes/session: ${(totalSteps / Math.max(1, sessions.length)).toFixed(1)}`);
 console.log(`  tipikus (median) session-vegi kontextus: ${avgCtx.toLocaleString("hu-HU")} token`);
@@ -131,12 +137,12 @@ for (const s of [...sessions].sort((a, b) => b.costUsd - a.costUsd).slice(0, 8))
 
 // ── Az eszkalacio ara ─────────────────────────────────────────────────────
 const estCtx = avgCtx || 300000;
-const flashStepHit = (estCtx * FLASH.hitOff) / 1e6;
-const flashStepPeak = (estCtx * FLASH.hitPeak) / 1e6;
-const proEntryMiss = (estCtx * PRO.missOff) / 1e6;      // modellvaltas -> cache-vesztes
-const proStepHit = (estCtx * PRO.hitOff) / 1e6;
-const proStepPeak = (estCtx * PRO.hitPeak) / 1e6;
-const briefCost = (30000 * PRO.missOff) / 1e6;          // 30K tokenes tomor brief, friss context
+const flashStepHit = (estCtx * FLASH.hitOff) / 1e6 * GROSS;
+const flashStepPeak = (estCtx * FLASH.hitPeak) / 1e6 * GROSS;
+const proEntryMiss = (estCtx * PRO.missOff) / 1e6 * GROSS;      // modellvaltas -> cache-vesztes
+const proStepHit = (estCtx * PRO.hitOff) / 1e6 * GROSS;
+const proStepPeak = (estCtx * PRO.hitPeak) / 1e6 * GROSS;
+const briefCost = (30000 * PRO.missOff) / 1e6 * GROSS;          // 30K tokenes tomor brief, friss context
 
 console.log(`\n=== ESZKALACIO ARA (${estCtx.toLocaleString("hu-HU")} tokenes kontextuson) ===`);
 console.log(`  flash lepes (cache-talalat, volgy):  ${usd(flashStepHit)}   csucson: ${usd(flashStepPeak)}`);

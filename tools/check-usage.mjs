@@ -16,7 +16,7 @@
  *      session header, so a wrong reader answers "no usage at all" instead of
  *      failing loudly. This script runs the real scan over the real logs.
  */
-import { holidaysCovered, isFreeModel, isPeakInstant, modelPrices, requestCost, scanUsage, sessionsRoot } from '../plugins/dsh-ui-extras/lib/index.js';
+import { GROSS_RATES, holidaysCovered, isFreeModel, isPeakInstant, modelPrices, requestCost, requestCostNet, scanUsage, sessionsRoot, VAT_PERCENT, DSH_SURCHARGE_PERCENT, grossMultiplier } from '../plugins/dsh-ui-extras/lib/index.js';
 
 let failures = 0;
 const fail = (msg) => { failures++; console.error('  FAIL ' + msg); };
@@ -52,22 +52,61 @@ if (holidaysCovered().includes('2026')) ok('the holiday table covers 2026');
 else fail('the holiday table does not cover 2026');
 
 /* --- 2) the rates --------------------------------------------------------- */
+// A `requestCostNet` a szolgáltató NETTÓ listaára (a számlával egyeztethető),
+// a `requestCost` a FIZETENDŐ (bruttó) ár. A kettő aránya a család szorzója.
 const peak = utc(2026, 9, 23, 2);
 const offPeak = utc(2026, 9, 23, 12);
 const million = { inputTokens: 1000000, cacheReadTokens: 1000000, outputTokens: 1000000 };
-const flashPeak = requestCost(million, 'deepseek-flash', peak);
-const flashOff = requestCost(million, 'deepseek-flash', offPeak);
-if (Math.abs(flashPeak - 1.506) < 1e-6) ok('1M of each Flash token at peak costs $1.506 (0.30 + 0.006 + 1.20)');
-else fail(`Flash peak cost is $${flashPeak}, expected $1.506`);
+const flashPeak = requestCostNet(million, 'deepseek-flash', peak);
+const flashOff = requestCostNet(million, 'deepseek-flash', offPeak);
+if (Math.abs(flashPeak - 1.506) < 1e-6) ok('1M of each Flash token at peak costs $1.506 net (0.30 + 0.006 + 1.20)');
+else fail(`Flash peak net cost is $${flashPeak}, expected $1.506`);
 if (Math.abs(flashOff * 2 - flashPeak) < 1e-6) ok('off-peak is exactly half the peak rate');
 else fail(`off-peak $${flashOff} is not half of $${flashPeak}`);
-const proPeak = requestCost(million, 'deepseek-v4-pro', peak);
-if (Math.abs(proPeak - 5.324) < 1e-6) ok('1M of each Pro token at peak costs $5.324 (1.32 + 0.044 + 3.96)');
-else fail(`Pro peak cost is $${proPeak}, expected $5.324`);
-if (Math.abs(requestCost(million, 'deepseek-v4-flash-vision-exp', peak) - flashPeak) < 1e-6) ok('the retired Flash names are billed at the Flash rate');
+const proPeak = requestCostNet(million, 'deepseek-v4-pro', peak);
+if (Math.abs(proPeak - 5.324) < 1e-6) ok('1M of each Pro token at peak costs $5.324 net (1.32 + 0.044 + 3.96)');
+else fail(`Pro peak net cost is $${proPeak}, expected $5.324`);
+if (Math.abs(requestCostNet(million, 'deepseek-v4-flash-vision-exp', peak) - flashPeak) < 1e-6) ok('the retired Flash names are billed at the Flash rate');
 else fail('a retired Flash name is not billed at the Flash rate');
 if (modelPrices('something-unknown').key === 'deepseek-flash') ok('an unknown model falls back to the Flash price row');
 else fail('an unknown model did not fall back');
+
+/* --- 2a) the GROSS rates (2026-11-20) ------------------------------------- */
+// A panel, a lábléc és a delegálási megtakarítás a FIZETENDŐ árat mutatja:
+// 27% magyar áfa, a DeepSeeknél még 6% DSH-pótdíj (1,27 × 1,06 = 1,3462).
+if (VAT_PERCENT === 27) ok('the Hungarian VAT is 27%');
+else fail(`the VAT is ${VAT_PERCENT}%, expected 27`);
+if (DSH_SURCHARGE_PERCENT === 6) ok('the DeepSeek surcharge is 6%');
+else fail(`the DSH surcharge is ${DSH_SURCHARGE_PERCENT}%, expected 6`);
+if (Math.abs(1.27 * 1.06 - 1.3462) < 1e-9) ok('1.27 × 1.06 = 1.3462 exactly (the DSH gross multiplier)');
+else fail('1.27 × 1.06 is not 1.3462');
+if (GROSS_RATES.dsh === 1.3462) ok(`the DeepSeek gross multiplier is ${GROSS_RATES.dsh}`);
+else fail(`the DeepSeek gross multiplier is ${GROSS_RATES.dsh}, expected 1.3462`);
+if (GROSS_RATES.alibaba === 1.27 && GROSS_RATES.openrouter === 1.27) ok('Alibaba and OpenRouter are ×1.27 (VAT only)');
+else fail(`Alibaba/OpenRouter multipliers are ${GROSS_RATES.alibaba}/${GROSS_RATES.openrouter}, expected 1.27`);
+if (GROSS_RATES.free === 1) ok('the free chain has no multiplier (zero stays zero)');
+else fail(`the free chain multiplier is ${GROSS_RATES.free}, expected 1`);
+const grossCases = [
+  ['deepseek-official/deepseek-flash', 1.3462, 'the DeepSeek route'],
+  ['deepseek-flash', 1.3462, 'a bare DeepSeek id'],
+  ['alibaba/qwen3.8-flash', 1.27, 'the Alibaba EU route'],
+  ['alibaba-compat/qwen3.7-flash', 1.27, 'the Alibaba compat route'],
+  ['alibaba-intl/qwen3.8-flash', 1.27, 'the Alibaba Singapore route'],
+  ['openrouter/anthropic/claude-haiku-5.5', 1.27, 'a paid OpenRouter model'],
+  ['openrouter/nvidia/nemotron-3.5-lightning:free', 1, 'a free OpenRouter model'],
+  ['worker', 1, 'the free proxy route']
+];
+for (const [model, expected, label] of grossCases) {
+  if (grossMultiplier(model) === expected) ok(`${label} ('${model}') is ×${expected}`);
+  else fail(`${label} ('${model}') is ×${grossMultiplier(model)}, expected ×${expected}`);
+}
+const flashGross = requestCost(million, 'deepseek-flash', peak);
+if (Math.abs(flashGross - flashPeak * 1.3462) < 1e-9) ok(`the gross Flash peak cost is $${flashGross.toFixed(4)} (net × 1.3462)`);
+else fail(`the gross Flash peak cost is $${flashGross}, expected $${flashPeak * 1.3462}`);
+const aliGross = requestCost(million, 'alibaba/qwen3.8-flash', peak);
+const aliNet = requestCostNet(million, 'alibaba/qwen3.8-flash', peak);
+if (Math.abs(aliGross - aliNet * 1.27) < 1e-9) ok(`the Alibaba cost gets the 27% VAT (net $${aliNet.toFixed(4)} -> gross $${aliGross.toFixed(4)})`);
+else fail(`the Alibaba gross $${aliGross} is not $${aliNet} × 1.27`);
 
 /* --- 2b) the free / paid line --------------------------------------------- */
 // A delegated child that ran on the zero-priced fallback chain is the ONLY kind
@@ -98,6 +137,19 @@ if (usage && usage.files > 0) {
   else fail('the scan summed no tokens');
   if (usage.totals.costUsd > 0) ok(`cost summed: $${usage.totals.costUsd.toFixed(4)}`);
   else fail('the scan summed no cost');
+  // A kimutatott összeg BRUTTÓ (fizetendő): a nettó a számla-egyeztetéshez marad.
+  if (usage.totals.netCostUsd > 0
+    && usage.totals.costUsd >= usage.totals.netCostUsd * 1.27 - 1e-9
+    && usage.totals.costUsd <= usage.totals.netCostUsd * 1.3462 + 1e-9) {
+    ok(`the displayed cost is GROSS: net $${usage.totals.netCostUsd.toFixed(4)} -> gross $${usage.totals.costUsd.toFixed(4)}`);
+  } else {
+    fail(`the gross cost $${usage.totals.costUsd} is not between 1.27x and 1.3462x of the net $${usage.totals.netCostUsd}`);
+  }
+  if (usage.pricing && usage.pricing.gross && usage.pricing.gross.basis === 'gross') {
+    ok(`the snapshot declares its gross basis (×${usage.pricing.gross.rates.dsh} DSH, ×${usage.pricing.gross.rates.alibaba} Alibaba) — the client must not multiply again`);
+  } else {
+    fail('the snapshot does not declare the gross basis (`pricing.gross`)');
+  }
   if (usage.perDay.length > 0) ok(`per-day buckets: ${usage.perDay.map((day) => day.day).join(', ')}`);
   else fail('no per-day buckets');
   if (usage.perModel.length > 0) ok(`models seen: ${usage.perModel.map((model) => model.model).join(', ')}`);
@@ -129,6 +181,15 @@ if (usage && usage.delegated) {
     else fail('the free-chain saving is not derived from its own pocket');
     if (Math.abs((delegated.savedUsd || 0) - Math.max(0, delegated.baselineUsd - delegated.costUsd)) < 1e-9) ok('the blended saving stays the whole delegated baseline minus its cost');
     else fail('the blended saving is inconsistent with the delegated totals');
+    // A baseline ugyanaz a token a DSH bruttó árán: baselineUsd = nettó × 1,3462.
+    if (delegated.baselineNetUsd > 0
+      && Math.abs(delegated.baselineUsd - delegated.baselineNetUsd * 1.3462) < 1e-6) {
+      ok(`the delegated baseline is GROSS: net $${delegated.baselineNetUsd.toFixed(4)} x 1.3462 = $${delegated.baselineUsd.toFixed(4)}`);
+    } else if (delegated.baselineNetUsd > 0) {
+      fail(`the delegated baseline $${delegated.baselineUsd} is not the gross of $${delegated.baselineNetUsd}`);
+    } else {
+      console.log('  info no delegated usage in the window — the baseline gross check had nothing to measure');
+    }
     if (delegated.lastAt === null || typeof delegated.lastAt === 'number') ok(`the last delegation instant is reported (${delegated.lastAt === null ? 'none' : new Date(delegated.lastAt).toISOString()})`);
     else fail('lastAt is neither null nor a number');
     const modelRequests = (delegated.models ?? []).reduce((sum, entry) => sum + entry.requests, 0);

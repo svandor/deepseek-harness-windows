@@ -348,6 +348,84 @@ tömörítés után is meglegyenek.
 
 ## 4. Változásnapló
 
+- `2026-11-20` (ÁFA a token-költségen: DSH ×1,3462, Ali/OpenRouter ×1,27) —
+  **a felhasználó kérése: „finomítani kell a token költségek számításán mind a
+  költségelszámolás panelben, mind a delegálási számításoknál … a valós
+  számítás szerint a dhs/ali/openr modellek árára minden esetben fel kell
+  számítani 27% áfát, illetve a dsh esetében még 6%-ot is … a láblécen az
+  egyenleg marad a feltüntetett, szinkronizált tartalom, de amikor valós árakat
+  számítunk, akkor a dsh 1,3462 szorzót kap, a másik kettő pedig 1,27
+  szorzót.”** (1) **MÉRT ÁLLAPOT (kiváltó ok):** a lábléc kliens-oldali
+  szorzói `ALIBABA_VAT_RATE = 1.27` és **`DSH_FEE_RATE = 1.06`** voltak — a
+  DeepSeek-oldalon tehát a 6% pótdíj igen, a **27% magyar ÁFA nem** volt benne,
+  az OpenRouter/egyéb pedig **egyáltalán nem** kapott szorzót; a
+  költségelszámolás panel token-sora és a delegálási megtakarítás pedig
+  **nettó listaáron** ment, mert a szorzás csak a lábléc egy szűk
+  megjelenítési ágában élt. (2) **MEGVALÓSÍTÁS — EGY forrás, a host:** a
+  `plugins\dsh-ui-extras\lib\index.js`-ben új bruttó réteg van a
+  KÖLTSÉGSZÁMÍTÁS fölött (`requestCost` / `cacheReadCost`): `VAT_PERCENT = 27`,
+  `DSH_SURCHARGE_PERCENT = 6`, `VAT_MULTIPLIER = 1.27`,
+  `DSH_GROSS_RATE = 1.27 × 1.06 = 1.3462` (MÉRVE: a JS-ben pontosan 1.3462),
+  `GROSS_RATES = { dsh: 1.3462, alibaba: 1.27, openrouter: 1.27, free: 1 }`,
+  valamint `grossFamily()` / `grossMultiplier()`. A `MODEL_PRICES` tábla
+  **NETTÓ marad** (ez a szolgáltató listája, ehhez lehet a számlát egyeztetni),
+  a nettó érték `requestCostNet()`-ként él tovább. Mivel a szorzó a közös
+  költségfüggvényben van, **minden fogyasztó egyszerre** a valós árat kapja: a
+  panel token-sora, a lábléc `$DSH / $Ali / $OpenR` költés-parja, a
+  cache-kedvezmény (alap és megtakarítás), a delegálási `baseline`/`saved`, a
+  `spend.*` és a `byProvider[]`. A besorolás: **ingyenes lánc → ×1** (a 0 ár
+  marad 0), `openrouter*` → ×1,27, `alibaba*`/`qwen*` → ×1,27, minden más
+  (DeepSeek és az ismeretlen, mert az a Flash ár-sorral számol) → ×1,3462.
+  (3) **A VÁLASZ KIMONDJA (kétszeres szorzás ellen):** a snapshot új
+  `pricing.gross` blokkja (`basis: "gross"`, `vatPercent`, `dshSurchargePercent`,
+  `rates`, `note`) és a `netCostUsd` mezők (totals, session, delegated,
+  `spend.*NetUsd`, `byProvider[].netCostUsd`, SG-keret arányosan) — a kliens
+  csak akkor szoroz, ha a host **régi** (nincs `basis`), különben a kapott
+  számot használja. (4) **KLIENS (`plugins\dsh-ui-extras\lib\client.js`):** a
+  beégetett `DSH_FEE_RATE` helyett a szorzók a `pricing.gross`-ból jönnek
+  (`grossOf()` / `grossRateOfFamily()`), a tooltip új `usageGrossLine` sora
+  mondja ki, hogy minden itteni összeg bruttó, az egyenlegen viszont **nincs**
+  szorzó; a HU/EN szövegek (usageTaxNote, usageSessionCost, usageWindowCost,
+  usageActiveDays, usageSavings*, spendPair*) „bruttó/gross” jelölést kaptak.
+  Az **Alibaba-számla API-ja továbbra is nettó**, ezért a számla bruttója a
+  `pretaxAmount × 1.27` marad (ez nem kettős szorzás: az API-ból jövő összeg).
+  (5) **PANEL (`plugins\dsh-koltseg\lib\client.js`):** a token-sor felirata
+  „bruttó, áfával”, alatta a bontás (nettó listaár + 27% áfa, DSH-nál +6%) a
+  host `pricing.gross`-ából; ha a host még régi, a sor „nettó listaár — a host
+  még a régi build” feliratot kap (nem hazudik bruttót nettó számra).
+  (6) **DELEGÁLÁSI SZÁMÍTÁSOK:** `providers\check-delegation-route.mjs` a közös
+  `requestCost`-tal már bruttó (a fejléc ki is mondja);
+  `providers\analyze-orchestration.mjs`, `analyze-escalation.mjs`,
+  `analyze-model-choice.mjs` és `autotune.mjs` a `GROSS_RATES`-et importálja a
+  pluginból (egy forrás), az `autotune` a **számla-egyeztetést szándékosan
+  nettó** hagyja (`withVat = false`), a `check-vs-bill.mjs` szintén nettó, és
+  ezt ki is mondja. (7) **MÉRVE (valódi naplók, 30 nap):** `check-usage.mjs`
+  → **minden ellenőrzés zöld**, a kimutatott összeg bruttó:
+  **nettó $138.20 → bruttó $186.03**; a delegált baseline
+  **nettó $29.10 × 1.3462 = $39.18 bruttó**; a szorzó-teszt szerint
+  `deepseek-official/deepseek-flash` ×1,3462, `alibaba`/`alibaba-compat`/
+  `alibaba-intl` ×1,27, `openrouter/<fizetős>` ×1,27,
+  `openrouter/<:free>` ×1, `worker` ×1, ismeretlen ×1,3462; 1M Flash-token
+  csúcsáron nettó $1,506 → bruttó $2,0274. (8) **TESZTEK:** ui-extras
+  usage **8/8** (két új: „a kimutatott költség BRUTTÓ”, „a delegálási baseline
+  is BRUTTÓ”), a többi ui-extras teszt 4+2+1+8+8 zöld, koltseg engine **37**,
+  client **13** (HU/EN kulcs-paritás!), host **12**, `check-price-table`
+  **19/19**. A `check-plugin.mjs` minden tartalmi ellenőrzése zöld (a
+  szótár-paritás, a naptár- és a csúcsidő-egyezés is) — a folyamatfa-ölés
+  próbája a sandboxban nem fut (EPERM spawn, és §1 miatt nem is eszkaláljuk).
+  (9) **ÉRVÉNYBE LÉPÉS:** a **kliens-oldali** rész (lábléc-szövegek, panel
+  felirata) **panel-újratöltéssel** él; a **host-oldali** rész (a szorzó
+  maga, a `pricing.gross`) a **következő harness-indításnál** (§1.5 — a futó
+  session miatt nem indítjuk újra). Amíg a host régi, a kliens a saját
+  tartalék szorzóival számol (1,3462 / 1,27), tehát a lábléc már most bruttó.
+  (10) **FÁJLOK:** `plugins\dsh-ui-extras\lib\index.js`,
+  `plugins\dsh-ui-extras\lib\client.js`,
+  `plugins\dsh-koltseg\lib\client.js`, `tools\check-usage.mjs`,
+  `plugins\dsh-ui-extras\test\usage.test.mjs`,
+  `providers\check-delegation-route.mjs`, `providers\analyze-orchestration.mjs`,
+  `providers\analyze-escalation.mjs`, `providers\analyze-model-choice.mjs`,
+  `providers\autotune.mjs`, `providers\check-vs-bill.mjs`,
+  `docs\KOLTSEG-ELSZAMOLAS.md`, `docs\KOLTSEG-ELSZAMOLAS.en.md`.
 - `2026-11-20` (boot utáni kicsi/fehér ablak) — **a felhasználó boot után azt
   látta, hogy „az ablak teljes képernyőn jelent meg, de csak a képernyő egy kis
   részét foglalta el", majd a 2-es ablakra váltva „tiszta fehér lett az egész",

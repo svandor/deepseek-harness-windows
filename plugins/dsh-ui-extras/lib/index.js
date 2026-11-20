@@ -3827,6 +3827,66 @@ function modelPrices(model) {
   return { key: "deepseek-flash", ...MODEL_PRICES["deepseek-flash"] };
 }
 
+// ── ÁFA + DSH-pótdíj: a VALÓS, fizetendő ár (2026-11-20, felhasználói döntés) ─
+/**
+ * A kimutatott USD összeg a FIZETENDŐ (bruttó) ár, nem a szolgáltató listaára.
+ *
+ * MIÉRT: a magyar ÁFÁ-t is fizetjük, a DeepSeek-számlán pedig a listaárra még
+ * 6% DSH-pótdíj is rákerül. A listaárat kimondó szám ezért minden felületen
+ * ALÁMÉRTE a valós költséget (MÉRT különbség: a lábléc DSH-oldala csak ×1,06-ot
+ * számolt, az ÁFA teljesen hiányzott). A szorzók:
+ *
+ *   DeepSeek (dsh):  1,27 × 1,06 = 1,3462  (27% magyar ÁFA + 6% DSH-pótdíj)
+ *   Alibaba (EU/SG): 1,27                  (27% magyar ÁFA)
+ *   OpenRouter:      1,27                  (27% magyar ÁFA)
+ *   ingyenes lánc:   1                     (0 × bármi = 0)
+ *
+ * A `MODEL_PRICES` tábla NETTÓ marad: az a szolgáltató listája, és ehhez lehet a
+ * számlát egyeztetni (`providers/check-vs-bill.mjs`). A bruttó szorzó a
+ * KÖLTSÉGSZÁMÍTÁS fölött él (`requestCost` / `cacheReadCost`), ezért minden
+ * fogyasztó — a költségelszámolás panel token-sora, a lábléc költség-parja, a
+ * delegálási megtakarítás és a cache-kedvezmény is — automatikusan a valós árat
+ * kapja. A NETTÓ érték ott marad, ahol kell (`requestCostNet`,
+ * `totals.netCostUsd`): ez a szám egyeztethető a szolgáltató számlájával.
+ *
+ * Az EGYENLEG (a számla oldali, szinkronizált összeg a láblécen) NEM kap
+ * szorzót — az a befizetett/elérhető összeg, nem számított ár.
+ */
+const VAT_PERCENT = 27;
+const DSH_SURCHARGE_PERCENT = 6;
+const VAT_MULTIPLIER = 1 + VAT_PERCENT / 100;
+/** 1,27 × 1,06 = 1,3462 (négy tizedesre kerekítve, hogy a felület ezt mondja). */
+const DSH_GROSS_RATE = Number((VAT_MULTIPLIER * (1 + DSH_SURCHARGE_PERCENT / 100)).toFixed(4));
+
+/** A bruttó szorzók családonként — a felület ezt a táblát írja ki. */
+const GROSS_RATES = Object.freeze({
+  dsh: DSH_GROSS_RATE,
+  alibaba: VAT_MULTIPLIER,
+  openrouter: VAT_MULTIPLIER,
+  free: 1
+});
+
+/**
+ * Melyik áfacsaládba esik a modell (a bruttó szorzóhoz).
+ *
+ * A sorrend számít: az INGYENES lánc előbb dől el (a 0 árhoz nincs mit
+ * felszámítani), utána az OpenRouter, utána az Alibaba, és minden más — a
+ * DeepSeek mellett az ismeretlen modell is, mert az a Flash ár-sorral
+ * számolódik — a DSH szorzót kapja.
+ */
+function grossFamily(model) {
+  const lower = String(model ?? "").toLowerCase();
+  if (isFreeModel(model)) return "free";
+  if (lower.indexOf("openrouter") !== -1) return "openrouter";
+  if (lower.indexOf("alibaba") !== -1 || lower.indexOf("qwen") !== -1) return "alibaba";
+  return "dsh";
+}
+
+/** A modell bruttó (áfás, DSH-nál pótdíjas) szorzója. */
+function grossMultiplier(model) {
+  return GROSS_RATES[grossFamily(model)];
+}
+
 // ── Szingapúr: ingyenes keret + provider-bontás (2026-10-14) ───────────────
 /**
  * Az Alibaba Model Studio SZINGAPÚRI workspace új fiókhoz 1 000 000
@@ -3907,13 +3967,16 @@ function messageModel(data) {
 }
 
 /**
- * Cost of one request in USD.
+ * Cost of one request at the PROVIDER LIST PRICE, in USD (net of Hungarian VAT).
+ *
+ * Use this only where the figure is compared with the provider's own invoice;
+ * everywhere else the answer is {@link requestCost} (the payable, gross amount).
  * @param usage - the durable usage object (`inputTokens` is the cache MISS part,
  *   `cacheReadTokens` the cache hit part).
  * @param model - the model that served the request.
  * @param time - the request instant (peak and off-peak rates differ twofold).
  */
-function requestCost(usage, model, time) {
+function requestCostNet(usage, model, time) {
   const price = modelPrices(model);
   const peak = isPeakInstant(time);
   const miss = usage.inputTokens || 0;
@@ -3922,6 +3985,18 @@ function requestCost(usage, model, time) {
   return (miss * (peak ? price.missPeak : price.missOff)
     + hit * (peak ? price.hitPeak : price.hitOff)
     + out * (peak ? price.outPeak : price.outOff)) / 1000000;
+}
+
+/**
+ * Cost of one request in USD, GROSS — the amount actually paid.
+ *
+ * This is the default on purpose: every figure the panel, the footer and the
+ * delegation accounting shows is money leaving the account, so it carries the
+ * 27% Hungarian VAT (and the extra 6% on the DeepSeek bill). See
+ * {@link GROSS_RATES} for the exact multipliers and the reason.
+ */
+function requestCost(usage, model, time) {
+  return requestCostNet(usage, model, time) * grossMultiplier(model);
 }
 
 /**
@@ -3934,14 +4009,18 @@ function requestCost(usage, model, time) {
  * SEHOL nem látszott, mennyi volt a cache-elt bemenet és mennyit hozott a
  * kedvezmény — így a szám ellenőrizhetetlennek tűnt. Ezért a válasz kiadja a
  * két összeget, a felület pedig kimondja a százalékot.
+ * A két összeg BRUTTÓ (a `cacheReadCost` a valós, fizetendő áron számol, lásd
+ * {@link GROSS_RATES}) — így a panel megtakarítása ugyanabban a pénzben van,
+ * mint a token-sor.
  */
 function cacheReadCost(usage, model, time) {
   const price = modelPrices(model);
   const peak = isPeakInstant(time);
   const hit = usage.cacheReadTokens || 0;
+  const rate = grossMultiplier(model);
   return {
-    cost: (hit * (peak ? price.hitPeak : price.hitOff)) / 1000000,
-    baseline: (hit * (peak ? price.missPeak : price.missOff)) / 1000000
+    cost: (hit * (peak ? price.hitPeak : price.hitOff)) / 1000000 * rate,
+    baseline: (hit * (peak ? price.missPeak : price.missOff)) / 1000000 * rate
   };
 }
 
@@ -4118,10 +4197,12 @@ async function scanUsage(days, sessionId, workspace) {
   const files = sessionLogFiles(root);
   const perDay = new Map();
   const perModel = new Map();
-  const totals = { requests: 0, miss: 0, hit: 0, out: 0, reasoning: 0, total: 0, costUsd: 0 };
+  // A `costUsd` mindenhol a FIZETENDŐ (bruttó) összeg, a `netCostUsd` a
+  // szolgáltató nettó listaára (számla-egyeztetéshez) — lásd GROSS_RATES.
+  const totals = { requests: 0, miss: 0, hit: 0, out: 0, reasoning: 0, total: 0, costUsd: 0, netCostUsd: 0 };
   const wanted = typeof sessionId === "string" && sessionId.length > 0 ? sessionId : null;
   const wantedWorkspace = typeof workspace === "string" && workspace.length > 0 ? workspace : "";
-  const session = { id: wanted, requests: 0, miss: 0, hit: 0, out: 0, total: 0, costUsd: 0 };
+  const session = { id: wanted, requests: 0, miss: 0, hit: 0, out: 0, total: 0, costUsd: 0, netCostUsd: 0 };
   // Delegalt (subagent) munkat kulon merjuk: a megtakaritas-szamlashoz kell,
   // hogy mennyi ment at az ingyenes fallback-lancra a fizetos route helyett.
   // A "nem deepseek" szamitas a delegalt tokeneket a fizetos baseline aron
@@ -4133,7 +4214,7 @@ async function scanUsage(days, sessionId, workspace) {
   // koltsege, tehat nulla megtakaritas — a korabbi összevont szam ezt a ket
   // esetet mosta egybe, ezert tunt ugy, hogy "nincs ingyenes delegalas".
   const delegated = {
-    requests: 0, miss: 0, hit: 0, out: 0, total: 0, costUsd: 0, baselineUsd: 0, sessions: 0,
+    requests: 0, miss: 0, hit: 0, out: 0, total: 0, costUsd: 0, netCostUsd: 0, baselineUsd: 0, baselineNetUsd: 0, sessions: 0,
     /** A legutolso delegalt keres ideje (epoch ms), 0 ha nincs ilyen. */
     lastAt: 0,
     free: { requests: 0, miss: 0, hit: 0, out: 0, total: 0, costUsd: 0, baselineUsd: 0, sessions: 0 },
@@ -4145,11 +4226,11 @@ async function scanUsage(days, sessionId, workspace) {
   // A labléc "$DSH / $Alibaba" ertekéhez es a statisztika csalad-szintu
   // bontasahoz. A `free` az ingyenes fallback-lanc (0 aron szamolt) munkaja.
   const byProvider = {
-    deepseek: { family: "deepseek", label: "DeepSeek (közvetlen)", requests: 0, tokens: 0, costUsd: 0, freeUsd: 0 },
-    alibabaEu: { family: "alibabaEu", label: "Alibaba EU (Frankfurt)", requests: 0, tokens: 0, costUsd: 0, freeUsd: 0 },
-    alibabaSg: { family: "alibabaSg", label: "Alibaba Szingapúr", requests: 0, tokens: 0, costUsd: 0, freeUsd: 0 },
-    free: { family: "free", label: "Ingyenes lánc", requests: 0, tokens: 0, costUsd: 0, freeUsd: 0 },
-    other: { family: "other", label: "Egyéb", requests: 0, tokens: 0, costUsd: 0, freeUsd: 0 }
+    deepseek: { family: "deepseek", label: "DeepSeek (közvetlen)", requests: 0, tokens: 0, costUsd: 0, netCostUsd: 0, freeUsd: 0 },
+    alibabaEu: { family: "alibabaEu", label: "Alibaba EU (Frankfurt)", requests: 0, tokens: 0, costUsd: 0, netCostUsd: 0, freeUsd: 0 },
+    alibabaSg: { family: "alibabaSg", label: "Alibaba Szingapúr", requests: 0, tokens: 0, costUsd: 0, netCostUsd: 0, freeUsd: 0 },
+    free: { family: "free", label: "Ingyenes lánc", requests: 0, tokens: 0, costUsd: 0, netCostUsd: 0, freeUsd: 0 },
+    other: { family: "other", label: "Egyéb", requests: 0, tokens: 0, costUsd: 0, netCostUsd: 0, freeUsd: 0 }
   };
   /** SG keret-elszamolashoz: modellenkent es (nap, modell) bontasban. */
   const sgModels = new Map();
@@ -4222,7 +4303,9 @@ async function scanUsage(days, sessionId, workspace) {
       if (typeof event.time !== "number" || event.time < since) continue;
       const usage = data.usage;
       const model = messageModel(data);
+      // Bruttó = a fizetendő ár; nettó = a szolgáltató listája (számla-egyeztetés).
       const cost = requestCost(usage, model, event.time);
+      const costNet = requestCostNet(usage, model, event.time);
       const cacheCost = cacheReadCost(usage, model, event.time);
       cacheEffect.hitTokens += usage.cacheReadTokens || 0;
       cacheEffect.hitCostUsd += cacheCost.cost;
@@ -4236,6 +4319,7 @@ async function scanUsage(days, sessionId, workspace) {
       totals.reasoning += usage.reasoningTokens || 0;
       totals.total += tokens;
       totals.costUsd += cost;
+      totals.netCostUsd += costNet;
 
       // Provider-csalad szerinti gyujtes (a labléc es a statisztika ehhez nyul).
       const family = providerFamily(model);
@@ -4243,10 +4327,12 @@ async function scanUsage(days, sessionId, workspace) {
       providerBucket.requests += 1;
       providerBucket.tokens += tokens;
       providerBucket.costUsd += cost;
+      providerBucket.netCostUsd += costNet;
       if (family === "alibabaSg") {
-        const sg = sgModels.get(model) ?? { model, tokens: 0, costUsd: 0, requests: 0 };
+        const sg = sgModels.get(model) ?? { model, tokens: 0, costUsd: 0, netCostUsd: 0, requests: 0 };
         sg.tokens += tokens;
         sg.costUsd += cost;
+        sg.netCostUsd += costNet;
         sg.requests += 1;
         sgModels.set(model, sg);
         const sgDay = budapestDay(event.time);
@@ -4259,8 +4345,11 @@ async function scanUsage(days, sessionId, workspace) {
       }
 
       if (delegatedFile) {
-        // A baseline: ugyanezek a tokenek a fizetos DeepSeek-flash aron.
+        // A baseline: ugyanezek a tokenek a fizetos DeepSeek-flash aron, BRUTTÓ
+        // aron (a DSH-t szorzó: 27% áfa + 6% pótdíj) — így a megtakarítás
+        // ugyanabban a pénzben van, mint a token-sor.
         const baseline = requestCost(usage, "deepseek-flash", event.time);
+        const baselineNet = requestCostNet(usage, "deepseek-flash", event.time);
         const free = isFreeModel(model);
         const pocket = free ? delegated.free : delegated.paid;
         delegated.requests += 1;
@@ -4269,7 +4358,9 @@ async function scanUsage(days, sessionId, workspace) {
         delegated.out += usage.outputTokens || 0;
         delegated.total += tokens;
         delegated.costUsd += cost;
+        delegated.netCostUsd += costNet;
         delegated.baselineUsd += baseline;
+        delegated.baselineNetUsd += baselineNet;
         pocket.requests += 1;
         pocket.miss += usage.inputTokens || 0;
         pocket.hit += usage.cacheReadTokens || 0;
@@ -4312,6 +4403,7 @@ async function scanUsage(days, sessionId, workspace) {
         session.out += usage.outputTokens || 0;
         session.total += tokens;
         session.costUsd += cost;
+        session.netCostUsd += costNet;
       }
     }
 
@@ -4329,6 +4421,8 @@ async function scanUsage(days, sessionId, workspace) {
   const sgQuotaModels = [];
   let sgFreeUsd = 0;
   let sgPaidUsd = 0;
+  let sgFreeNetUsd = 0;
+  let sgPaidNetUsd = 0;
   for (const [sgModel, sg] of sgModels) {
     const freeTokens = Math.min(sg.tokens, SG_FREE_TOKENS_PER_MODEL);
     const ratio = sg.tokens > 0 ? freeTokens / sg.tokens : 0;
@@ -4336,6 +4430,10 @@ async function scanUsage(days, sessionId, workspace) {
     const paidUsd = sg.costUsd - freeUsd;
     sgFreeUsd += freeUsd;
     sgPaidUsd += paidUsd;
+    // A nettó oldalon ugyanaz az arány (a keret tokenben értendő, az ár
+    // lineáris a tokenekben), ezért a levonás arányos.
+    sgFreeNetUsd += sg.netCostUsd * ratio;
+    sgPaidNetUsd += sg.netCostUsd - sg.netCostUsd * ratio;
     sgQuotaModels.push({
       model: sgModel,
       requests: sg.requests,
@@ -4358,7 +4456,9 @@ async function scanUsage(days, sessionId, workspace) {
     }
   }
   totals.costUsd = Math.max(0, totals.costUsd - sgFreeUsd);
+  totals.netCostUsd = Math.max(0, totals.netCostUsd - sgFreeNetUsd);
   byProvider.alibabaSg.costUsd = sgPaidUsd;
+  byProvider.alibabaSg.netCostUsd = sgPaidNetUsd;
   byProvider.alibabaSg.freeUsd = sgFreeUsd;
 
   const days0 = [...perDay.values()].sort((a, b) => (a.day < b.day ? -1 : 1));
@@ -4372,8 +4472,8 @@ async function scanUsage(days, sessionId, workspace) {
     totals,
     // A delegalt (subagent) munka es a belole szarmazo megtakaritas.
     // `baselineUsd` = mennyibe kerult volna ugyanez a fizetos DeepSeek-flash
-    // aron; `savedUsd` = baseline - tenyleges. A `share` a delegalt keresek
-    // aranya az osszeshez kepest.
+    // aron, BRUTTÓ aron (27% áfa + 6% DSH-pótdíj); `savedUsd` = baseline -
+    // tenyleges. A `share` a delegalt keresek aranya az osszeshez kepest.
     //
     // A `free` / `paid` zseb es a `models` bontas azert van, hogy a felulet meg
     // tudja mondani, MENNYI ment at az ingyenes lancon: a felhasznalo kerdezese
@@ -4411,7 +4511,14 @@ async function scanUsage(days, sessionId, workspace) {
       alibabaUsd: byProvider.alibabaEu.costUsd + byProvider.alibabaSg.costUsd,
       freeUsd: byProvider.free.costUsd,
       otherUsd: byProvider.other.costUsd,
-      totalUsd: totals.costUsd
+      totalUsd: totals.costUsd,
+      // Ugyanaz NETTÓ listáron (a szolgáltató számlájával egyeztethető).
+      deepseekNetUsd: byProvider.deepseek.netCostUsd,
+      alibabaEuNetUsd: byProvider.alibabaEu.netCostUsd,
+      alibabaSgNetUsd: byProvider.alibabaSg.netCostUsd,
+      alibabaNetUsd: byProvider.alibabaEu.netCostUsd + byProvider.alibabaSg.netCostUsd,
+      otherNetUsd: byProvider.other.netCostUsd,
+      totalNetUsd: totals.netCostUsd
     },
     // A szingapúri ingyenes keret allapota (modellenkent).
     alibabaSg: {
@@ -4444,7 +4551,20 @@ async function scanUsage(days, sessionId, workspace) {
       peakWindowNote: "hétvégén és kínai ünnepnapokon mindig völgyidőszak",
       holidaysCovered: holidaysCovered(),
       alibabaNote: `Szingapúrban az első ${SG_FREE_TOKENS_PER_MODEL / 1000000}M token/modell ingyenes (${SG_FREE_WINDOW_DAYS} napig); a keret a saját naplóinkból becsült, a számla oldali állapotot nem látjuk. A proxy-útvonalon (worker/vision-worker/auto) futó kéréseknél a napló a route nevét rögzíti, ezért az ottani Alibaba-költség közelítés.`,
-      alibabaRows: "alibaba/ = EU Frankfurt, alibaba-intl/ = Szingapúr"
+      alibabaRows: "alibaba/ = EU Frankfurt, alibaba-intl/ = Szingapúr",
+      // ── Bruttó (fizetendő) ár (2026-11-20) ─────────────────────────────
+      // A felület ebből a blokkból tudja, hogy a `costUsd` mezők MÁR bruttók,
+      // és mekkora szorzó él családonként — így nem kell a kliensbe égetett
+      // számot használnia, és nem lehet kétszeres szorzás (`basis`).
+      gross: {
+        basis: "gross",
+        net: "netCostUsd",
+        vatPercent: VAT_PERCENT,
+        dshSurchargePercent: DSH_SURCHARGE_PERCENT,
+        rates: { ...GROSS_RATES },
+        balanceNote: "Az egyenleg (a számla oldali, szinkronizált összeg) NEM kap szorzót; csak a számított költségek bruttók.",
+        note: `Minden kimutatott USD összeg a fizetendő (bruttó) ár: ${VAT_PERCENT}% magyar ÁFA, a DeepSeeknél további ${DSH_SURCHARGE_PERCENT}% DSH-pótdíj (×${DSH_GROSS_RATE}). Az Alibaba és az OpenRouter ×${VAT_MULTIPLIER}. A nettó (számla-egyeztethető) érték a netCostUsd mezőkben van.`
+      }
     }
   };
 }
@@ -4538,7 +4658,7 @@ async function scanOneSession(sessionId, sinceIso) {
   const since = Date.parse(sinceIso);
   const root = sessionsRoot();
   const file = sessionLogFiles(root).find((candidate) => candidate.indexOf(sessionId) !== -1);
-  const session = { id: sessionId, requests: 0, miss: 0, hit: 0, out: 0, total: 0, costUsd: 0 };
+  const session = { id: sessionId, requests: 0, miss: 0, hit: 0, out: 0, total: 0, costUsd: 0, netCostUsd: 0 };
   if (file === undefined) return session;
   let text = "";
   try {
@@ -4565,6 +4685,7 @@ async function scanOneSession(sessionId, sinceIso) {
     session.out += usage.outputTokens || 0;
     session.total += usage.totalTokens || ((usage.inputTokens || 0) + (usage.cacheReadTokens || 0) + (usage.outputTokens || 0));
     session.costUsd += requestCost(usage, model, event.time);
+    session.netCostUsd += requestCostNet(usage, model, event.time);
   }
   return session;
 }
@@ -5667,8 +5788,8 @@ export { approvalPathKey, approvalPathOf, approvalPathWithin, approvalPathScopeO
  * holiday table is exported so `tools/check-plugin.mjs` can prove the client's
  * copy of it has not drifted from this one.
  */
-export { isPeakInstant, modelPrices, requestCost, cacheReadCost, scanUsage, usageSnapshot, sessionsRoot };
-export { isFreeModel };
+export { isPeakInstant, modelPrices, requestCost, requestCostNet, cacheReadCost, scanUsage, usageSnapshot, sessionsRoot };
+export { isFreeModel, grossFamily, grossMultiplier, GROSS_RATES, VAT_PERCENT, DSH_SURCHARGE_PERCENT };
 
 /**
  * Exported for `tools/check-workspace-session.mjs`: the channel route is the one

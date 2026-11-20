@@ -135,6 +135,13 @@ measurement falls back to levels 1 and 3 automatically and says so.
   of the miss price → 98%), and how much it saved — without that the number is
   unverifiable. The hourly rate already covers tokens by default — this line is
   informational only.
+  **The figure is GROSS (what is actually paid)** (2026-11-20, user decision):
+  27% Hungarian VAT on every provider, plus a 6% DSH surcharge on DeepSeek —
+  multipliers **×1.3462** (DSH), **×1.27** (Alibaba, OpenRouter), the free chain
+  stays 0. The breakdown (net list price + VAT) is shown below the line, and the
+  net figure stays available for invoice reconciliation. **The balance is the
+  exception:** the footer shows the provider's synced account figure, without a
+  multiplier.
   **While measuring**, the line reads "Measuring the token cost…" (the cold scan
   is MEASURED at about a minute over 1,300 logs); "unavailable" only appears
   after three failed attempts. The last aggregate is also kept on disk

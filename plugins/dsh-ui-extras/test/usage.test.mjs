@@ -160,3 +160,68 @@ test("usage: lemezes pillanatkép azonnal ad értéket (a panel ne tűnjön el i
   assert.ok(elapsed < 2000, `azonnal jön (mért: ${elapsed} ms)`);
   assert.equal(snapshot.workspace, "D:\\Temp\\ws-a");
 });
+
+test("usage: a kimutatott költség BRUTTÓ (27% áfa + 6% DSH-pótdíj = ×1,3462)", async () => {
+  // 2026-11-20, felhasználói döntés: a panel és a lábléc a FIZETENDŐ árat
+  // mutatja. A fixture csak DeepSeek-flash, ezért a bruttó/nettó arány pontosan
+  // a DSH szorzó; a szorzók a válasz `pricing.gross` blokkjában vannak, hogy a
+  // kliens ne a sajátjából számoljon (és ne szorozzon kétszer).
+  const usage = await scanUsage(30, null, "");
+  assert.ok(usage.totals.netCostUsd > 0, "van nettó összeg a számla-egyeztetéshez");
+  const ratio = usage.totals.costUsd / usage.totals.netCostUsd;
+  assert.ok(Math.abs(ratio - 1.3462) < 1e-9, `a bruttó/nettó arány ${ratio}, várt 1,3462`);
+  assert.ok(usage.totals.costUsd > usage.totals.netCostUsd, "a bruttó nagyobb a nettónál");
+  assert.equal(usage.pricing.gross.basis, "gross", "a válasz kimondja, hogy az összegek bruttók");
+  assert.equal(usage.pricing.gross.vatPercent, 27);
+  assert.equal(usage.pricing.gross.dshSurchargePercent, 6);
+  assert.equal(usage.pricing.gross.rates.dsh, 1.3462);
+  assert.equal(usage.pricing.gross.rates.alibaba, 1.27);
+  assert.equal(usage.pricing.gross.rates.openrouter, 1.27);
+  assert.equal(usage.pricing.gross.rates.free, 1);
+  // A spend (a lábléc költés-parja) ugyanebből a forrásból jön: bruttó.
+  // (A fixture modelleknek nincs provider-előtagja, ezért az `other` zsebbe
+  // esnek — a totals-ra hasonlítunk, ami a lábléc összegét adja.)
+  assert.ok(usage.spend.totalUsd > usage.spend.totalNetUsd, "a lábléc költése is bruttó");
+  assert.ok(Math.abs(usage.spend.totalUsd - usage.spend.totalNetUsd * 1.3462) < 1e-9);
+});
+
+test("usage: a delegálási baseline is BRUTTÓ (a DSH áfás árán számol)", async () => {
+  // A megtakarítás csak akkor hasonlítható a token-sorhoz, ha mindkettő ugyanazt
+  // a pénzt méri: a baseline a fizetős DeepSeek-flash BRUTTÓ ára.
+  const sub = mkdtempSync(join(tmpdir(), "dsh-usage-deleg-"));
+  const sessions = join(sub, "sessions");
+  const dir = join(sessions, "tagC", "session-c");
+  mkdirSync(dir, { recursive: true });
+  const lines = [
+    JSON.stringify({
+      type: "session", version: 3, id: "session-c", cwd: "D:\\Temp\\ws-c",
+      delegationDepth: 1, origin: "subagent", createdAt: Date.now() - 3600000
+    }),
+    JSON.stringify({
+      type: "assistant/message", seq: 1, time: Date.now() - 3000000,
+      data: {
+        turn: 1, step: 1,
+        message: { model: "worker", source: { provider: "subagent-worker", model: "worker" } },
+        usage: { inputTokens: 1000000, cacheReadTokens: 0, outputTokens: 0, totalTokens: 1000000 }
+      }
+    })
+  ];
+  writeFileSync(join(dir, "session.v3.jsonl"), lines.join("\n") + "\n", "utf8");
+  const saved = process.env.DSH_HOME;
+  process.env.DSH_HOME = sub;
+  try {
+    const usage = await scanUsage(30, null, "");
+    const delegated = usage.delegated;
+    assert.equal(delegated.requests, 1, "1 delegált kérés");
+    assert.equal(delegated.costUsd, 0, "az ingyenes lánc 0 USD");
+    assert.ok(delegated.baselineNetUsd > 0, "van nettó baseline");
+    assert.ok(Math.abs(delegated.baselineUsd - delegated.baselineNetUsd * 1.3462) < 1e-9,
+      `a baseline bruttó: ${delegated.baselineUsd} vs nettó ${delegated.baselineNetUsd}`);
+    assert.ok(Math.abs(delegated.freeSavingsUsd - delegated.baselineUsd) < 1e-9, "a megtakarítás a teljes bruttó baseline");
+    assert.equal(delegated.models[0].free, true, "a `worker` ingyenes");
+  } finally {
+    if (saved === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = saved;
+    rmSync(sub, { recursive: true, force: true });
+  }
+});

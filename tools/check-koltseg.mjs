@@ -186,6 +186,19 @@ else {
   } else {
     ok(`token-költség a munkaterületre: $${scoped.totals.costUsd.toFixed(4)} (globális: $${global.totals.costUsd.toFixed(4)})`);
   }
+  // A panel a FIZETENDŐ (bruttó) árat mutatja: 27% magyar áfa, a DeepSeeknél
+  // +6% DSH-pótdíj (×1,3462), Alibaba/OpenRouter ×1,27. A nettó érték a
+  // számla-egyeztetéshez marad (lásd AGENTS 2026-11-20-i bejegyzés).
+  const grossRates = scoped.pricing && scoped.pricing.gross ? scoped.pricing.gross.rates : null;
+  if (grossRates === null) {
+    fail("a válaszból hiányzik a pricing.gross blokk (a felület nem tudná kimondani a szorzókat)");
+  } else if (scoped.totals.netCostUsd > 0
+    && scoped.totals.costUsd >= scoped.totals.netCostUsd * 1.27 - 1e-9
+    && scoped.totals.costUsd <= scoped.totals.netCostUsd * 1.3462 + 1e-9) {
+    ok(`a token-sor BRUTTÓ: nettó $${scoped.totals.netCostUsd.toFixed(4)} -> bruttó $${scoped.totals.costUsd.toFixed(4)} (DSH ×${grossRates.dsh}, Alibaba/OpenRouter ×${grossRates.alibaba})`);
+  } else {
+    fail(`a bruttó költség $${scoped.totals.costUsd} nem a nettó $${scoped.totals.netCostUsd} 1,27–1,3462-szerese`);
+  }
   if (scoped.cache.hitTokens > 0 && scoped.cache.discountPercent < 50) {
     fail(`a cache-kedvezmény nem érvényesül (${scoped.cache.discountPercent}%)`);
   } else if (scoped.cache.hitTokens > 0) {

@@ -102,7 +102,11 @@ window.__ModuleLoader__.load({
       "options.vat": "ÁFA ({percent}%) a végösszegen",
       "options.material": "Token/API önköltség (külön sor)",
       "options.material.note": "Az óradíj alapból magában foglalja a tokeneket; ez a sor csak kimutatás.",
-      "options.material.usd": "Token költség: {usd}",
+      // 2026-11-20: a sor a FIZETENDŐ (bruttó) árat mutatja — 27% magyar áfa,
+      // a DeepSeeknél további 6% DSH-pótdíj (×1,3462); Alibaba/OpenRouter ×1,27.
+      "options.material.usd": "Token költség (bruttó, áfával): {usd}",
+      "options.material.usdNet": "Token költség (nettó listaár — a mérés még a régi, áfa nélküli bontásból való): {usd}",
+      "options.material.gross": "Bruttó bontás: nettó {net} listaáron + {vat}% magyar áfa (a DeepSeeknél ezen felül {dsh}% DSH-pótdíj, ×{dshRate}); az Alibaba és az OpenRouter ×{othersRate}. Az egyenleg a szolgáltató számláján lévő, szinkronizált összeg — azon nincs szorzó.",
       "options.material.cache": "Cache-találat: {hit} ({percent}% a bemenetből), {discount}% kedvezmény érvényesítve · kimenet {out} · {requests} kérés",
       "options.material.cache.saved": "Kedvezmény nélkül {baseline} lenne — a cache ennyit hozott: {saved}.",
       "options.material.scope": "A token-sor a kiválasztott munkaterületre/harmonikára szűrve.",
@@ -193,7 +197,9 @@ window.__ModuleLoader__.load({
       "options.vat": "VAT ({percent}%) on the total",
       "options.material": "Token/API material cost (separate line)",
       "options.material.note": "The hourly rate already covers tokens by default; this line is informational.",
-      "options.material.usd": "Token cost: {usd}",
+      "options.material.usd": "Token cost (gross, VAT included): {usd}",
+      "options.material.usdNet": "Token cost (net list price — the measurement still comes from the old, VAT-free breakdown): {usd}",
+      "options.material.gross": "Gross breakdown: net {net} at list price + {vat}% Hungarian VAT (plus a {dsh}% DSH surcharge on DeepSeek, ×{dshRate}); Alibaba and OpenRouter ×{othersRate}. The balance is the provider's synced figure — no multiplier on it.",
       "options.material.cache": "Cache hits: {hit} ({percent}% of input), {discount}% discount applied · output {out} · {requests} requests",
       "options.material.cache.saved": "Without the discount it would be {baseline} — the cache saved {saved}.",
       "options.material.scope": "The token line is filtered to the selected workspace/session.",
@@ -821,7 +827,7 @@ window.__ModuleLoader__.load({
       var reloadKey = reloadState[0];
       var setReloadKey = reloadState[1];
 
-      var materialState = react.useState({ status: "off", usd: 0, error: "" });
+      var materialState = react.useState({ status: "off", usd: 0, error: "", gross: false, netUsd: null, tax: null });
       var material = materialState[0];
       var setMaterial = materialState[1];
 
@@ -950,10 +956,18 @@ window.__ModuleLoader__.load({
               // munkaterület-hatókör a (szűrt) összesítést.
               var stats = scope === "session" && data.session ? data.session : data.totals;
               var usd = stats && typeof stats.costUsd === "number" ? stats.costUsd : 0;
+              // BRUTTÓ (2026-11-20): a host a `costUsd`-ben már a fizetendő,
+              // áfás összeget adja (27% áfa, a DSH-nál +6%). A `netCostUsd` a
+              // nettó listaár. Ha a host még régi (nincs `pricing.gross`),
+              // akkor a szám NETTÓ — ezt a felirat ki is mondja.
+              var tax = data.pricing && data.pricing.gross ? data.pricing.gross : null;
               setMaterial({
                 status: "ready",
                 usd,
                 error: "",
+                gross: tax !== null && tax.basis === "gross",
+                netUsd: stats && typeof stats.netCostUsd === "number" ? stats.netCostUsd : null,
+                tax,
                 requests: stats && typeof stats.requests === "number" ? stats.requests : 0,
                 missTokens: stats && typeof stats.miss === "number" ? stats.miss : 0,
                 hitTokens: stats && typeof stats.hit === "number" ? stats.hit : 0,
@@ -1281,12 +1295,29 @@ window.__ModuleLoader__.load({
         if (materialOn) {
           body.push(h("div", { key: "material", style: S.note },
             material.status === "ready"
-              ? t("options.material.usd", { usd: fmtUsd(material.usd) })
+              // A felirat KIMONDJA, hogy a szám bruttó; ha a host még a régi
+              // (nincs `pricing.gross`), akkor nettó és ezt is kimondja.
+              ? (material.gross === true
+                ? t("options.material.usd", { usd: fmtUsd(material.usd) })
+                : t("options.material.usdNet", { usd: fmtUsd(material.usd) }))
               // A várakozás alatt (hideg szkennelés) NEM hiba, hanem mérés:
               // a „nem érhető el” csak a 3 sikertelen próba után jelenik meg.
               : material.status === "unavailable"
                 ? t("options.material.unavailable")
                 : t("options.material.loading")));
+          // Bruttó bontás: nettó listaár + áfa (+ DSH-pótdíj). Csak akkor, ha a
+          // host adja a szorzókat ÉS a nettó összeget — így a sor ellenőrizhető.
+          if (material.status === "ready" && material.gross === true && material.tax && toNumber(material.netUsd) > 0) {
+            var taxRates = material.tax.rates && typeof material.tax.rates === "object" ? material.tax.rates : {};
+            body.push(h("div", { key: "material-gross", style: S.note },
+              t("options.material.gross", {
+                net: fmtUsd(material.netUsd),
+                vat: String(toNumber(material.tax.vatPercent)),
+                dsh: String(toNumber(material.tax.dshSurchargePercent)),
+                dshRate: String(toNumber(taxRates.dsh)).replace(".", ","),
+                othersRate: String(toNumber(taxRates.alibaba)).replace(".", ","),
+              })));
+          }
           // A cache-kedvezmény KIMONDVA (2026-11-17, felhasználói észrevétel:
           // „a 98% cache kedvezményt nem vonja le”). A kedvezmény érvényesül,
           // de eddig nem lehetett ellenőrizni — most a cache-elt bemenet, a

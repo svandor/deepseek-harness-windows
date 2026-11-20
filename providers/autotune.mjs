@@ -21,6 +21,9 @@ import { createZstdDecompress } from "node:zlib";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+// BRUTTÓ (fizetendő) szorzók a plugin ártáblájából (a panel ugyanezt használja):
+// DeepSeek ×1,3462 (27% áfa + 6% DSH-pótdíj), Alibaba/OpenRouter ×1,27.
+import { GROSS_RATES, grossMultiplier } from "../plugins/dsh-ui-extras/lib/index.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(HERE, "config.json");
@@ -66,8 +69,11 @@ function isPeak(t) {
   const h = d.getUTCHours();
   return (h >= 1 && h < 4) || (h >= 6 && h < 10);
 }
-// A MERESHEZ a config arablaja (a proxy ugyanezt hasznalja).
-function costOf(label, miss, hit, out, time) {
+// A MERESHEZ a config arablaja (a proxy ugyanezt hasznalja). A `withVat`
+// alapertelmezesben TRUE: a kimutatott költseg a fizetendo (brutto) ar, hogy
+// egyezzen a költségelszámolás panellel. A SZAMLA-EGYEZTETES viszont NETTÓ
+// arral megy (`withVat = false`), mert a szolgaltato szamlaja is nettó.
+function costOf(label, miss, hit, out, time, withVat = true) {
   const table = CONFIG.pricing ?? {};
   const meta = table[label] ?? table["deepseek/deepseek-flash"] ?? { miss: 0.15, hit: 0.003, out: 0.6 };
   const size = miss + hit;
@@ -76,7 +82,8 @@ function costOf(label, miss, hit, out, time) {
   const mr = (peak && tier.peakMiss) || tier.miss || 0;
   const hr = (peak && tier.peakHit) || tier.hit || mr * 0.1;
   const or = (peak && tier.peakOut) || tier.out || 0;
-  return (miss * mr + hit * hr + out * or) / 1e6;
+  const net = (miss * mr + hit * hr + out * or) / 1e6;
+  return withVat ? net * grossMultiplier(label) : net;
 }
 
 const sessions = [];
@@ -136,6 +143,11 @@ const measured = {
   loopSessions: loopSessions.length,
   costUsd: Number(sums.costUsd.toFixed(4)),
   costPerRequest: Number((sums.costUsd / Math.max(1, sums.requests)).toFixed(6)),
+  // 2026-11-20: a `costUsd` BRUTTÓ (fizetendő) ár — 27% magyar áfa, a
+  // DeepSeeknél +6% DSH-pótdíj (×1,3462), Alibaba/OpenRouter ×1,27. A
+  // szamla-egyeztetes (invoice) szandekosan NETTÓ marad.
+  costBasis: "gross",
+  costRates: { dsh: GROSS_RATES.dsh, alibaba: GROSS_RATES.alibaba },
 };
 
 // ── 2. KALIBRALAS ─────────────────────────────────────────────────────────
@@ -251,7 +263,7 @@ async function scanAlibabaCycle(cycle) {
       const src = e.data?.message?.source ?? e.data?.source ?? {};
       const label = src.provider ? `${src.provider}/${src.model}` : String(src.model ?? "");
       if (!/^alibaba(-intl)?\//.test(label)) continue;
-      const c = costOf(label, u.inputTokens || 0, u.cacheReadTokens || 0, u.outputTokens || 0, e.time);
+      const c = costOf(label, u.inputTokens || 0, u.cacheReadTokens || 0, u.outputTokens || 0, e.time, false); // NETTÓ: a szamlához
       const model = label.replace(/^alibaba(-intl)?\//, "");
       perModel.set(model, (perModel.get(model) ?? 0) + c);
       const region = label.startsWith("alibaba-intl/") ? "SG" : "EU";
@@ -396,7 +408,7 @@ writeFileSync(reportPath, JSON.stringify(report, null, 2), "utf8");
 
 const usd = (n) => "$" + n.toFixed(4);
 console.log(`=== AUTOTUNE (${DAYS} nap, ${measured.sessions} session, ${measured.requests.toLocaleString("hu-HU")} keres) ===`);
-console.log(`  koltseg: ${usd(measured.costUsd)} | keresenkent: ${usd(measured.costPerRequest)}`);
+console.log(`  koltseg: ${usd(measured.costUsd)} | keresenkent: ${usd(measured.costPerRequest)}  (BRUTTO: DSH ×${GROSS_RATES.dsh}, Alibaba ×${GROSS_RATES.alibaba})`);
 console.log(`  cache-arany: ${(measured.cacheShare * 100).toFixed(2)}% | kimenet/keres (median): ${measured.outPerRequest} token | lepes/session (median): ${measured.stepsPerSession}`);
 console.log(`  porgo sessionok (max ismetles >= 3): ${measured.loopSessions} (${(measured.loopShares * 100).toFixed(1)}%)`);
 console.log("\n=== JAVASOLT HANGOLAS ===");
@@ -420,7 +432,7 @@ if (invoice) {
   const u = (n) => "$" + Number(n).toFixed(6);
   console.log(`\n=== SZAMLA-EGYEZTETES (${invoice.cycle}, cikluszaras ${invoice.closingDate}) ===`);
   console.log(`  Alibaba szamla:  ${u(invoice.totalUsd)} ${invoice.currency} (${invoice.lineItems} tetel) · elerheto egyenleg ${u(invoice.availableUsd)}`);
-  console.log(`  Naplobol (DSH):  ${u(invoice.logged.totalUsd)}  -> elteres ${u(invoice.deltaUsd)} (a DSH-n kivuli hivasok)`);
+  console.log(`  Naplobol (DSH):  ${u(invoice.logged.totalUsd)}  -> elteres ${u(invoice.deltaUsd)} (a DSH-n kivuli hivasok)  [nettó: a szamlával egyező bázis]`);
   for (const region of Object.keys(invoice.byRegion)) {
     console.log(`  ${region}: szamla ${u(invoice.byRegion[region])} | naplo ${u((invoice.logged.perRegion ?? {})[region] ?? 0)}`);
   }

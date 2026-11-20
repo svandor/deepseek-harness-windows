@@ -12,6 +12,9 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createZstdDecompress } from "node:zlib";
 import { homedir } from "node:os";
 import { join } from "node:path";
+// A BRUTTÓ (fizetendő) szorzók a plugin ártáblájából — egy forrás, hogy a
+// panel és ez az elemzes ugyanazt a pénzt mutassa.
+import { GROSS_RATES } from "../plugins/dsh-ui-extras/lib/index.js";
 
 const DAYS = Number(process.argv[2] ?? 30);
 const ROOT = join(homedir(), ".dsh", "sessions");
@@ -38,13 +41,25 @@ const MODELS = {
   "deepseek-v4-pro-0813 (Ali EU)": { hit: 0.1, tiers: [{ upTo: Infinity, busyIn: 1.272, idleIn: 0.636, busyOut: 3.816, idleOut: 1.908 }] },
 };
 
-function costOf(m, miss, hit, out, time) {
+// BRUTTÓ (fizetendő) szorzó modellenként — a plugin ártáblájából, hogy ez a
+// tábla ugyanazt a pénzt mutassa, mint a költségelszámolás panel:
+// DeepSeek ×1,3462 (27% áfa + 6% DSH-pótdíj), Alibaba ×1,27 (27% áfa).
+const MODELS_GROSS = (() => {
+  const map = {};
+  for (const name of Object.keys(MODELS)) {
+    map[name] = /\(Ali /.test(name) ? GROSS_RATES.alibaba : GROSS_RATES.dsh;
+  }
+  return map;
+})();
+
+function costOf(m, miss, hit, out, time, name) {
   const peak = isPeak(time);
   const size = miss + hit;
   const tier = m.tiers.find((t) => size <= t.upTo) ?? m.tiers[m.tiers.length - 1];
   const inRate = peak ? tier.busyIn : tier.idleIn;
   const outRate = peak ? tier.busyOut : tier.idleOut;
-  return (miss * inRate + hit * inRate * m.hit + out * outRate) / 1e6;
+  const gross = MODELS_GROSS[name] ?? GROSS_RATES.dsh;
+  return (miss * inRate + hit * inRate * m.hit + out * outRate) / 1e6 * gross;
 }
 
 async function frame(b) {
@@ -95,7 +110,7 @@ const totals = Object.fromEntries(names.map((n) => [n, 0]));
 const perReq = [];
 for (const r of reqs) {
   const row = {};
-  for (const n of names) { const c = costOf(MODELS[n], r.miss, r.hit, r.out, r.time); totals[n] += c; row[n] = c; }
+  for (const n of names) { const c = costOf(MODELS[n], r.miss, r.hit, r.out, r.time, n); totals[n] += c; row[n] = c; }
   perReq.push({ ...r, row });
 }
 const sum = (arr) => arr.reduce((a, b) => a + b, 0);
@@ -103,6 +118,7 @@ const usd = (n) => "$" + n.toFixed(2);
 const base = totals["deepseek-flash (kozvetlen)"];
 
 console.log(`=== FO ROUTE KERESEK (${DAYS} nap, ${reqs.length.toLocaleString("hu-HU")} keres) ===`);
+console.log(`  (BRUTTO arak: DeepSeek ×${GROSS_RATES.dsh}, Alibaba ×${GROSS_RATES.alibaba})`);
 console.log(`  osszes token: miss ${sum(reqs.map(r=>r.miss)).toLocaleString("hu-HU")} / cache ${sum(reqs.map(r=>r.hit)).toLocaleString("hu-HU")} / out ${sum(reqs.map(r=>r.out)).toLocaleString("hu-HU")}`);
 const sizes = reqs.map((r) => r.miss + r.hit).sort((a, b) => a - b);
 const pct = (p) => sizes[Math.min(sizes.length - 1, Math.floor(sizes.length * p))];

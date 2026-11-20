@@ -11,6 +11,10 @@
  * esik (`isFreeModel`): a helyi fallback proxy `worker` route-ja és a lánc tagjai.
  * Minden más modell fizetős.
  *
+ * AZ ÖSSZEGEK BRUTTÓ ÁRAK (2026-11-20): a `requestCost` a fizetendő árat adja —
+ * 27% magyar áfa, a DeepSeeknél további 6% DSH-pótdíj (×1,3462); az Alibaba és
+ * az OpenRouter ×1,27. Ugyanaz a szám, mint a költségelszámolás panelben.
+ *
  * Használat:
  *   node providers/check-delegation-route.mjs              # utolsó 24 óra
  *   node providers/check-delegation-route.mjs --hours 72
@@ -113,6 +117,8 @@ const paidChildren = children.filter((child) => child.models.some((model) => !mo
 console.log('');
 console.log(`Delegált gyermekek — ${ALL ? 'minden idő' : `utolsó ${HOURS} óra`}`);
 console.log('='.repeat(44));
+console.log('Az összegek BRUTTÓ árak (fizetendők): a DeepSeeknél ×1,3462');
+console.log('(27% magyar áfa + 6% DSH-pótdíj), az Alibaba/OpenRouter ×1,27.');
 console.log(`Host: ${root}`);
 if (children.length === 0) {
   console.log('');

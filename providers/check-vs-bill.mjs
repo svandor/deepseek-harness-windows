@@ -71,6 +71,10 @@ for (const file of walk(join(homedir(), ".dsh", "sessions"))) {
 const total = [...per.values()].reduce((a, b) => a + b.costUsd, 0);
 const usd = (n) => "$" + n.toFixed(4);
 console.log(`=== ALIBABA-KOLTSEG A NAPLOKBOL — ${MONTH} ===`);
+// SZANDEKOSAN NETTÓ: ez a szám a szolgáltató számlájával egyeztethető (a
+// költségelszámolás panel ezzel szemben BRUTTÓ, áfás árat mutat: ×1,27 az
+// Alibabánál). A két szám különbsége pont a 27% magyar áfa.
+console.log("  (nettó listaár — a Model Studio számlájával összevethető; a panel bruttó, áfás árat mutat)");
 for (const b of [...per.values()].sort((x, y) => y.costUsd - x.costUsd)) {
   console.log(`  ${b.label.padEnd(32)} ${usd(b.costUsd).padStart(10)}  keres=${String(b.requests).padStart(5)}  in=${(b.miss + b.hit).toLocaleString("hu-HU").padStart(12)} out=${b.out.toLocaleString("hu-HU").padStart(8)}`);
 }

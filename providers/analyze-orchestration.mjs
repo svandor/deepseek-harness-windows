@@ -10,6 +10,9 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createZstdDecompress } from "node:zlib";
 import { homedir } from "node:os";
 import { join } from "node:path";
+// A BRUTTÓ (fizetendő) szorzók EGY helyen élnek: a plugin ártáblájában.
+// 27% magyar áfa, a DeepSeeknél +6% DSH-pótdíj (×1,3462); Alibaba/OpenRouter ×1,27.
+import { GROSS_RATES, grossMultiplier } from "../plugins/dsh-ui-extras/lib/index.js";
 
 const DAYS = Number(process.argv[2] ?? 30);
 const ROOT = join(homedir(), ".dsh", "sessions");
@@ -44,7 +47,9 @@ function costOf(usage, model, time) {
   const miss = usage.inputTokens || 0;
   const hit = usage.cacheReadTokens || 0;
   const out = usage.outputTokens || 0;
-  return (miss * (peak ? p.missPeak : p.missOff) + hit * (peak ? p.hitPeak : p.hitOff) + out * (peak ? p.outPeak : p.outOff)) / 1e6;
+  // BRUTTÓ ár: a panel ugyanezt a számot mutatja (lásd GROSS_RATES).
+  return (miss * (peak ? p.missPeak : p.missOff) + hit * (peak ? p.hitPeak : p.hitOff) + out * (peak ? p.outPeak : p.outOff)) / 1e6
+    * grossMultiplier(model);
 }
 
 async function frame(b) {
@@ -153,17 +158,18 @@ for (const m of [...perModel.values()].sort((a, b) => b.costUsd - a.costUsd).sli
 const pro = P["deepseek-v4-pro"];
 const flash = P["deepseek-flash"];
 const mainTokens = { miss: agg.main.miss, hit: agg.main.hit, out: agg.main.out };
-const costAt = (p, t) => (t.miss * p.missOff + t.hit * p.hitOff + t.out * p.outOff) / 1e6;
-const mainFlashOff = costAt(flash, mainTokens);
-const mainProOff = costAt(pro, mainTokens);
-const mainSg = costAt(P["alibaba-intl/qwen3.8-flash"], mainTokens);
-const delegPaid = costAt(P["alibaba-intl/qwen3.8-flash"], { miss: agg.deleg.miss, hit: agg.deleg.hit, out: agg.deleg.out });
+const costAt = (p, t, rate) => ((t.miss * p.missOff + t.hit * p.hitOff + t.out * p.outOff) / 1e6) * (rate ?? 1);
+const mainFlashOff = costAt(flash, mainTokens, GROSS_RATES.dsh);
+const mainProOff = costAt(pro, mainTokens, GROSS_RATES.dsh);
+const mainSg = costAt(P["alibaba-intl/qwen3.8-flash"], mainTokens, GROSS_RATES.alibaba);
+const delegPaid = costAt(P["alibaba-intl/qwen3.8-flash"], { miss: agg.deleg.miss, hit: agg.deleg.hit, out: agg.deleg.out }, GROSS_RATES.alibaba);
 
 console.log("\n=== FORGATOKONYVEK (a MAIN tokenvolumen ujraarazva; a gyermekek a mostani ingyenes lancon) ===");
+console.log(`  (minden osszeg BRUTTO: DSH ×${GROSS_RATES.dsh}, Alibaba/OpenRouter ×${GROSS_RATES.alibaba})`);
 console.log(`  main flash (mostani, völgyar):   ${usd(mainFlashOff)}`);
 console.log(`  main v4-pro (völgyar):           ${usd(mainProOff)}   (${(mainProOff / (mainFlashOff || 1)).toFixed(2)}x)`);
 console.log(`  main qwen3.8-flash EU (lapos):   ${usd(mainSg)}   (${(mainSg / (mainFlashOff || 1)).toFixed(2)}x)`);
-console.log(`  Ugyanez CSÚCSÁRON (main flash vs pro): ${usd(costAt(flash, mainTokens) * 2)} -> ${usd(costAt(pro, mainTokens) * 2)}`);
+console.log(`  Ugyanez CSÚCSÁRON (main flash vs pro): ${usd(costAt(flash, mainTokens, GROSS_RATES.dsh) * 2)} -> ${usd(costAt(pro, mainTokens, GROSS_RATES.dsh) * 2)}`);
 console.log(`\n  Ha a gyermekek NEM ingyenesek, hanem fizetos flash (qwen3.8-flash SG tarifa): +${usd(delegPaid)}`);
 console.log(`  (A gyermekek jelenlegi ingyenes lancon mert koltsege: ${usd(agg.deleg.costUsd)})`);
 

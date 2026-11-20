@@ -1290,7 +1290,7 @@ window.__ModuleLoader__.load({
       "balanceTitle": "Élő egyenleg a DeepSeek számláról, szerveroldali lekérdezéssel.",
       "balanceErrorTitle": "A szerveroldali egyenleg-lekérdezés nem sikerült: ",
       "spendPair": "DSH / Ali / OpenR",
-      "spendPairTitle": "Három szám, balról jobbra: a DeepSeek számlán ELÉRHETŐ egyenleg, az Alibaba kifizetendő tartozása (−), az OpenRouter pay-as-you-go egyenlege. Két tizedesre kerekítve, hogy elférjen a láblécen; a részletek lentebb.",
+      "spendPairTitle": "Három szám, balról jobbra: a DeepSeek számlán ELÉRHETŐ egyenleg, az Alibaba kifizetendő tartozása (−), az OpenRouter pay-as-you-go egyenlege. Két tizedesre kerekítve, hogy elférjen a láblécen; a részletek lentebb. A három szám a szolgáltató számláján lévő, szinkronizált összeg — azon nincs áfaszorzó —, a lentebbi, számított költségek viszont BRUTTÓK (27% áfa, a DeepSeeknél +6%).",
       "spendPairOpenRouter": "OpenRouter egyenleg: {balance} USD (feltöltött {total} − elhasznált {used}). A 10 USD-s egyszeri vásárlás felett a :free modellek napi kerete 1000, alatta 50.",
       "spendPairOpenRouterMissing": "OpenRouter egyenleg: nem elérhető ({error}).",
       "spendPairBalance": "DeepSeek egyenleg (a grátisszal együtt): {balance} {currency} — a konzollal egyező, elérhető összeg.",
@@ -1301,30 +1301,31 @@ window.__ModuleLoader__.load({
       "spendPairOutstanding": "Kifizetendő tartozás (fizetés után 0): {outstanding}.",
       "spendPairBillMissing": "Alibaba számla: nem elérhető ({error}).",
       "spendPairBillHint": "A jobb oldali érték a DSH-naplóból becsült költés.",
-      "spendPairAlibaba": "Naplóból becsült költés: -{spent} (EU {eu} · Szingapúr {sg}, keretből {sgFree}).",
-      "spendPairWindow": "Ugyanezen {days} nap alatt a DeepSeek-költés {deepseek} volt · összesen {total}.",
+      "spendPairAlibaba": "Naplóból becsült költés (bruttó): -{spent} (EU {eu} · Szingapúr {sg}, keretből {sgFree}).",
+      "spendPairWindow": "Ugyanezen {days} nap alatt a DeepSeek-költés {deepseek} volt (bruttó) · összesen {total}.",
       "usageProviderHead": "Szolgáltatók szerint ({days} nap)",
       "usageProviderLine": "{label}: {cost} · {requests} kérés · {tokens} zseton",
       "usageProviderFree": "{label}: ingyenes · {requests} kérés · {tokens} zseton",
       "usageAlibabaSgQuota": "Szingapúri ingyenes keret ({model}): {used} / {quota} zseton ({percent}) — jóváírva {free}, fizetve {paid}",
       "usageAlibabaNote": "Alibaba-árak: EU (Frankfurt) és Szingapúr (International) listaár.",
-      "usageTaxNote": "Megjegyzés: az {dsFee} % DSH-díj és a {aliVat} % magyar ÁFA miatt ezek bruttó árak — az összehasonlítás valós költségeket mutat.",
+      "usageTaxNote": "Bruttó (fizetendő) árak: {aliVat}% magyar áfa minden szolgáltatónál, a DeepSeeknél ezen felül {dsFee}% DSH-pótdíj — szorzók: ×{dshRate} (DSH) és ×{othersRate} (Alibaba, OpenRouter). A host ezt már a számításban érvényesíti.",
+      "usageGrossLine": "Minden itteni összeg BRUTTÓ (ennyit kell fizetni): {vat}% magyar áfa, a DeepSeeknél további {dsh}% DSH-pótdíj (×{dshRate}); az Alibaba és az OpenRouter ×{othersRate}. Az egyenleg a szolgáltató számláján lévő, szinkronizált összeg — azon nincs áfaszorzó.",
       "usageAlibabaNote2": "Proxy-útvonalon (worker/auto) a napló a route nevét rögzíti — ott a költség közelítés.",
       "usageBalanceLine": "DeepSeek-egyenleg (a grátisszal együtt): {balance}",
       "costTitle": "Költség: a hivatalos ártáblából, kérésenként számolva (USD).",
       "rowTitle": "Használat és költség. A költség a hivatalos ártáblából becsült érték.",
       "usageTooltipHead": "Használat és költség (becslés a hivatalos ártáblával)",
-      "usageSessionCost": "Ez a beszélgetés: {cost}",
+      "usageSessionCost": "Ez a beszélgetés (bruttó): {cost}",
       "usageSessionTokens": "Ez a beszélgetés: {tokens} zseton",
-      "usageWindowCost": "Költség ({days} nap): {cost}",
-      "usageWindowAverage": "Napi átlag ({days} nap): {cost}/nap",
-      "usageActiveDays": "Aktív nap: {days} (átlag {cost}/nap)",
+      "usageWindowCost": "Költség ({days} nap, bruttó): {cost}",
+      "usageWindowAverage": "Napi átlag ({days} nap, bruttó): {cost}/nap",
+      "usageActiveDays": "Aktív nap: {days} (átlag {cost}/nap, bruttó)",
       "usageWindowTokens": "Zseton ({days} nap): {total} — nem cache-elt {miss}, cache-találat {hit}, kimenet {out}",
       "usageWindowRequests": "Kérések: {count}",
       "usageSavingsHead": "Megtakarítás — delegált munka az ingyenes láncon",
-      "usageSavingsAmount": "Megtakarítás: {saved} (ennyibe került volna a fizetős úton)",
+      "usageSavingsAmount": "Megtakarítás: {saved} (bruttó — ennyibe került volna a fizetős úton)",
       "usageSavingsShare": "Delegálva: {delegated} / {total} kérés ({share})",
-      "usageSavingsDetail": "Delegált költség: {cost} · baseline {model}: {baseline} · {sessions} alügynök-session",
+      "usageSavingsDetail": "Delegált költség (bruttó): {cost} · baseline {model}: {baseline} · {sessions} alügynök-session",
       "usageSavingsNone": "Ebben az időszakban még nincs delegált munka",
       "usageDelegatedFree": "Ingyenes láncon: {requests} kérés · {cost} · {sessions} session",
       "usageDelegatedPaid": "Delegálva, de fizetős route-on: {requests} kérés · {cost} (nincs megtakarítás)",
@@ -1613,7 +1614,7 @@ window.__ModuleLoader__.load({
       "balanceTitle": "Live balance from the DeepSeek account, queried on the host.",
       "balanceErrorTitle": "The host-side balance query failed: ",
       "spendPair": "DSH / Ali / OpenR",
-      "spendPairTitle": "Three figures, left to right: the AVAILABLE DeepSeek balance, the Alibaba payable debt (−), the OpenRouter pay-as-you-go balance. Rounded to two decimals so the footer fits; details below.",
+      "spendPairTitle": "Three figures, left to right: the AVAILABLE DeepSeek balance, the Alibaba payable debt (−), the OpenRouter pay-as-you-go balance. Rounded to two decimals so the footer fits; details below. All three are the provider's synced figures — no VAT multiplier on them — while the computed costs below are GROSS (27% VAT, plus 6% on DeepSeek).",
       "spendPairOpenRouter": "OpenRouter balance: {balance} USD (purchased {total} − used {used}). Above a one-time $10 purchase the :free models allow 1,000 requests/day, below it 50.",
       "spendPairOpenRouterMissing": "OpenRouter balance: unavailable ({error}).",
       "spendPairBalance": "DeepSeek balance (granted included): {balance} {currency} — the available amount, matching the console.",
@@ -1624,30 +1625,31 @@ window.__ModuleLoader__.load({
       "spendPairOutstanding": "Outstanding payable (becomes 0 after payment): {outstanding}.",
       "spendPairBillMissing": "Alibaba invoice: unavailable ({error}).",
       "spendPairBillHint": "The right-hand value is the spend estimated from the DSH logs.",
-      "spendPairAlibaba": "Estimated from logs: -{spent} (EU {eu} · Singapore {sg}, from quota {sgFree}).",
-      "spendPairWindow": "In the same {days} days DeepSeek spend was {deepseek} · total {total}.",
+      "spendPairAlibaba": "Estimated from logs (gross): -{spent} (EU {eu} · Singapore {sg}, from quota {sgFree}).",
+      "spendPairWindow": "In the same {days} days DeepSeek spend was {deepseek} (gross) · total {total}.",
       "usageProviderHead": "By provider ({days} days)",
       "usageProviderLine": "{label}: {cost} · {requests} requests · {tokens} tokens",
       "usageProviderFree": "{label}: free · {requests} requests · {tokens} tokens",
       "usageAlibabaSgQuota": "Singapore free quota ({model}): {used} / {quota} tokens ({percent}) — credited {free}, paid {paid}",
       "usageAlibabaNote": "Alibaba prices: EU (Frankfurt) and Singapore (International) list prices.",
-      "usageTaxNote": "Note: amounts are gross — {dsFee}% DSH fee + {aliVat}% Hungarian VAT included for accurate comparison.",
+      "usageTaxNote": "Gross (payable) prices: {aliVat}% Hungarian VAT on every provider, plus {dsFee}% DSH surcharge on DeepSeek — multipliers ×{dshRate} (DSH) and ×{othersRate} (Alibaba, OpenRouter). The host already applies them in the calculation.",
+      "usageGrossLine": "Every amount here is GROSS (what is actually paid): {vat}% Hungarian VAT, plus {dsh}% DSH surcharge on DeepSeek (×{dshRate}); Alibaba and OpenRouter ×{othersRate}. The balance is the provider's synced figure — no VAT multiplier on it.",
       "usageAlibabaNote2": "On proxy routes (worker/auto) the log stores the route name — cost there is an approximation.",
       "usageBalanceLine": "DeepSeek balance: {balance}",
       "costTitle": "Cost: computed per request from the official price table (USD).",
       "rowTitle": "Usage and cost. The cost is an estimate from the official price table.",
       "usageTooltipHead": "Usage and cost (estimated with the official price table)",
-      "usageSessionCost": "This conversation: {cost}",
+      "usageSessionCost": "This conversation (gross): {cost}",
       "usageSessionTokens": "This conversation: {tokens} tokens",
-      "usageWindowCost": "Cost ({days} days): {cost}",
-      "usageWindowAverage": "Daily average ({days} days): {cost}/day",
-      "usageActiveDays": "Active days: {days} (average {cost}/day)",
+      "usageWindowCost": "Cost ({days} days, gross): {cost}",
+      "usageWindowAverage": "Daily average ({days} days, gross): {cost}/day",
+      "usageActiveDays": "Active days: {days} (average {cost}/day, gross)",
       "usageWindowTokens": "Tokens ({days} days): {total} — uncached {miss}, cache hit {hit}, output {out}",
       "usageWindowRequests": "Requests: {count}",
       "usageSavingsHead": "Savings — delegated work on the free chain",
-      "usageSavingsAmount": "Savings: {saved} (what the paid route would have cost)",
+      "usageSavingsAmount": "Savings: {saved} (gross — what the paid route would have cost)",
       "usageSavingsShare": "Delegated: {delegated} / {total} requests ({share})",
-      "usageSavingsDetail": "Delegated cost: {cost} · baseline {model}: {baseline} · {sessions} subagent sessions",
+      "usageSavingsDetail": "Delegated cost (gross): {cost} · baseline {model}: {baseline} · {sessions} subagent sessions",
       "usageSavingsNone": "No delegated work in this period yet",
       "usageDelegatedFree": "On the free chain: {requests} requests · {cost} · {sessions} sessions",
       "usageDelegatedPaid": "Delegated, but on the paid route: {requests} requests · {cost} (no saving)",
@@ -2866,11 +2868,6 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       // local, so the window has to be local too.
       var peakWindowLocal = peakWindowsLocalText(now);
 
-      // DSH díj és Alibaba ÁFA-megjelölés: a valós összehasonlítás két aránya.
-      // Itt definiáljuk őket — az előtte lévő provider-sorok használják.
-      var ALIBABA_VAT_RATE = 1.27;
-      var DSH_FEE_RATE = 1.06;
-
       // The cost and the daily average are NOT pills any more: a real figure
       // needs the whole history and the rate that applied per request, so both
       // live in this row's tooltip instead of posing as session numbers.
@@ -2882,6 +2879,41 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       // Regi host eseten mindez hianyzik, es minden a korabbi viselkedest
       // követi (csak az egyenleg-pill marad).
       var spend = usageSummary && usageSummary.spend ? usageSummary.spend : null;
+
+      // ── Bruttó (fizetendő) ár (2026-11-20, felhasználói döntés) ──────────
+      // A szorzók EGY helyen élnek: a host `pricing.gross` blokkjában. A host a
+      // `costUsd` mezőkben MÁR a bruttó (áfás) összeget adja — 27% magyar ÁFA,
+      // a DeepSeeknél további 6% DSH-pótdíj (×1,3462); az Alibaba és az
+      // OpenRouter ×1,27. Ha a `basis` mező megvan, TILOS újra szorozni (az
+      // kétszeres áfa lenne); régi host esetén (nincs ilyen blokk) a kliens
+      // szoroz, hogy a szám ne hazudjon kevesebbet.
+      //
+      // AZ EGYENLEG KIVÉTEL: a lábléc pilljein a szolgáltató számláján lévő,
+      // szinkronizált összeg áll — az NEM számított ár, ezért nincs rajta
+      // áfaszorzó (a felhasználói döntés szerint ez marad a feltüntetett érték).
+      var TAX = usageSummary && usageSummary.pricing && usageSummary.pricing.gross ? usageSummary.pricing.gross : null;
+      var GROSS_BASIS = TAX !== null && TAX.basis === "gross";
+      var VAT_PERCENT_SHOWN = TAX !== null && typeof TAX.vatPercent === "number" ? TAX.vatPercent : 27;
+      var DSH_SURCHARGE_SHOWN = TAX !== null && typeof TAX.dshSurchargePercent === "number" ? TAX.dshSurchargePercent : 6;
+      var VAT_RATE = 1 + VAT_PERCENT_SHOWN / 100;
+      var DSH_RATE = Number((VAT_RATE * (1 + DSH_SURCHARGE_SHOWN / 100)).toFixed(4));
+      // Az Alibaba-számla (API) NETTÓ összeg: a fizetendő érték a ×1,27.
+      var ALIBABA_VAT_RATE = VAT_RATE;
+      var grossOf = function (value, rate) {
+        var amount = typeof value === "number" ? value : 0;
+        return GROSS_BASIS ? amount : amount * rate;
+      };
+      var grossRateOfFamily = function (family) {
+        return String(family || "") === "deepseek" ? DSH_RATE : VAT_RATE;
+      };
+      if (usageSummary !== null) {
+        tooltipLines.push(t("usageGrossLine", {
+          vat: String(VAT_PERCENT_SHOWN),
+          dsh: String(DSH_SURCHARGE_SHOWN),
+          dshRate: String(DSH_RATE).replace(".", ","),
+          othersRate: String(VAT_RATE).replace(".", ",")
+        }));
+      }
       var providerLines = [];
       if (sessionFigures !== null) {
         tooltipLines.push(t("usageSessionCost", { cost: formatUsd(sessionFigures.costUsd) }));
@@ -2984,16 +3016,9 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                 tokens: formatCount(provider.tokens || 0)
               }));
             } else {
-              // A provider-költségek listára (nettó). A valós összehasonlításhoz:
-              // DeepSeek = ×1.06 (+6 % DSH-díj), Alibaba = ×1.27 (+27 % magyar ÁFA).
-              var adjustedCost = 0;
-              if ((provider.family || "") === "deepseek") {
-                adjustedCost = (provider.costUsd || 0) * DSH_FEE_RATE;
-              } else if ((provider.family || "").startsWith("alibaba")) {
-                adjustedCost = (provider.costUsd || 0) * ALIBABA_VAT_RATE;
-              } else {
-                adjustedCost = provider.costUsd || 0;
-              }
+              // A host BRUTTÓ költséget ad (27% áfa, a DSH-nál +6%); csak a
+              // régi host nettó számát kell itt felszorozni (lásd GROSS_BASIS).
+              var adjustedCost = grossOf(provider.costUsd, grossRateOfFamily(provider.family));
               providerLines.push(t("usageProviderLine", {
                 label: provider.label || provider.family,
                 cost: formatUsd(adjustedCost),
@@ -3011,14 +3036,20 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
                 used: formatCount(sgTop.tokens || 0),
                 quota: formatCount(sgInfo.quotaTokensPerModel || 0),
                 percent: Math.round((sgTop.usedShare || 0) * 1000) / 10 + "%",
-                free: formatUsd((sgInfo.freeUsd || 0) * ALIBABA_VAT_RATE),
-                paid: formatUsd((sgInfo.paidUsd || 0) * ALIBABA_VAT_RATE)
+                free: formatUsd(grossOf(sgInfo.freeUsd, VAT_RATE)),
+                paid: formatUsd(grossOf(sgInfo.paidUsd, VAT_RATE))
               }));
             }
           }
           providerLines.push(t("usageAlibabaNote"));
-          // DSH díj és Alibaba ÁFA-megjelölés: az értékek bruttó árakat mutatnak.
-          providerLines.push(t("usageTaxNote", { dsFee: (DSH_FEE_RATE - 1) * 100, aliVat: (ALIBABA_VAT_RATE - 1) * 100 }));
+          // Bruttó (áfás) ár kimondva — a százalékok a host `pricing.gross`
+          // blokkjából jönnek, nem a kliensbe égetett számból.
+          providerLines.push(t("usageTaxNote", {
+            dsFee: String(DSH_SURCHARGE_SHOWN),
+            aliVat: String(VAT_PERCENT_SHOWN),
+            dshRate: String(DSH_RATE).replace(".", ","),
+            othersRate: String(VAT_RATE).replace(".", ",")
+          }));
           providerLines.push(t("usageAlibabaNote2"));
           tooltipLines.push("");
           for (var lineIndex = 0; lineIndex < providerLines.length; lineIndex++) {
@@ -3071,8 +3102,9 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
         var alibabaBillData = alibabaBillState.status === "ready" ? alibabaBillState.data : null;
         // 2026-01-XX: DSH +6 % díjat számít fel, az Alibaba 27 % ÁFÁT raktal a
         // negatív egyenlegre. A összehasonlításhoz a bruttó értékeket használjuk:
-        // Alibaba = pretaxGrossAmount (vagy ×1.27 ha nincs), DSH = log ×1.06.
-        // MEGJEGYZÉS: ALIBABA_VAT_RATE és DSH_FEE_RATE a függvény tetején vannak definiálva (line ~2435).
+        // Alibaba = pretaxGrossAmount (vagy ×1.27 ha nincs), DSH = a host BRUTTÓ
+        // száma (régi hostnál ×1,3462). A szorzók a `pricing.gross` blokkból,
+        // illetve a VAT_RATE / DSH_RATE párosból jönnek (lásd feljebb).
         var aliPretax = alibabaBillData !== null && typeof alibabaBillData.pretaxAmount === "number"
           ? alibabaBillData.pretaxAmount
           : null;
@@ -3084,7 +3116,9 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
         var aliPretaxGross = alibabaBillData !== null
           ? (alibabaBillData.pretaxGrossAmount ?? (aliPretax !== null ? aliPretax * ALIBABA_VAT_RATE : null))
           : null;
-        var aliAmount = (aliOutstanding > 0) ? aliOutstanding : (aliPretaxGross ?? (aliPretax ?? (spend.alibabaUsd || 0)));
+        var aliAmount = (aliOutstanding > 0)
+          ? aliOutstanding
+          : (aliPretaxGross ?? (aliPretax ?? grossOf(spend.alibabaUsd, VAT_RATE)));
         // A mínusz SZÁNDÉKOS (egyeztetett működés, 2026-11-17): az Alibaba-
         // egyenleg NEGATÍVBA megy (azaz tartozás), ezért a szám elé mindig
         // mínusz kerül — nulla tartozásnál is `-$0.00`, mert az a "nulla
@@ -3144,17 +3178,17 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
           }));
           spendTitleLines.push(t("spendPairBillHint"));
         }
-        // A napló-alapú költés listára (nettó). Az Alibaba bruttó = ×1.27, a DSH
-        // nettó + díj = ×1.06.
-        var aliLogGross = (spend.alibabaUsd || 0) * ALIBABA_VAT_RATE;
+        // A napló-alapú költés BRUTTÓ (a host már áfásan adja): Alibaba ×1,27,
+        // DSH ×1,3462. Régi host esetén a grossOf szoroz.
+        var aliLogGross = grossOf(spend.alibabaUsd, VAT_RATE);
         spendTitleLines.push(t("spendPairAlibaba", {
           spent: formatUsd(aliLogGross),
-          eu: formatUsd((spend.alibabaEuUsd || 0) * ALIBABA_VAT_RATE),
-          sg: formatUsd((spend.alibabaSgUsd || 0) * ALIBABA_VAT_RATE),
-          sgFree: formatUsd((spend.alibabaSgFreeUsd || 0) * ALIBABA_VAT_RATE)
+          eu: formatUsd(grossOf(spend.alibabaEuUsd, VAT_RATE)),
+          sg: formatUsd(grossOf(spend.alibabaSgUsd, VAT_RATE)),
+          sgFree: formatUsd(grossOf(spend.alibabaSgFreeUsd, VAT_RATE))
         }));
-        // A DSH +6 % díjat számít fel, így az összehasonlításban ×1.06.
-        var dsHFee = (spend.deepseekUsd || 0) * DSH_FEE_RATE;
+        // A DSH bruttó szorzója 1,3462 (27% áfa + 6% DSH-pótdíj).
+        var dsHFee = grossOf(spend.deepseekUsd, DSH_RATE);
         var totalWithFees = dsHFee + aliLogGross;
         spendTitleLines.push(t("spendPairWindow", {
           days: String(usageSummary && usageSummary.days ? usageSummary.days : 30),

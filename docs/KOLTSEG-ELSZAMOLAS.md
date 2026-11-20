@@ -129,6 +129,12 @@ automatikusan az 1. szintre esik vissza, és ezt ki is írja.
   százalék a kedvezmény (a DeepSeek-flash találati ár a miss-ár 2%-a → 98%),
   és mennyit hozott — enélkül a szám ellenőrizhetetlen. Az óradíj alapból
   magában foglalja a tokeneket — ez a sor csak kimutatás.
+  **Az összeg BRUTTÓ (fizetendő) ár** (2026-11-20, felhasználói döntés): 27%
+  magyar ÁFA minden szolgáltatónál, a DeepSeeknél ezen felül 6% DSH-pótdíj —
+  szorzók: **×1,3462** (DSH), **×1,27** (Alibaba, OpenRouter), az ingyenes lánc
+  marad 0. A sor alatt a bontás is látszik (nettó listaár + áfa), a nettó érték
+  pedig a számla-egyeztetéshez marad. **Az egyenleg kivétel:** a láblécen a
+  szolgáltató számláján lévő, szinkronizált összeg áll, azon nincs szorzó.
   **Mérés közben** a sor „A token költség mérése folyamatban…” szöveget ír
   (a hideg szkennelés MÉRVE ~1 perc az 1 300 naplóval); a „nem érhető el”
   csak három sikertelen próba után jelenik meg. A legutóbbi összesítés
