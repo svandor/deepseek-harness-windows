@@ -202,6 +202,13 @@ namespace DshTray
         private volatile bool _awaitToken;   // harness-újraindítás után az új tokenre várunk
         private DateTime _awaitTokenSince = DateTime.MinValue; // mikor kezdtük a token-várást
         private readonly bool _explicitShow; // kifejezett indítás (DshLauncher --show)
+        /// <summary>Aktív asztal ablakának indítási ideje (a második asztal előindítéséhez).</summary>
+        private DateTime _activeWindowStartedAt = DateTime.MinValue;
+        /// <summary>A panel-ébresztő üzenet azonosítója (0 = nem sikerült regisztrálni).</summary>
+        private static uint _wakeMessage;
+
+        /// <summary>A panel-ébresztő üzenet neve — a DshWindow ugyanezt regisztrálja.</summary>
+        private const string WakeMessageName = "DshHarnessWake";
 
         public TrayApp(bool explicitShow)
         {
@@ -209,6 +216,32 @@ namespace DshTray
             _cfg.Root = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".."));
             Log.Init(Path.Combine(_cfg.StateDir, "native-tray.log"));
             Log.Info("tálca indul (pid " + Process.GetCurrentProcess().Id + ", gyökér: " + _cfg.Root + ")");
+
+            // Függő frissítések alkalmazása a napló INDÍTÁSA UTÁN, hogy az
+            // eredmény mérhető legyen. MÉRT HIBA (2026-11-20): a tálca a saját
+            // futó képét nem tudta kicserélni, ezért a 2026-11-18-i (halott
+            // tokenre navigálást javító) build két napig nem lépett életbe —
+            // a `PendingUpdate` mostantól átnevezéssel cseréli a saját képét.
+            try
+            {
+                PendingUpdate.Apply(_cfg.Root, Log.Info);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("függő frissítés: " + ex.Message);
+            }
+
+            // A panel-ébresztő üzenet: a DshWindow ugyanezt a nevet regisztrálja,
+            // és a megjelenítés után erre rajzolja újra a paneleket.
+            try
+            {
+                _wakeMessage = NativeMethods.RegisterWindowMessage(WakeMessageName);
+                Log.Info("wake message: " + WakeMessageName + " = " + _wakeMessage);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("wake message nem regisztrálható: " + ex.Message);
+            }
 
             // Shared AppUserModelID for every DSH process: the tray and the
             // window use the same ID, so the pinned shortcut and the running
@@ -372,6 +405,10 @@ namespace DshTray
                     {
                         if (Listening(_cfg.Port) && RunningDesktopWindow(active) != 0)
                         {
+                            // A második ablak WebView2-környezetei CSAK az első
+                            // ablak paneleinek elkészülte után indulhatnak
+                            // (2026-11-20: a booton a kettő egy másodpercben indult).
+                            WaitActivePanesReady(active);
                             for (int d = 1; d <= DesktopCount(); d++)
                             {
                                 if (d == active) continue;
@@ -390,6 +427,87 @@ namespace DshTray
             });
             preparer.IsBackground = true;
             preparer.Start();
+        }
+
+        /// <summary>
+        /// Megvárja, hogy az aktív asztal ablakának MINDEN panelje elkészüljön
+        /// (a napló „webview2 controller ready (pane N)" sorai az ablak indítása
+        /// óta), legfeljebb ~20 s-ig.
+        ///
+        /// MÉRT HIBA (2026-11-20 04:02:07, boot után): a KÉT munkaasztal ablaka
+        /// ugyanabban a másodpercben indult, ezért a hat WebView2-környezet
+        /// egyszerre jött létre. Ez a verseny korábban E_UNEXPECTED-lavinát
+        /// okozott (§1.7). A második asztal ezért csak az első paneleinek
+        /// elkészülte után indulhat.
+        /// </summary>
+        private void WaitActivePanesReady(int active)
+        {
+            int want = PanesForDesktop(active);
+            DateTime since = _activeWindowStartedAt;
+            if (since == DateTime.MinValue) since = DateTime.Now;
+            DateTime deadline = DateTime.Now.AddSeconds(20);
+            while (!_stopping && DateTime.Now < deadline)
+            {
+                if (ReadyPaneCountSince(since) >= want)
+                {
+                    Log.Info("asztal " + active + " panelei keszen (" + want + "/" + want + ", "
+                        + ((int)(DateTime.Now - since).TotalSeconds) + " s)");
+                    Thread.Sleep(1200);      // ráhagyás: a WebView2 vegye át a felületet
+                    return;
+                }
+                Thread.Sleep(400);
+            }
+            Log.Info("asztal " + active + " panelei 20 s alatt nem jeleztek keszletet ("
+                + ReadyPaneCountSince(since) + "/" + want + ") — a masik asztal igy is indul");
+        }
+
+        /// <summary>
+        /// Hány KÜLÖNBÖZŐ panel jelezte a naplóban, hogy a WebView2 vezérlője
+        /// elkészült a megadott időpont óta. Csak a napló VÉGÉT olvassa (a fájl
+        /// nagy lehet), és a sor eleji időbélyeggel szűr — különben egy korábbi
+        /// ablak sorai is beleszámítanának.
+        /// </summary>
+        private int ReadyPaneCountSince(DateTime since)
+        {
+            try
+            {
+                string path = _cfg.WindowLog;
+                if (!File.Exists(path)) return 0;
+                var panes = new HashSet<int>();
+                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete))
+                {
+                    long from = Math.Max(0, stream.Length - 512 * 1024);
+                    stream.Seek(from, SeekOrigin.Begin);
+                    using (var reader = new StreamReader(stream, Encoding.UTF8))
+                    {
+                        string line;
+                        while ((line = reader.ReadLine()) != null)
+                        {
+                            int at = line.IndexOf("webview2 controller ready (pane ", StringComparison.Ordinal);
+                            if (at < 0 || line.Length < 19) continue;
+                            DateTime stamp;
+                            if (!DateTime.TryParseExact(line.Substring(0, 19), "yyyy-MM-dd HH:mm:ss",
+                                CultureInfo.InvariantCulture, DateTimeStyles.None, out stamp)) continue;
+                            if (stamp < since.AddSeconds(-1)) continue;
+                            int numberAt = at + "webview2 controller ready (pane ".Length;
+                            int close = line.IndexOf(')', numberAt);
+                            int number;
+                            if (close > numberAt
+                                && int.TryParse(line.Substring(numberAt, close - numberAt), out number))
+                            {
+                                panes.Add(number);
+                            }
+                        }
+                    }
+                }
+                return panes.Count;
+            }
+            catch (Exception ex)
+            {
+                Log.Info("pane-készlet olvasása: " + ex.Message);
+                return 0;
+            }
         }
 
         /// <summary>
@@ -1105,6 +1223,7 @@ namespace DshTray
                     // ezért a kitűzött ikonra kattintva a rejtett munkaasztal-ablak is
                     // előjött (két ablak egyszerre). Csak az AKTÍV asztalét mutatjuk.
                     IntPtr h = WindowHandleOf(desktop);
+                    bool wasHidden = h != IntPtr.Zero && !NativeMethods.IsWindowVisible(h);
                     if (h == IntPtr.Zero)
                     {
                         StartDesktopWindow(desktop);
@@ -1120,6 +1239,7 @@ namespace DshTray
                     }
                     HideOtherDesktopWindows(desktop, h);
                     EnsureMaximized(desktop);
+                    if (wasHidden) WakeWindow(h);
                     return;
                 }
                 StartWindow();
@@ -1353,6 +1473,9 @@ namespace DshTray
                 if (proc == null) return;
                 File.WriteAllText(DesktopPidPath(desktop), proc.Id.ToString(CultureInfo.InvariantCulture), new UTF8Encoding(false));
                 Log.Info("munkaasztal " + desktop + " pid=" + proc.Id);
+                // Az aktív asztal ablakának indítási ideje: a másik asztal
+                // előindítása ehhez méri a panelek elkészültét (2026-11-20).
+                if (desktop == activeNow) _activeWindowStartedAt = DateTime.Now;
                 // A NEM aktiv asztal ablaka rejtve maradjon: kulonben ket ablak
                 // lathato egyszerre. A rejtést csak a WebView2-k inicializalasa
                 // UTAN vegezzuk (addig a rejtett ablak 0 meretu paneleket adna),
@@ -1506,8 +1629,31 @@ namespace DshTray
         {
             IntPtr h = WindowHandleOf(desktop);
             if (h == IntPtr.Zero) return;
+            bool wasHidden = !NativeMethods.IsWindowVisible(h);
             Activate(h);
             EnsureMaximized(desktop);
+            if (wasHidden) WakeWindow(h);
+        }
+
+        /// <summary>
+        /// A megjelenített ablak paneljeinek újrarajzolása (2026-11-20).
+        ///
+        /// MIÉRT KELL: a tálca HWND-szinten rejti/mutatja az ablakot
+        /// (`ShowWindow`), amitől a WPF `Visibility`/`IsVisible` NEM változik
+        /// meg — ezért az ablak saját „megjelenés után méretezz újra" ága soha
+        /// nem futott le. Ha a panelek a REJTÉS alatt töltődtek újra (a friss
+        /// token megérkezésekor ez a normális eset), a visszamutatás után az
+        /// ablak TISZTA FEHÉR maradt (mért panasz, 2026-11-20 04:03). A tálca
+        /// ezért megjelenítés után megkéri az ablakot a felületek újrateremtésére.
+        /// </summary>
+        private void WakeWindow(IntPtr h)
+        {
+            if (h == IntPtr.Zero || _wakeMessage == 0) return;
+            try
+            {
+                NativeMethods.PostMessage(h, (int)_wakeMessage, IntPtr.Zero, IntPtr.Zero);
+            }
+            catch (Exception ex) { Log.Error("panel-ébresztés: " + ex.Message); }
         }
 
         /// <summary>
@@ -1539,11 +1685,53 @@ namespace DshTray
                 if (!NativeMethods.IsWindowVisible(h)) return;
                 string title = NativeMethods.GetWindowTextString(h);
                 if (!string.Equals(title, "DeepSeek Harness", StringComparison.Ordinal)) return;
-                if (NativeMethods.IsZoomed(h)) return;
+
+                // MÉRT HIBA (2026-11-20, boot után): a felhasználó szerint az
+                // ablak „teljes képernyőn jelent meg, de csak a képernyő egy kis
+                // részét foglalta el". Az `IsZoomed` ilyenkor is IGAZ, mert a
+                // maximalizálás a boot alatti átmeneti monitor-felállásra
+                // történt. Ezért a méretet is ellenőrizzük a monitor
+                // munkaterületéhez: ha kisebb, RESTORE + MAXIMIZE.
+                int width, height, workWidth, workHeight;
+                bool measured = MeasureAgainstMonitor(h,
+                    out width, out height, out workWidth, out workHeight);
+                if (NativeMethods.IsZoomed(h))
+                {
+                    if (!measured || (width >= workWidth - 24 && height >= workHeight - 24)) return;
+                    Log.Info("ablak maximalizált, de kisebb a munkaterületnél: " + width + "x" + height
+                        + " < " + workWidth + "x" + workHeight + " — újramaximalizálás");
+                    NativeMethods.ShowWindow(h, NativeMethods.SW_RESTORE);
+                    Thread.Sleep(120);
+                }
                 NativeMethods.ShowWindow(h, NativeMethods.SW_MAXIMIZE);
                 Log.Info("ablak maximalizalva (asztal " + desktop + ", a beallitas szerint)");
             }
             catch (Exception ex) { Log.Error("maximalizalas: " + ex.Message); }
+        }
+
+        /// <summary>
+        /// Az ablak téglalapja és a hozzá tartozó monitor munkaterülete (px).
+        /// Visszatérés: false, ha bármelyik adat nem olvasható (ilyenkor nem
+        /// döntünk az ablak méretéről).
+        /// </summary>
+        private static bool MeasureAgainstMonitor(IntPtr h,
+            out int width, out int height, out int workWidth, out int workHeight)
+        {
+            width = height = workWidth = workHeight = 0;
+            NativeMethods.RECT rect;
+            if (!NativeMethods.GetWindowRect(h, out rect)) return false;
+            width = rect.Right - rect.Left;
+            height = rect.Bottom - rect.Top;
+            if (width <= 0 || height <= 0) return false;
+
+            IntPtr monitor = NativeMethods.MonitorFromWindow(h, NativeMethods.MONITOR_DEFAULTTONEAREST);
+            if (monitor == IntPtr.Zero) return false;
+            var info = new NativeMethods.MONITORINFO();
+            info.cbSize = Marshal.SizeOf(typeof(NativeMethods.MONITORINFO));
+            if (!NativeMethods.GetMonitorInfo(monitor, ref info)) return false;
+            workWidth = info.rcWork.Right - info.rcWork.Left;
+            workHeight = info.rcWork.Bottom - info.rcWork.Top;
+            return workWidth > 0 && workHeight > 0;
         }
 
         private static void Activate(IntPtr h)
@@ -1718,12 +1906,16 @@ namespace DshTray
         {
             Log.Info("asztalvaltas -> " + target);
             bool shown = false;
+            bool wasHidden = false;
             for (int i = 0; i < 100; i++)
             {
                 if (RunningDesktopWindow(target) == 0 && i % 10 == 0) StartDesktopWindow(target);
                 IntPtr h = WindowHandleOf(target);
                 if (h != IntPtr.Zero)
                 {
+                    // Csak akkor kell felületet újraépíteni, ha az ablak tényleg
+                    // rejtve volt (különben minden váltás fölöslegesen villanna).
+                    wasHidden = !NativeMethods.IsWindowVisible(h);
                     Activate(h);
                     shown = NativeMethods.IsWindowVisible(h);
                     if (shown) break;
@@ -1738,6 +1930,9 @@ namespace DshTray
             // A célablak megjelenítése után a maximalizált állapot érvényesítése
             // (a beállítás szerint) — különben egy váltás normál méretre viheti.
             EnsureMaximized(target);
+            // A rejtett ablak panelei a rejtés alatt újratöltődhettek: kérjük a
+            // felületek újrateremtését, különben az ablak FEHÉR marad (2026-11-20).
+            if (wasHidden) WakeWindow(WindowHandleOf(target));
             // A régi ablak rejtése CSAK a cél megjelenése után, hogy a képernyő
             // ne maradjon üresen (ez volt a „bezár, aztán kinyit" élmény).
             IntPtr activeHandle = WindowHandleOf(target);
@@ -2163,6 +2358,45 @@ namespace DshTray
             return name.ToString();
         }
 
+        // ── megjelenítés/monitor (2026-11-20) ────────────────────────────
+        public const int MONITOR_DEFAULTTONEAREST = 2;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MONITORINFO
+        {
+            public int cbSize;
+            public RECT rcMonitor;
+            public RECT rcWork;
+            public uint dwFlags;
+        }
+
+        [DllImport("user32.dll")]
+        public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr MonitorFromWindow(IntPtr hWnd, int flags);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+        /// <summary>A panel-ébresztő üzenet neve (a DshWindow ugyanezt regisztrálja).</summary>
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern uint RegisterWindowMessage(string lpString);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
         internal static extern int SetCurrentProcessExplicitAppUserModelID(string appID);
     }
@@ -2184,14 +2418,8 @@ namespace DshTray
             }
 
             // Függő frissítés alkalmazása: a build által hátrahagyott
-            // *.exe.new fájlok cseréje, amint a célfájl nincs zárolva.
-            try
-            {
-                string root = System.IO.Path.GetFullPath(
-                    System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".."));
-                PendingUpdate.Apply(root);
-            }
-            catch { }
+            // *.exe.new fájlok cseréje a TrayApp konstruktorában történik, a
+            // napló indítása UTÁN (2026-11-20) — így az eredmény mérhető.
 
             // Egyetlen tálca-példány: a második indítás egyszerűen kilép.
             bool created;

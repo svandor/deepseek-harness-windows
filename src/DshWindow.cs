@@ -95,7 +95,7 @@ namespace DshWindow
             try
             {
                 string rootDir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".."));
-                PendingUpdate.Apply(rootDir);
+                PendingUpdate.Apply(rootDir, Logger.Info);
             }
             catch (Exception updateError)
             {
@@ -625,6 +625,10 @@ namespace DshWindow
             };
 
             ScheduleAutoClose(window, opts.CloseAfterSeconds);
+            // Megjelenítés/monitor-váltás utáni helyreállítás (2026-11-20): a
+            // tálca HWND-szintű rejtése/mutatása mellett a panelek felületét
+            // ébreszteni kell, és a maximalizált méretet ellenőrizni kell.
+            WindowRecovery.Install(window, content, hosts, wantMaximized);
             app.MainWindow = window;
             app.Run(window);
             foreach (DshWebViewHost pane in hosts)
@@ -702,6 +706,10 @@ namespace DshWindow
         private bool _restarting;
         private System.Windows.Threading.DispatcherTimer _tokenWatch;
         private DateTime _tokenWatchSince;
+        /// <summary>A felület/panele méret-eltérés utolsó naplózása (3 s kötés).</summary>
+        private DateTime _lastMismatchLog = DateTime.MinValue;
+        /// <summary>Egymást követő méret-eltérések száma (2 után kényszerített méretezés).</summary>
+        private int _sizeMismatchStreak;
 
 
         /// <summary>The child HWND WebView2 renders into (focus target).</summary>
@@ -1491,6 +1499,54 @@ namespace DshWindow
             }
         }
 
+        /// <summary>
+        /// A panel felületének újraélesztése rejtett → látható váltás után.
+        ///
+        /// MIÉRT KELL (MÉRT HIBA, 2026-11-20, boot után): a tálca a nem aktív
+        /// asztal ablakát `ShowWindow(SW_HIDE)`-dal rejti el; a friss token
+        /// megérkezésekor a panelek MÉG REJTETT állapotban töltődtek újra, és a
+        /// visszamutatás után a WebView2 kompozíciós felülete nem állt helyre —
+        /// az ablak TISZTA FEHÉR maradt, a felhasználónak be kellett zárnia.
+        ///
+        /// A dokumentált kapcsoló a `CoreWebView2Controller.IsVisible`: a
+        /// vezérlő elrejtése megszünteti, újra láthatóvá tétele ÚJRA létrehozza
+        /// a felületet. Ezt csak a megjelenés utáni ELSŐ kör kéri
+        /// (`recreateSurface`), a többi kör csak méretet szinkronizál, hogy ne
+        /// villogjon a kép.
+        /// </summary>
+        internal void WakeUp(bool recreateSurface)
+        {
+            try
+            {
+                UpdateLayout();
+                if (!recreateSurface || _controller == null)
+                {
+                    Resize();
+                    return;
+                }
+
+                _controller.IsVisible = false;
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        if (_controller == null) return;
+                        _controller.IsVisible = true;
+                        Resize();
+                        Logger.Info("pane " + (_paneIndex + 1) + ": surface re-created after show");
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Info("wake pane " + (_paneIndex + 1) + ": " + ex.Message);
+                    }
+                }), System.Windows.Threading.DispatcherPriority.Loaded);
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("wake pane " + (_paneIndex + 1) + ": " + ex.Message);
+            }
+        }
+
         private void Resize()
         {
             if (_controller == null || _child == IntPtr.Zero) return;
@@ -1502,6 +1558,13 @@ namespace DshWindow
                 int height = rect.Bottom - rect.Top;
                 if (width <= 0 || height <= 0) return;
 
+                // MÉRÉS (2026-11-20): ha a gyerekablak nem követi a panel
+                // WPF-méretét, a WebView2 csak egy sarokban rajzol — pontosan a
+                // „teljes képernyő, de csak egy kis részén van tartalom" tünet.
+                // Ezért eltérésnél naplózunk (legfeljebb 3 másodpercenként
+                // egyszer, hogy ne árassza el a naplót).
+                NoteSizeMismatch(width, height);
+
                 // One pixel of overlap on the right and bottom edges: at
                 // fractional DPI scaling / zoom levels the controller rectangle
                 // otherwise leaves a hairline of unpainted (light) surface that
@@ -1512,6 +1575,68 @@ namespace DshWindow
             catch (Exception ex)
             {
                 Logger.Info("resize: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// A gyerekablak (WebView2 felület) és a panel WPF-méretének összevetése.
+        ///
+        /// MÉRÉS + ÖNGYÓGYÍTÁS (2026-11-20): ha a WebView2 felülete kisebb marad
+        /// a panelnél, a lap csak a panel egy sarkában rajzolódik ki — pontosan
+        /// a „teljes képernyő, de csak egy kis részén van tartalom" tünet. Két
+        /// egymást követő eltérés után a gyerekablakot a panel valódi (eszköz-
+        /// pixel) méretére állítjuk; ez ugyanaz, amit a HwndHost végez, tehát
+        /// nem veszekszünk a layouttal.
+        /// </summary>
+        private void NoteSizeMismatch(int width, int height)
+        {
+            try
+            {
+                double expectedWidth = ActualWidth;
+                double expectedHeight = ActualHeight;
+                if (expectedWidth <= 0 || expectedHeight <= 0) return;
+                PresentationSource source = PresentationSource.FromVisual(this);
+                if (source != null && source.CompositionTarget != null)
+                {
+                    Matrix toDevice = source.CompositionTarget.TransformToDevice;
+                    expectedWidth *= toDevice.M11;
+                    expectedHeight *= toDevice.M22;
+                }
+                if (Math.Abs(width - expectedWidth) <= 2 && Math.Abs(height - expectedHeight) <= 2)
+                {
+                    _sizeMismatchStreak = 0;
+                    return;
+                }
+
+                _sizeMismatchStreak++;
+                DateTime now = DateTime.Now;
+                if ((now - _lastMismatchLog).TotalSeconds >= 3)
+                {
+                    _lastMismatchLog = now;
+                    Logger.Info("pane " + (_paneIndex + 1) + ": surface size " + width + "x" + height
+                        + " differs from the pane size " + ((int)expectedWidth) + "x" + ((int)expectedHeight)
+                        + " (streak " + _sizeMismatchStreak + ")");
+                }
+
+                if (_sizeMismatchStreak < 2) return;
+                _sizeMismatchStreak = 0;
+                int targetWidth = (int)Math.Round(expectedWidth);
+                int targetHeight = (int)Math.Round(expectedHeight);
+                if (targetWidth <= 0 || targetHeight <= 0) return;
+                if (!Win32.SetWindowPos(_child, IntPtr.Zero, 0, 0, targetWidth, targetHeight,
+                        Win32.SWP_NOMOVE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE))
+                {
+                    Logger.Info("pane " + (_paneIndex + 1) + ": surface resize failed (SetWindowPos)");
+                    return;
+                }
+                Logger.Info("pane " + (_paneIndex + 1) + ": surface forced to " + targetWidth + "x" + targetHeight
+                    + " (the layout had left it at " + width + "x" + height + ")");
+                // A vezérlő téglalapja az új gyerekablak-méretet követi.
+                Resize();
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("size check: " + ex.Message);
             }
         }
 
@@ -2476,12 +2601,270 @@ namespace DshWindow
         }
     }
 
+    // ------------------------------------------- show / monitor recovery (2026-11-20)
+
+    /// <summary>
+    /// LÁTHATÓVÁ VÁLÁS és MONITOR-VÁLTÁS utáni helyreállítás.
+    ///
+    /// MÉRT HIBA (a felhasználó jelzése, 2026-11-20 04:0x, boot után):
+    ///   * „a DSH először úgy jelent meg teljes képernyőn, hogy csak a képernyő
+    ///     egy kis részét foglalta el" — a maximalizált ablak a 404-es oldalt
+    ///     mutatta, mert a (javítás nélküli) tálca a boot ELŐTTI, halott tokennel
+    ///     nyitotta meg (lásd `PendingUpdate` és a tálca `_awaitToken` javítását);
+    ///   * „amikor a 2-es ablakra váltottam, tiszta fehér lett az egész" — a
+    ///     rejtett ablak panelei a REJTÉS ALATT töltődtek újra (a friss token
+    ///     megérkezésekor), a `ShowWindow(SW_SHOW)` pedig nem kényszerít
+    ///     újrarajzolást: a WebView2 kompozíciós felülete nem állt helyre.
+    ///
+    /// MIÉRT NEM VOLT ELÉG A MEGLÉVŐ ÚT: a `window.IsVisibleChanged` WPF-oldali
+    /// esemény, a tálca viszont a HWND-t rejti/mutatja `ShowWindow`-nal — ettől
+    /// a WPF `Visibility` NEM változik meg, ezért a „megjelenés utáni
+    /// újraméretezés" ág a gyakorlatban soha nem futott le.
+    ///
+    /// Ezért három, egymástól független jelre dolgozunk (mind kötött, §1.7):
+    ///   1. `WM_SHOWWINDOW` (wParam != 0) — a valódi HWND-t is ez kapja;
+    ///   2. a tálca saját üzenete (`DshHarnessWake`, RegisterWindowMessage) —
+    ///      akkor is működik, ha a WPF az 1-est elfogná;
+    ///   3. `WM_DISPLAYCHANGE` + betöltés — a maximalizált méret ellenőrzése.
+    /// </summary>
+    internal static class WindowRecovery
+    {
+        private static uint _wakeMessage;
+        private static bool _installed;
+        /// <summary>Az ablakot a legutóbbi ébresztés óta elrejtették-e (WM_SHOWWINDOW 0).</summary>
+        private static bool _hiddenSinceLastWake;
+
+        /// <summary>A panelek ébresztése a megjelenés után (növekvő várakozás).</summary>
+        private static readonly int[] WakeDelaysMs = { 120, 700, 1900 };
+
+        /// <summary>Maximálisan hány méret-helyreállítási próba fut egy jelre.</summary>
+        private const int MaxFillAttempts = 5;
+
+        internal static void Install(Window window, Grid content, List<DshWebViewHost> hosts, bool wantMaximized)
+        {
+            if (_installed) return;
+            _installed = true;
+
+            try
+            {
+                _wakeMessage = Win32.RegisterWindowMessage(Win32.WakeMessageName);
+                Logger.Info("wake message registered: " + Win32.WakeMessageName + " = " + _wakeMessage);
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("wake message not registered: " + ex.Message);
+            }
+
+            // A maximalizált állapot ellenőrzése betöltés után is (a boot alatt
+            // a monitor-felállás még változhat, a WPF pedig nem igazítja újra).
+            if (wantMaximized)
+            {
+                window.Loaded += (s, e) => ScheduleFill(window, 0);
+            }
+
+            window.SourceInitialized += (s, e) =>
+            {
+                try
+                {
+                    IntPtr hwnd = new WindowInteropHelper(window).Handle;
+                    HwndSource source = HwndSource.FromHwnd(hwnd);
+                    if (source == null)
+                    {
+                        Logger.Info("show recovery: nincs HwndSource");
+                        return;
+                    }
+                    source.AddHook((IntPtr h, int msg, IntPtr wParam, IntPtr lParam, ref bool handled) =>
+                    {
+                        try
+                        {
+                            if (_wakeMessage != 0 && (uint)msg == _wakeMessage)
+                            {
+                                // A tálca kifejezett kérése: csak akkor küldi, ha az
+                                // ablak előtte rejtve volt.
+                                _hiddenSinceLastWake = false;
+                                ScheduleWake(content, hosts, "a tálca jelzésére");
+                            }
+                            else if (msg == Win32.WM_SHOWWINDOW)
+                            {
+                                if (wParam.ToInt64() == 0)
+                                {
+                                    _hiddenSinceLastWake = true;
+                                }
+                                else if (_hiddenSinceLastWake)
+                                {
+                                    // Csak VALÓDI rejtés után ébresztünk: a
+                                    // legelső megjelenésnél a panelek még
+                                    // inicializálódnak, ott a felület
+                                    // újraépítése fölösleges villanást okozna.
+                                    _hiddenSinceLastWake = false;
+                                    ScheduleWake(content, hosts, "megjelenítés rejtés után (WM_SHOWWINDOW)");
+                                    if (wantMaximized) ScheduleFill(window, 0);
+                                }
+                            }
+                            else if (msg == Win32.WM_DISPLAYCHANGE && wantMaximized)
+                            {
+                                Logger.Info("display change (WM_DISPLAYCHANGE) — a maximalizált méret ellenőrzése");
+                                ScheduleFill(window, 0);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.Info("show recovery: " + ex.Message);
+                        }
+                        return IntPtr.Zero;
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Logger.Info("show recovery hook not installed: " + ex.Message);
+                }
+            };
+        }
+
+        /// <summary>
+        /// A panelek újrarajzolásának kérése. Három, növekvő várakozású kör fut
+        /// (120 / 700 / 1900 ms): a tálca a rejtés/megjelenítés után azonnal
+        /// átadja a fókuszt, a WebView2 viszont néhány száz ms-mal később képes
+        /// új felületet létrehozni. Az első kör hozza létre újra a felületet, a
+        /// többi már csak méretet szinkronizál (nem villog).
+        /// </summary>
+        private static void ScheduleWake(Grid content, List<DshWebViewHost> hosts, string reason)
+        {
+            Logger.Info("panels waking up (" + reason + ")");
+            for (int pass = 0; pass < WakeDelaysMs.Length; pass++)
+            {
+                bool recreate = pass == 0;
+                var timer = new System.Windows.Threading.DispatcherTimer
+                {
+                    Interval = TimeSpan.FromMilliseconds(WakeDelaysMs[pass])
+                };
+                timer.Tick += (s, e) =>
+                {
+                    timer.Stop();
+                    try
+                    {
+                        content.UpdateLayout();
+                        for (int i = 0; i < hosts.Count; i++) hosts[i].WakeUp(recreate);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Info("panel wake: " + ex.Message);
+                    }
+                };
+                timer.Start();
+            }
+        }
+
+        private static void ScheduleFill(Window window, int attempt)
+        {
+            int delay = attempt == 0 ? 300 : 400 + attempt * 500;
+            var timer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(delay)
+            };
+            timer.Tick += (s, e) =>
+            {
+                timer.Stop();
+                bool again = false;
+                try
+                {
+                    again = FillCheck(window, attempt);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Info("fill check: " + ex.Message);
+                }
+                if (again) ScheduleFill(window, attempt + 1);
+            };
+            timer.Start();
+        }
+
+        /// <summary>
+        /// Ellenőrzi, hogy a (szándékosan) maximalizált ablak tényleg kitölti-e a
+        /// monitor munkaterületét; ha nem, újramaximalizálja. Visszatérés: kell-e
+        /// még egy kör.
+        ///
+        /// MIÉRT: a `showCmd=3` / `IsZoomed` igaz lehet akkor is, ha a téglalap
+        /// kicsi (a maximalizálás a boot alatti átmeneti monitor-felállásra
+        /// történt, és a WM_DISPLAYCHANGE után sem igazodik újra).
+        /// </summary>
+        private static bool FillCheck(Window window, int attempt)
+        {
+            IntPtr hwnd = new WindowInteropHelper(window).Handle;
+            if (hwnd == IntPtr.Zero) return false;
+            if (!Win32.IsWindowVisible(hwnd)) return false;
+
+            Win32.RECT rect;
+            if (!Win32.GetWindowRect(hwnd, out rect)) return false;
+            int width = rect.Right - rect.Left;
+            int height = rect.Bottom - rect.Top;
+            if (width <= 0 || height <= 0) return false;
+
+            IntPtr monitor = Win32.MonitorFromWindow(hwnd, Win32.MONITOR_DEFAULTTONEAREST);
+            if (monitor == IntPtr.Zero) return false;
+            var info = new Win32.MONITORINFO();
+            info.cbSize = Marshal.SizeOf(typeof(Win32.MONITORINFO));
+            if (!Win32.GetMonitorInfo(monitor, ref info)) return false;
+            int workWidth = info.rcWork.Right - info.rcWork.Left;
+            int workHeight = info.rcWork.Bottom - info.rcWork.Top;
+            if (workWidth <= 0 || workHeight <= 0) return false;
+
+            // A maximalizált ablak a munkaterületnél néhány pixelrel nagyobb is
+            // lehet (keret), kisebb viszont nem — 24 px ráhagyás a tálca/él esetére.
+            const int tolerance = 24;
+            if (width >= workWidth - tolerance && height >= workHeight - tolerance)
+            {
+                Logger.Info("window fills its monitor: " + width + "x" + height
+                    + " (work area " + workWidth + "x" + workHeight + ", attempt " + attempt + ")");
+                return false;
+            }
+
+            if (attempt >= MaxFillAttempts)
+            {
+                Logger.Error("window stayed smaller than its monitor after " + MaxFillAttempts
+                    + " attempts: " + width + "x" + height + " < " + workWidth + "x" + workHeight);
+                return false;
+            }
+
+            Logger.Info("window is smaller than its monitor: " + width + "x" + height
+                + " (work area " + workWidth + "x" + workHeight + ") — re-maximising ("
+                + (attempt + 1) + "/" + MaxFillAttempts + ")");
+            // WPF-oldali váltás: a Normal -> Maximized valódi SW_RESTORE/SW_MAXIMIZE
+            // párt vált ki, a RestoreBounds (a normál méret) érintetlen marad.
+            window.WindowState = WindowState.Normal;
+            window.WindowState = WindowState.Maximized;
+            if (window.WindowState != WindowState.Maximized)
+            {
+                // WPF nem vette át: Win32 úton kényszerítjük.
+                Win32.ShowWindow(hwnd, Win32.SW_RESTORE);
+                Win32.ShowWindow(hwnd, Win32.SW_MAXIMIZE);
+            }
+            return true;
+        }
+    }
+
     // ------------------------------------------------------------- native helpers
 
     internal static class Win32
     {
         public const int WM_SIZE = 0x0005;
         public const int WM_DPICHANGED = 0x02E0;
+        // 2026-11-20: a tálca HWND-szinten rejti/mutatja az ablakot, ezért a
+        // megjelenés egyetlen megbízható jelzése a WM_SHOWWINDOW (a WPF
+        // IsVisible NEM változik meg tőle). A WM_DISPLAYCHANGE a boot alatt
+        // megváltozó monitor-felállás (maximalizált, de kicsi ablak) jele.
+        public const int WM_SHOWWINDOW = 0x0018;
+        public const int WM_DISPLAYCHANGE = 0x007E;
+
+        public const int SW_RESTORE = 9;
+        public const int SW_MAXIMIZE = 3;
+        public const int MONITOR_DEFAULTTONEAREST = 2;
+
+        // SetWindowPos kapcsolók (a panel gyerekablakának kényszerített méretezéséhez).
+        public const uint SWP_NOSIZE = 0x0001;
+        public const uint SWP_NOMOVE = 0x0002;
+        public const uint SWP_NOZORDER = 0x0004;
+        public const uint SWP_NOACTIVATE = 0x0010;
         public const int WM_SETFOCUS = 0x0007;
         public const int WM_KILLFOCUS = 0x0008;
         public const int WM_ACTIVATE = 0x0006;
@@ -2625,6 +3008,45 @@ namespace DshWindow
             placement.length = Marshal.SizeOf(typeof(WINDOWPLACEMENT));
             return GetWindowPlacement(hwnd, ref placement) ? placement.showCmd : -1;
         }
+
+        // ── monitor-geometria (2026-11-20) ────────────────────────────────
+        // A maximalizált ablak ellenőrzéséhez nem elég az IsZoomed/showCmd:
+        // boot után a maximalizált téglalap KISEBB maradhat a munkaterületnél
+        // (mért panasz: „teljes képernyő, de csak egy kis részén van tartalom").
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MONITORINFO
+        {
+            public int cbSize;
+            public RECT rcMonitor;
+            public RECT rcWork;
+            public uint dwFlags;
+        }
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr MonitorFromWindow(IntPtr hWnd, int flags);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
+            int x, int y, int cx, int cy, uint flags);
+
+        /// <summary>A tálca „ébresztő" üzenetének azonosítója (közös név).</summary>
+        public const string WakeMessageName = "DshHarnessWake";
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern uint RegisterWindowMessage(string lpString);
 
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]

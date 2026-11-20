@@ -348,6 +348,77 @@ tömörítés után is meglegyenek.
 
 ## 4. Változásnapló
 
+- `2026-11-20` (boot utáni kicsi/fehér ablak) — **a felhasználó boot után azt
+  látta, hogy „az ablak teljes képernyőn jelent meg, de csak a képernyő egy kis
+  részét foglalta el", majd a 2-es ablakra váltva „tiszta fehér lett az egész",
+  és be kellett zárnia.** A kiváltó okok: a boot ELŐTTI halott tokennel nyitott
+  ablak, a HWND-szintű rejtés/mutatás (a WPF nem tud róla), az egyidejű
+  WebView2-indítás, ÉS az, hogy a függő tálca-frissítés **két napja nem lépett
+  életbe**. (1) **MÉRT IDŐVONAL (`state\native-tray.log` + `state\window.log`,
+  04:01:56–04:03:27):** 04:01:56 tálca indul (autostart, Registry `Run` =
+  `bin\DshTray.exe`), 04:02:07 **mindkét** munkaasztal ablaka ugyanabban a
+  másodpercben indul (`munkaasztal 1 pid=28124`, `munkaasztal 2 pid=12308`),
+  04:02:08 `navigation failed: status=Unknown http=404` a `zKaI…` tokennel (ez a
+  **boot előtti** `state\harness.url`), 04:02:14 friss token (`mWq3…`),
+  04:02:16–17 minden panel újratölt (a 2. asztal ablaka **már rejtve** volt
+  04:02:14 óta), 04:02:56 `asztalvaltas -> 2` → fehér, 04:03:10 a felhasználó
+  bezárja (geometria mentve), 04:03:14 tálcaikonra újranyitva (friss tokennel) →
+  hibátlan. (2) **GYÖKÉR-OKOK:** (a) **A függő frissítés nem lépett életbe:**
+  `bin\DshTray.exe.new` (2026-11-18 15:32, a halott tokenre navigálás javítása)
+  mellett `bin\DshTray.exe` **2026-11-17 14:31** volt — a `PendingUpdate`
+  `IsLocked()`-ja a SAJÁT futó képet kihagyta, az autostart pedig közvetlenül a
+  `DshTray.exe`-t indítja (a `PendingUpdate.Apply` csak a `DshLauncher`-en át
+  jutott volna be). Ezért a tálca a boot előtti tokent adta át, a 404-es
+  hibaoldal + a rejtés alatti újratöltés pedig fehér paneleket hagyott. (b) **A
+  „megjelenés utáni újraméretezés" halott kód volt:** a `DshWindow`
+  `window.IsVisibleChanged` eseményre épített, a tálca viszont a HWND-t rejti/
+  mutatja `ShowWindow`-nal — ettől a WPF `Visibility` **nem** változik meg.
+  (c) `IsZoomed`/`showCmd=3` esetén a maximalizált téglalap kisebb is maradhat a
+  monitor munkaterületénél (boot alatti monitor-felállás), ezt semmi nem
+  ellenőrizte. (d) §1.8: a 2. asztal előindítása az 1. asztal ablakának
+  elkészülte előtt futott (a 8 s a tálca indulásához mérődött, nem az ablakhoz).
+  (3) **JAVÍTÁS — `src\PendingUpdate.cs`:** a SAJÁT futó lemezkép **átnevezéssel**
+  cserélődik (a Windows a leképezett képet megtartja) — MÉRVE ártalmatlan
+  teszttel: futó `wscript.exe` átnevezése **OK**; hiba esetén a mentés
+  visszakerül; az eredmény a tálca naplójába megy. (4) **JAVÍTÁS —
+  `src\DshWindow.cs`:** új `WindowRecovery` (a) `WM_SHOWWINDOW` + rejtés-jelző
+  (csak VALÓDI rejtés→megjelenítés után ébreszt, a legelső megjelenésnél nem
+  villant), (b) a tálca `DshHarnessWake` üzenete (`RegisterWindowMessage`) mint
+  független jel, (c) `WM_DISPLAYCHANGE` + betöltés; a `DshWebViewHost.WakeUp()`
+  a **dokumentált** `CoreWebView2Controller.IsVisible` false→true váltással
+  hozza létre újra a felületet (3 kör: 120/700/1900 ms, csak az első épít
+  felületet); a `FillCheck` a maximalizált téglalapot a **monitor
+  munkaterületéhez** méri (max. 5 próba, §1.7), és szükség esetén Normal→
+  Maximized; a `NoteSizeMismatch` 2 egymást követő eltérés után a gyerekablakot
+  a panel valódi méretére állítja (`SetWindowPos`) — ez adja a „csak egy kis
+  részén van tartalom" képet. (5) **JAVÍTÁS — `src\DshTray.cs`:**
+  `EnsureMaximized` a méretet is ellenőrzi (`GetWindowRect` +
+  `MonitorFromWindow`/`GetMonitorInfo`), és ha a maximalizált ablak kisebb a
+  munkaterületnél, `RESTORE` + `MAXIMIZE`; a megjelenítés (`ShowDesktopWindow`,
+  `ApplyDesktopOnce`, `ShowWindow`) csak akkor küld `WakeWindow`-t, ha az ablak
+  ELŐTTE rejtve volt; az `EnsureOtherDesktopWindows` az
+  `WaitActivePanesReady`-vel megvárja az aktív asztal paneleit
+  (`ReadyPaneCountSince`: a napló `webview2 controller ready (pane N)` sorai az
+  ablak indítási ideje után, max. 20 s + 1,2 s ráhagyás), és csak utána indítja a
+  második asztalt; a `PendingUpdate.Apply` a `TrayApp` konstruktorába került, a
+  `Log.Init` UTÁN (mérhető eredmény). (6) **ÉLESÍTÉS (MÉRVE):** `.\build.ps1` →
+  exit 0, `bin\DshWindow.exe` **112 128 B**, `bin\DshTray.exe` **66 048 B**,
+  `bin\DshLauncher.exe` **25 088 B**; a futó példányokat **nem** állítottam le
+  (§1.5) — a cserét a futó képek átnevezése végezte (mentések:
+  `DshWindow.exe.old-20261120-041252`, `DshTray.exe.old-20261120-041252`), a
+  folyamatok élnek és válaszolnak (tálca 26188, ablakok 28124 / 24852). A bináris
+  tartalma bájt-szintű UTF-16 kereséssel ellenőrizve (pl. „DshHarnessWake",
+  „surface re-created after show", „panelei keszen", „pending update applied
+  while running"). A pane-készlet olvasója a VALÓDI `window.log`-on emulálva:
+  04:02:07 után **3**, 04:03:14 után **3** kész panel. **Érvénybe lépés:** a
+  felhasználó tálca „Kilépés" → ikon (a futó tálca/ablak a régi képet futtatja).
+  **Visszavonás:** `Move-Item bin\DshWindow.exe.old-20261120-041252
+  bin\DshWindow.exe -Force` (ugyanígy a tálcára). **Ami NEM mérhető reboot
+  nélkül:** a fehér ablak tényleges előfordulása — a következő booton a napló
+  kimondja: „panels waking up (…)", „pane N: surface re-created after show",
+  „window fills its monitor: …", „surface forced to …", „ablak maximalizált, de
+  kisebb a munkaterületnél", „asztal 1 panelei keszen (3/3)".
+
 - `2026-11-20` (projekt-szabály őr) — **a projekt-szabályok GÉPILEG kényszerítve:
   új `dsh-rule-guard` plugin blokkolja a lomtár nélküli törlést, az admin
   cron-listából kimaradó ütemezést és a név szerinti folyamatölést.**
