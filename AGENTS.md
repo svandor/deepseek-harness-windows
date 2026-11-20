@@ -303,7 +303,111 @@ Kötelező:
   Ha nincs új bejegyzés a várt időpont után, a feladat halott — a
   konfiguráció kinézete nem bizonyíték.
 
+## 3.5 Projekt-szabály őr (dsh-rule-guard) — a szabály NEM csak szöveg
+
+**Miért:** 2026-11-20-án két mért szabálysértés történt, mert a projekt-szabályok
+csak `AGENTS.md` szövegként éltek:
+
+- **Video:** a `zene-fa-epites.py --sync` **`os.unlink`-kal** törölt a célfából
+  **7 291 borítóképet** (+ 11 275 címkézett másolatot linkké cserélt) a 60 napos
+  lomtár-szabály ellenére; ~2 óra újrafutás.
+- **L12:** az ágens **új cront** tett a `routes/console.php`-ba
+  (`applications:orphan-enrollments`), így az **nem jelent meg az admin
+  „Szinkron státusz” listán** (az a `config/app_schedules.php`-ból épül).
+
+**Mi ez:** a `plugins\dsh-rule-guard` plugin a `tools/pre-execute` kapuban, a
+tool-hívás ELŐTT dönt, és indoklással blokkol (`{kind:'deny'}`). Session
+indításakor a projekt kemény szabályait rövid üzenetként befecskendezi, hogy
+tömörítés után is meglegyenek.
+
+**A szabályok** (`plugins\dsh-rule-guard\policy.json`, **hot-reload**):
+
+| szabály | hol | mit tilt |
+|---|---|---|
+| `delete-needs-trash` | Video, Raider (munkaterület vagy ssh-host szerint) | `rm`, `Remove-Item`, `os.unlink`, `shutil.rmtree`, `rsync --delete`, `find -delete`, `git clean -f`, `dd … of=`, `DROP/TRUNCATE` — kivéve lomtár/mentés/temp cél |
+| `no-destructive-code` | Video, Raider (fájlba írt kód) | ugyanez a kódban (ez fogta meg a mért `os.unlink`-ot) |
+| `l12-schedule-admin` | L12 | új közvetlen `Schedule::call` a `routes/console.php`-ba; `Schedule::` más fájlban |
+| `l12-no-prod-artisan` | L12 | SSH + `php artisan`/`migrate`/`config:cache` az éles hoston |
+| `no-name-kill` | **globális** | `Stop-Process -Name`, `taskkill /IM node.exe`, `killall node` (1.6) |
+
+**Kötelező:**
+- A tiltás **determinisztikus**, nincs kikapcsolás és nincs `ask`. Ha a felhasználó
+  mégis végleges törlést kér, a helyes út a lomtár-mechanizmus (visszaállítható);
+  a `policy.json` módosítása tudatos, dokumentált döntés.
+- Új szabály: `rules` + a workspace `rules`/`globalRules` listája, majd
+  `node tools/check-rule-guard.mjs --verbose` (15 eset) és
+  `node plugins/dsh-rule-guard/test/policy.test.mjs` (23 teszt).
+- Telepítés (a `~\.dsh` a sandboxon kívül van, ezért **normál PowerShell**):
+  `.\plugins\dsh-rule-guard\install.ps1` (junction + profil-patch). A patch
+  **boot-időben** töltődik: a plugin a **következő indításnál** lép életbe —
+  a futó Harness-t tilos újraindítani (1.5), a felhasználó indítja újra.
+- Ellenőrzés: `.\plugins\dsh-rule-guard\install.ps1 -Check`; a döntések naplója
+  `~\.dsh\rule-guard.log` (idő, tool, cwd, szabály, indoklás).
+- **Ne kerüld meg** a kaput más primitívvel vagy összefűzött stringgel: a szabály
+  szándéka a lomtár/mentés, nem a minta megkerülése. Ez háló, nem homokozó.
+
 ## 4. Változásnapló
+
+- `2026-11-20` (projekt-szabály őr) — **a projekt-szabályok GÉPILEG kényszerítve:
+  új `dsh-rule-guard` plugin blokkolja a lomtár nélküli törlést, az admin
+  cron-listából kimaradó ütemezést és a név szerinti folyamatölést.**
+  (1) **MÉRT INCIDENSEK (a kiváltó ok):** (a) **Video** — a
+  `zene-fa-epites.py --sync` `sync_target` ágában **`os.unlink`** állt, és
+  2026-11-20 01:35-kor (UTC) a célfából **7 291 borítóképet** törölt, valamint
+  11 275 címkézett másolatot linkké cserélt, a Video `AGENTS.md` 1. pontja
+  (60 napos lomtár) ellenére; ~2 óra újrafutás, a gyűjtő érintetlen. (b) **L12**
+  — 2026-11-20 01:52-kor az ágens **új közvetlen cront** tett a
+  `routes/console.php`-ba (`->name('applications:orphan-enrollments')`), így az
+  **nem jelent meg az admin „Szinkron státusz” listán**, mert az a
+  `config/app_schedules.php` `jobs` tömbből épül (`MasterDataSyncStatusService`
+  → `MasterDataSyncScheduleSettings::ids()`); a session végén az ágens maga
+  ismerte el és átmozgatta. A szöveges szabály tehát nem kényszerít.
+  (2) **MEGVALÓSÍTÁS — `plugins\dsh-rule-guard`:** a `tools/pre-execute`
+  vízesésben a tool-hívás ELŐTT dönt (`{kind:'deny', reason}`), a szabályok a
+  `policy.json`-ban élnek (**mtime hot-reload**, újraindítás nélkül); session
+  indításkor a projekt kemény szabályait rövid plugin-üzenetként befecskendezi
+  (`agent/session-start` → `agent.inject`), hogy tömörítés után is meglegyenek.
+  A motor (`lib/policy.js`) tiszta, FS/hálózat nélkül tesztelhető; a plugin
+  minden hibát elnyel (hiba esetén ENGED, a bootot nem állítja meg). **5 szabály,
+  4 workspace:** `delete-needs-trash` + `no-destructive-code` (Video/Raider,
+  munkaterület VAGY ssh-host szerint: 192.168.1.8, video.kepzes.eu,
+  192.168.1.252, raider), `l12-schedule-admin` (a `config/app_schedules.php`
+  a kapu; a `routes/console.php`-ban csak a 11 meglévő közvetlen cron neve
+  engedett), `l12-no-prod-artisan` (SSH + artisan), globális `no-name-kill`
+  (§1.6). A lomtár-szabály kivételei: lomtár/mentés/`/tmp`/`%TEMP%`/`.tmp`
+  cél, `dd … of=/dev/null`, tiszta olvasó sor, kereső eszköz mögötti minta
+  (`grep "rm -rf"`), és a `.md`/dokumentáció (csak kód-kiterjesztésre fut).
+  (3) **MÉRVE — valós session-naplók újrajátszása a motorral** (`node
+  tools/replay-rule-guard.mjs`, a tömörített naplókból, frame-enként dekódolva):
+  **Video** (2026-11-11 … 11-20, 943 tool-hívás) → **14 blokk**, mind törlési
+  kísérlet, köztük a **2 `os.unlink`-os szerkesztés** (2026-11-17 05:50/05:52),
+  ami a 7 291 borító törlését okozta — a kapu ezt már a fájlba íráskor megfogta
+  volna. **L12** (4 session, 1 090 hívás) → **1 blokk: pontosan a mért
+  szabálysértés** (2026-11-20 01:52, `applications:orphan-enrollments`); a másik
+  3 session (865 hívás) **0 téves riasztás**. A hamis riasztások a mérés alapján
+  javítva: `grep "rm -rf"` (kereső eszköz mögötti minta), `dd if=… of=/dev/null`,
+  `.tmp` piszkozat-szkriptek, `.md` dokumentáció. (4) **TESZTEK:** `node
+  plugins/dsh-rule-guard/test/policy.test.mjs` → **23/23**; `node
+  tools/check-rule-guard.mjs --verbose` → **15/15** (konzisztencia + a mért
+  esetek + a helyes megoldások engedve); a plugin `apply()` szimulációja valódi
+  (fake) ctx-szel: regisztrál (`tools/pre-execute`, `agent/session-start`),
+  a Video `os.unlink` és az L12 új cron **deny**, a lomtár-mozgatás **allow**.
+  (5) **TELEPÍTÉS (MÉRVE):** junction
+  `~\.dsh\profiles\node_modules\dsh-rule-guard` → a repó plugInja (Target
+  ellenőrizve), a `~\.dsh\profiles\web\cordis.patch.yml` **10 bejegyzés**, a
+  `rule-guard` bent, **érvényes YAML** (`lib/check-patch.mjs`, a `js-yaml` a
+  profilból); mentés: `cordis.patch.yml.bak-20261120-032506`. A `~\.dsh` a
+  sandboxon kívül van, ezért a telepítés jóváhagyással futott (egyszeri
+  eszkaláció). **Érvénybe lépés:** a patch BOOT-időben töltődik → a plugin a
+  **következő indításnál** él; a futó Harness-t NEM indítottuk újra (§1.5), a
+  felhasználó indítja (tálca Kilépés → ikon). A `policy.json` viszont onnantól
+  **újraindítás nélkül** frissül. (6) **FÁJLOK:** új
+  `plugins\dsh-rule-guard\` (`package.json`, `policy.json`, `lib\policy.js`,
+  `lib\index.js`, `lib\check-patch.mjs`, `install.ps1`, `test\policy.test.mjs`,
+  `README.md`), új `tools\check-rule-guard.mjs`; a Video/L12 `AGENTS.md`
+  kiegészítve a kényszerítés tényével; a szabály részletei a 3.5 pontban.
+  **Korlát (kimondva):** ez háló, nem homokozó — a mintafelismerést meg lehet
+  kerülni; a cél a véletlen/megszokásból fakadó szabálysértés kizárása.
 
 - `2026-11-19` (modell-lista rendezés) — **a `~/.dsh/settings.yaml` llm-pi-ai
   modell-listái élő katalógusból ellenőrizve és rendberakva; az OpenRouter

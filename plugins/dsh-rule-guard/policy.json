@@ -1,0 +1,214 @@
+{
+  "$comment": [
+    "dsh-rule-guard — gépileg kényszerített projekt-szabályok.",
+    "Minden szabály itt él; a plugin bootkor és fájlváltozáskor olvassa (hot-reload).",
+    "A szabályok NEM javaslatok: a tool-hívás ELŐTT blokkolnak, a modell indoklást kap.",
+    "Új szabály: vedd fel a rules alá, majd egy workspace 'rules' listájába (vagy a globalRules-ba).",
+    "Formátum: JSON (nincs komment), ezért a magyarázat a description/hint mezőkben van."
+  ],
+  "version": 1,
+  "log": "rule-guard.log",
+
+  "globalRules": ["no-name-kill"],
+
+  "workspaces": [
+    {
+      "id": "dsh",
+      "label": "DeepSeek Harness (ez a repó)",
+      "match": ["D:\\Szerver\\Deepseek Harness"],
+      "rules": [],
+      "sessionRules": []
+    },
+    {
+      "id": "video",
+      "label": "Video / video szerver (192.168.1.8)",
+      "match": ["D:\\Szerver\\Video"],
+      "hosts": ["192.168.1.8", "video.kepzes.eu", "svandor@192.168.1.8"],
+      "rules": ["delete-needs-trash", "no-destructive-code"],
+      "sessionRules": [
+        "⛔ VIDEO PROJEKT (gépileg kényszerítve): törlés CSAK 60 napos lomtárba megy (mv ~/.local/state/video-ops/trash/<időbélyeg>/… vagy /var/backups/video-ops/torles/…), felülírás előtt időbélyeges .bak. Az os.unlink / os.remove / shutil.rmtree / rm -rf / Remove-Item a projektben TILOS — kódban is; a lomtár-mechanizmus kötelező, és a lomtár útját a parancs kimenete/naplója mondja ki."
+      ]
+    },
+    {
+      "id": "raider",
+      "label": "Raider szerver",
+      "match": ["D:\\Szerver\\Raider"],
+      "hosts": ["192.168.1.252", "raider"],
+      "rules": ["delete-needs-trash", "no-destructive-code"],
+      "sessionRules": [
+        "⛔ RAIDER: a szerveren törölni csak lomtárba/mentésbe szabad (60 napos megőrzés); közvetlen rm / unlink / rmtree tilos, a művelet naplózva, visszaállíthatóan történjen."
+      ]
+    },
+    {
+      "id": "l12",
+      "label": "termeszetgyogyaszoktatas-L12",
+      "match": ["C:\\Herd\\termeszetgyogyaszoktatas-L12", "D:\\Herd\\termeszetgyogyaszoktatas-L12"],
+      "hosts": ["termeszetgyogyaszoktatas.hu"],
+      "rules": ["l12-schedule-admin", "l12-no-prod-artisan"],
+      "schedule": {
+        "scheduleFile": "routes/console.php",
+        "adminFile": "config/app_schedules.php",
+        "allowedDirectSchedules": [
+          "master-data-sync:",
+          "billing:process-auto-issue-queue",
+          "nav:poll-invoice-status",
+          "accounting:aam-watch",
+          "invoices:issue-finals",
+          "documents:issue-adatlaps",
+          "documents:issue-adatlaps-camps",
+          "documents:issue-late-adatlaps",
+          "training:queue-document-previews",
+          "ledger:close-eur-pockets",
+          "seo:snapshot",
+          "far:stuck-alert"
+        ]
+      },
+      "sessionRules": [
+        "⛔ L12 PROJEKT (gépileg kényszerítve): új cron CSAK a config/app_schedules.php-ba kerülhet (group, label, interval_value, interval_unit, time, schedule_command) — különben nem jelenik meg az admin Szinkron listán. A routes/console.php-ba közvetlen új Schedule::call tilos. Éles: nincs SSH, nincs php artisan."
+      ]
+    }
+  ],
+
+  "rules": {
+    "delete-needs-trash": {
+      "description": "Törlés csak lomtárba/mentésbe. A tiltott minta és a megengedett kivétel soronként dől el.",
+      "type": "deny-lines",
+      "tools": ["pwsh", "bash", "terminal"],
+      "fields": ["command", "script", "input"],
+      "skipReadOnlyLines": true,
+      "skipAfterSearch": true,
+      "patterns": [
+        "\\brm\\s+-{1,2}[A-Za-z-]+",
+        "\\brm\\s+[\"'$~./]",
+        "\\brm\\s+[A-Za-z0-9_*]",
+        "\\bRemove-Item\\b",
+        "\\b(rd|rmdir)\\s+/s\\b",
+        "\\bdel\\s+/[a-z]",
+        "\\berase\\s+",
+        "\\bunlink\\s*\\(",
+        "\\bos\\.unlink\\b",
+        "\\bos\\.remove\\s*\\(",
+        "\\bshutil\\.rmtree\\s*\\(",
+        "\\bPath\\([^)]*\\)\\.unlink\\s*\\(",
+        "\\bfs\\.(unlink|rm)(Sync)?\\s*\\(",
+        "\\bunlinkSync\\s*\\(",
+        "\\brmSync\\s*\\(",
+        "\\brimraf\\b",
+        "\\bfind\\b[^\\n]*\\s-delete\\b",
+        "\\brsync\\b[^\\n]*--delete",
+        "\\bgit\\s+clean\\s+-[a-z]*[fx]",
+        "\\btruncate\\s+(-s\\s*0|-[a-z]+\\s+0)",
+        "\\bdd\\s+if=[^\\n]*\\bof=\\s*(?!/dev/null)",
+        "\\b(mkfs|wipefs|shred)\\b",
+        "\\[System\\.IO\\.(File|Directory)\\]::Delete\\s*\\(",
+        "\\bDROP\\s+TABLE\\b",
+        "\\bTRUNCATE\\s+TABLE\\b",
+        "\\bDELETE\\s+FROM\\s+[`\"\\w.]+\\s*(;|$)"
+      ],
+      "allowPatterns": [
+        "lomt[áa]r",
+        "\\.lomtar",
+        "\\btrash\\b",
+        "trash-purge",
+        "kuka",
+        "recycle",
+        "/var/backups/",
+        "\\.bak\\b",
+        "backup",
+        "ment[eé]s",
+        "%TEMP%",
+        "\\$env:TEMP",
+        "/tmp\\b",
+        "\\bTemporaryDirectory\\b",
+        "\\btmpdir\\b",
+        "\\btmpd?\\b",
+        "\\bscratch\\b",
+        "[\\\\/]\\.tmp([\\\\/]|$)"
+      ],
+      "reason": "A projekt szabálya: TÖRLÉS HELYETT 60 NAPOS LOMTÁRBA HELYEZÉS. A parancs végleges törlést tartalmaz, ami itt tilos.",
+      "hint": "Helyette: mv \"$CEL\" ~/.local/state/video-ops/trash/$(date +%Y%m%d-%H%M%S)/… (vagy /var/backups/video-ops/torles/…), és írd ki a lomtár útját. Kódban: shutil.move(...) a TRASH alá, ne os.unlink/shutil.rmtree."
+    },
+
+    "no-destructive-code": {
+      "description": "Ugyanaz a lomtár-szabály a FÁJLBA ÍRT kódra (a törlés tipikusan kódban, nem shell-parancsban történik).",
+      "type": "deny-lines",
+      "tools": ["write", "edit", "str_replace_editor"],
+      "fields": ["content", "new_string", "new_str", "file_text"],
+      "codeOnly": true,
+      "skipCommentLines": true,
+      "skipScratchPaths": true,
+      "patterns": [
+        "\\bos\\.unlink\\b",
+        "\\bos\\.remove\\s*\\(",
+        "\\bshutil\\.rmtree\\s*\\(",
+        "\\bPath\\([^)]*\\)\\.unlink\\s*\\(",
+        "\\bfs\\.(unlink|rm)(Sync)?\\s*\\(",
+        "\\bunlinkSync\\s*\\(",
+        "\\brmSync\\s*\\(",
+        "\\brimraf\\b",
+        "\\bRemove-Item\\b"
+      ],
+      "allowPatterns": [
+        "lomt[áa]r",
+        "\\.lomtar",
+        "\\btrash\\b",
+        "TRASH",
+        "kuka",
+        "recycle",
+        "/var/backups/",
+        "\\.bak\\b",
+        "backup",
+        "%TEMP%",
+        "/tmp\\b",
+        "TemporaryDirectory",
+        "\\btmpd?\\b",
+        "\\bscratch\\b",
+        "[\\\\/]\\.tmp([\\\\/]|$)"
+      ],
+      "reason": "A projekt szabálya: a kódban is TILOS a végleges törlés (os.unlink / os.remove / shutil.rmtree). A törlést lomtárba mozgatással kell megoldani.",
+      "hint": "Írj lomtárba mozgató ágat: shutil.move(forras, os.path.join(TRASH, stamp, …)), naplóval (eredeti → lomtár), és alapból száraz próbát."
+    },
+
+    "l12-schedule-admin": {
+      "description": "Az L12 admin 'Szinkron státusz' listája a config/app_schedules.php-ból épül. Új cron CSAK ott deklarálható; a routes/console.php közvetlen Schedule::call-ja nem jelenik meg a listán.",
+      "type": "schedule-admin",
+      "tools": ["write", "edit", "str_replace_editor"],
+      "reason": "Új cron-t NEM lehet közvetlenül a routes/console.php-ba tenni: a config/app_schedules.php-ba kell felvenni, különben nem jelenik meg az admin Szinkron listán (nem indítható, nem állítható, nem látszik).",
+      "hint": "Vedd fel a jobot a config/app_schedules.php 'jobs' tömbjébe: group, label, enabled, interval_value, interval_unit, time, schedule_command (és route, ha van admin oldal). Az admin Szinkron státusz ebből épül."
+    },
+
+    "l12-no-prod-artisan": {
+      "description": "Éles L12: nincs SSH, nincs php artisan. Helyi Herd-en szabad.",
+      "type": "deny-lines",
+      "tools": ["pwsh", "bash", "terminal"],
+      "fields": ["command", "script"],
+      "skipReadOnlyLines": true,
+      "patterns": [
+        "ssh[^\\n]*(termeszetgyogyaszoktatas\\.hu|elin)[^\\n]*php\\s+artisan",
+        "ssh[^\\n]*(migrate|config:cache|config:clear|storage:link|queue:work)",
+        "(termeszetgyogyaszoktatas\\.hu|elin)[^\\n]*php\\s+artisan"
+      ],
+      "allowPatterns": [],
+      "reason": "Az L12 éles tárhely Elin FTP: SSH és php artisan ott TILOS. Éles kód = Felpuffantó FTP; éles adat = kézi SQL a phpMyAdminban.",
+      "hint": "Helyi Herd-en futtasd (és jelöld 'helyi' jelzővel), az élesítés pedig Felpuffantó FTP + bemásolható SQL."
+    },
+
+    "no-name-kill": {
+      "description": "Folyamatot NÉV szerint leállítani tilos (más alkalmazásokat és a Harness saját folyamatait is megöli). Csak ellenőrzött PID.",
+      "type": "deny-lines",
+      "tools": ["pwsh", "bash", "terminal"],
+      "fields": ["command", "script"],
+      "skipReadOnlyLines": true,
+      "patterns": [
+        "\\bStop-Process\\b[^\\n]*-Name\\b",
+        "\\btaskkill\\b[^\\n]*/IM\\s+[\"']?(node|msedgewebview2|chrome|php-cgi)\\b",
+        "\\bGet-Process\\b[^\\n]*-Name\\s+[\"']?node",
+        "\\bkillall\\b\\s+(node|php-cgi|chrome)",
+        "\\bpkill\\b\\s+(-f\\s+)?(node|php)"
+      ],
+      "allowPatterns": [],
+      "reason": "AGENTS.md 1.6: folyamatot NÉV szerint leállítani tilos — az más alkalmazásokat és a Harness saját folyamatait is megöli.",
+      "hint": "Előbb ellenőrizd a parancssort/gyermekfákat, majd ellenőrzött PID-del állítsd le (a Harness pidje nem lehet a listában)."
+    }
+  }
+}
