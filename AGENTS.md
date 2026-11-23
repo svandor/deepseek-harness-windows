@@ -244,6 +244,26 @@ kontextusablakot húzod lejjebb — a tiltás oka nem a kontextus. Ne emeld a
 `OLLAMA_MAX_LOADED_MODELS`-t, és ne vezesd vissza a helyi célt a delegálási
 láncba „utolsó tartalékként”.
 
+### 2.2 Az alapértelmezett modell RÖGZÍTVE (dsh-model-pin)  (2026-11-23)
+
+Az új munkamenet alapértelmezett modellje **mindig** a rögzített modell:
+`deepseek-official/deepseek-flash` (= DeepSeek V4.1 Flash), `reasoningEffort: high`.
+A felhasználói kérés szerint ez **nem** követheti a legutóbbi beszélgetésbeli
+modellválasztást (a harness alapból éppen azt tenné: `selectModel()` →
+`saveSelection()` → a `settings.yaml` `agent-default-model` szekciója).
+
+- A rögzítés **egyetlen** helye: `plugins\dsh-model-pin\pin.json` (hot-reload,
+  `enabled: false` kikapcsol). A plugin minden driftre visszaállítja a
+  `~\.dsh\settings.yaml` szekcióját.
+- **TILOS** a `settings.yaml` `agent-default-model` szekcióját „javítani”: a
+  plugin visszaállítja (ez a rögzítés lényege). Más alapértelmezést a
+  `pin.json`-ban kell kérni.
+- A beszélgetés **saját** modellválasztását ez nem érinti (az session-lokális),
+  a delegálás `subagent-model-selection` láncát szintén nem.
+- Ellenőrzés: `node tools\check-model-pin.mjs` (settings + junction + patch +
+  napló) és `node plugins\dsh-model-pin\test\pin.test.mjs` (15 teszt).
+  Napló: `~\.dsh\model-pin.log`. Részletek: `plugins\dsh-model-pin\README.md`.
+
 ---
 
 ## 3. Ütemezett feladatok higiéniája
@@ -347,6 +367,54 @@ tömörítés után is meglegyenek.
   szándéka a lomtár/mentés, nem a minta megkerülése. Ez háló, nem homokozó.
 
 ## 4. Változásnapló
+
+- `2026-11-23` (dsh-model-pin: az alapértelmezett modell **rögzítve** — DeepSeek
+  V4.1 Flash) — **a felhasználó kérése: „állítsd be, hogy új munkamenet
+  indításakor a felajánlott alapértelmezett modell (ágens) mindig a deepseek v41
+  flash legyen, függetlenül attól, hogy mi volt az előző (most az előzőt ajánlja
+  fel)”.** (1) **MÉRT OK (a drift forrása):** a harness szándékos viselkedése az,
+  hogy az alapértelmezés követi a legutóbbi választást — `dsh-api-session-controller`
+  `selectModel()` (`lib/index.js:605–634`) a választás után
+  `agentDefaultModel.saveSelection(selected)`-et hív (`:621`), ami a
+  `~\.dsh\settings.yaml` `agent-default-model` szekcióját írja
+  (`dsh-agent-default-model/lib/index.js:66–72`); az új munkamenet
+  `agentOptions()`-a (`:456–462`) és a kliens választójának alapértéke
+  (`buildModelCatalog`, `:1991`, `catalog.default`) ugyanezt olvassa. A
+  `settings.yaml` mtime-ja (17:30:58) egybeesett az utolsó `model/selection`
+  eseménnyel (`session-a6b22838`, 16:30:58Z) — nem elmélet, hanem a napló.
+  (2) **MEGVALÓSÍTÁS — új `plugins\dsh-model-pin` plugin** (nem mag-patch, tehát
+  a `dsh` csomag frissítése nem törli el): a `pin.json` a rögzítés EGYETLEN
+  helye (hot-reload, `enabled: false` kikapcsol), a plugin induláskor
+  helyreállítja a `settings.yaml` szekcióját és figyeli a `settings/updated`
+  eseményt, minden driftet visszaállítva. A beszélgetés **saját**
+  modellválasztását NEM érinti (az session-lokális), a
+  `subagent-model-selection` láncot sem. A javítások sorban futnak, 6/60 s-os
+  **áramköri fékkel** (§1.7) — nincs lavina; minden hiba elnyelve, a bootot nem
+  állítja meg; minden döntés a `~\.dsh\model-pin.log` JSONL naplóba megy.
+  (3) **MÉRVE (élő, a futó harness processzben — pid 26332, NEM indult újra):**
+  a profil-patch bejegyzés hozzáfűzése után 1 másodperccel megjelent a `boot`
+  sor (`16:39:20.602Z`), tehát a patch a **futó** processzbe is betöltődik; a
+  `settings.yaml` `agent-default-model` szekciójának szándékos átírása
+  `deepseek-v4-pro`-ra **0,4 s alatt** visszaállt, a napló szerint
+  `16:39:47.992Z corrected settings-updated deepseek-v4-pro:high →
+  deepseek-flash:high`; a teszt után a `settings.yaml` **bájtazonos** a
+  mentéssel (SHA256 `3223B95C…C76AC`, 57 404 B, 10 top-level kulcs érintetlen).
+  Tesztek: `pin.test.mjs` **15/15**; `node tools\check-model-pin.mjs` minden
+  ellenőrzése zöld (settings-szekció, junction, patch-bejegyzés, érvényes YAML,
+  napló); `node --check` OK; a profil-patch **11 bejegyzés**, érvényes YAML,
+  mentés: `cordis.patch.yml.bak-20261123-173920`.
+  (4) **FÁJLOK:** új `plugins\dsh-model-pin\` (`package.json`, `pin.json`,
+  `lib\pin.js`, `lib\index.js`, `lib\check-patch.mjs`, `install.ps1`,
+  `test\pin.test.mjs`, `README.md`) és új `tools\check-model-pin.mjs`; a szabály
+  a **2.2** pontban. A telepítés a `dsh-rule-guard` bizonyított útja (junction
+  `~\.dsh\profiles\node_modules\dsh-model-pin` → a repó pluginja + `- insert:`
+  bejegyzés; a `~\.dsh` a sandboxon kívül van, ezért jóváhagyással futott).
+  (5) **Korlát (kimondva):** a rögzítés a **settings layerre** hat — a
+  `settings.yaml` kézi átírása ezért NEM marad meg (ez a lényeg), más
+  alapértelmezést a `pin.json`-ban kell kérni; a `pin.json` olvashatatlan
+  tartalma esetén a beépített Flash-rögzítés él, a hiba a naplóban van. A
+  modellváltás és a javítás között néhány ms-os rés marad (a következő
+  munkamenet már a rögzítést kapja).
 
 - `2026-11-23` (dsh-rule-guard: a session-szabály NE user-üzenetként érkezzen) —
   **a felhasználó jelezte: „a raider repó teljesen irreleváns válaszokat ad”.**
