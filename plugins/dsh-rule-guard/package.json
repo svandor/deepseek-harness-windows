@@ -1,6 +1,6 @@
 {
   "name": "dsh-rule-guard",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Projekt-szabály őr: a tool-hívások előtt blokkolja a lomtár nélküli törlést, az admin cron-listából kimaradó ütemezést és a név szerinti folyamatölést.",
   "type": "module",

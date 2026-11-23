@@ -1,6 +1,6 @@
 {
   "name": "dsh-heap-guard",
-  "version": "1.0.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Memória-telemetria a futó harness processzhez: a heap/limit trendje a state\\harness-memory.jsonl-ben, figyelmeztetés a plafon közelében — hogy a V8 heap OOM (mért: 2026-11-23 18:15:35) ne érjen váratlanul.",
   "type": "module",

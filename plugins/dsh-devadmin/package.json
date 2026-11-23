@@ -1,6 +1,6 @@
 {
   "name": "dsh-devadmin",
-  "version": "0.2.9",
+  "version": "0.3.0",
   "private": true,
   "description": "DeepSeek Harness admin UI for the local dev environment (Caddy + php-cgi, PHP versions, ports, autostart, logs).",
   "type": "module",
