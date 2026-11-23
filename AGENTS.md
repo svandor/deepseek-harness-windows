@@ -89,6 +89,29 @@ A Harness **minden futó sessiont és jobot megszakít**. Ezért:
   megszakadt), a tálca újraindította, **3 futó munka megszakadt**, és a
   hiba-lavina miatt a felhasználónak **Windows-t kellett újraindítania**.
 
+- **MÉRT ESET (2026-11-23 18:15:35, V8 heap OOM — a folyamat MAGA hal meg):**
+  a 46 órája futó harness (`pid 26332`) **nem tervezett újraindítás és nem
+  leállítás** miatt szűnt meg, hanem memóriahiba miatt:
+  `state\harness.err.log` → `FATAL ERROR: Ineffective mark-compacts near heap
+  limit … JavaScript heap out of memory` (3 285,6 MB használt heap; a Node alap
+  V8 plafonja ezen a gépen 4 288 MB). **A rendszer memóriája NEM fogyott el**
+  (mért 2026-11-23 18:3x: commit limit **63,42 GB**, előjegyzett **30,94 GB**,
+  szabad fizikai **12,23 GB**, lapozófájl 32 768/65 536 MB, C: 649 GB szabad) —
+  a plafon a **V8 saját JS-heap korlátja**, nem az operációs rendszeré. A tálca 11 s múlva észlelte
+  („harness nem válaszol a 3080 porton — indítás”, `state\native-tray.log`) és
+  újraindította (`pid 43692`); a megszakadt köröket a
+  `dsh-session-auto-continue` részben folytatta (1 siker: `session-5995949e`;
+  1 alügynök-kör nem folytatható). Futó job nem volt (`state\runs.json` = `[]`).
+  **Két védvonal (mindkettő beépítve):** (a) `src\DshTray.cs`
+  `HarnessHeapFlags = "--max-old-space-size=8192"` — a tálca a harness-t 8 GB
+  plafonnal indítja (a futó tálca a régi binárist futtatja; az új
+  `bin\DshTray.exe.new` a **következő tálca-indításnál** lép életbe a
+  `PendingUpdate.Apply`-jal); (b) `dsh-heap-guard` plugin — 5 percenként
+  `state\harness-memory.jsonl` (heap/plafon %, rss, uptime), WARN 75% / 90%
+  fölött; riport: `node tools\harness-memory.mjs`. Ha a riport `high` vagy
+  `critical`, a munkameneteket **nyugodt pillanatban**, a tálca menüjéből kell
+  újraindítani — ezt a felhasználó dönti el, nem automatizmus.
+
 ### 1.6 TILOS folyamatot NÉV szerint leállítani  (P0, 2026-11-16)
 
 - `Stop-Process -Name` / `taskkill /IM` **tilos** olyan névre, ami nem kizárólag a
@@ -367,6 +390,91 @@ tömörítés után is meglegyenek.
   szándéka a lomtár/mentés, nem a minta megkerülése. Ez háló, nem homokozó.
 
 ## 4. Változásnapló
+
+- `2026-11-23` (a harness V8 heap OOM-ja: emelt plafon + memória-telemetria) —
+  **a felhasználó jelezte: „miért indult újra az előbb a dsh? ez nem történhetett
+  volna meg”.** (1) **MÉRT OK — nem tervezett újraindítás és nem leállítás
+  volt:** a 46 órája futó harness (`pid 26332`) **18:15:35-kor V8 heap OOM-mal
+  leállt**; `state\harness.err.log`:
+  `FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed -
+  JavaScript heap out of memory` — az utolsó GC-k szerint **3 285,6 MB használt
+  heap / 3 460,1 MB commit**, a Node alap `heap_size_limit`-je ezen a gépen
+  **4 288 MB** (mért: `v8.getHeapStatistics()` a futó node-dal). A tálca 11 s
+  múlva észlelte („harness nem válaszol a 3080 porton — indítás”,
+  `state\native-tray.log`) és újraindította (`pid 43692`, 18:15:46); a
+  `dsh-session-auto-continue` a megszakadt körökből **1-et folytatott**
+  (`session-5995949e@380`), egy alügynök-kör nem folytatható
+  („owned by subagent routing”, `state\auto-continue.log`); **futó job nem
+  veszett el** (`state\runs.json` = `[]`), a `state\harness.log` token-sorai
+  folyamatosak. A növekedés pályája: indulás ~430 MB rss / ~135 MB heap, a boot
+  első percében ~900–1 700 MB rss (`_diag.jsonl` `boot-mem` minták, 22 boot),
+  46 óra után ~3,3 GB heap → **~60–70 MB/óra**, azaz hosszú futásnál a plafon
+  elérhető. A **növekedés forrása nem azonosított** (nincs heap-snapshot; külön
+  vizsgálat kell), ezért az első válasz a **mérés + plafon**, nem a „leállítás”.
+  (2) **MEGVALÓSÍTÁS — (a) emelt V8 plafon a tálcában:** `src\DshTray.cs`
+  `HarnessHeapFlags = "--max-old-space-size=8192"`, a `StartNode` a flaget a
+  szkript ELŐTT adja át (a Node csak ott fogadja el), és csak a **harness**
+  kapja meg (a bot/proxy nem); `.\build.ps1` → `bin\DshTray.exe.new` 66 560 B
+  (a régi 66 048 B), a flag UTF-16 bájtkereséssel ellenőrizve a binárisban.
+  **(b) memória-telemetria:** új `plugins\dsh-heap-guard` — 5 percenként
+  `state\harness-memory.jsonl` (heap/limit %, rss, external, uptime, V8 plafon),
+  WARN a plafon **75% / 90%**-a fölött a trend-ETÁ-val; riport
+  `node tools\harness-memory.mjs` (kilépés 0/1/2), teszt 6/6. A plugin a
+  **futó** processzbe is betöltődött (mért: `boot` minta `pid 43692`,
+  `heapLimitMB 4288`, 7,3% — a tálca-flag a következő tálca-indításig nem él),
+  a profil-patch **12 bejegyzés**, érvényes YAML.
+  (3) **MÉRVE:** `dsh-heap-guard/test/memory.test.mjs` **6/6** (a mért OOM
+  számaival: 3 285,6/4 288 = 76,6% → `high`; a 8 GB plafonnal ugyanez 40,1% →
+  `ok`; trend 62,1 MB/óra a mért pályából), `dsh-model-pin` **15/15**,
+  `node tools\check-model-pin.mjs` zöld, `node --check` OK, a futó harness
+  változatlanul él (pid 43692).
+  (4) **FÁJLOK:** `src\DshTray.cs`, `bin\DshTray.exe.new` (+ `DshWindow.exe.new`,
+  a forrás változatlan, csak a zárolt exe miatt), új `plugins\dsh-heap-guard\`
+  (`package.json`, `lib\memory.js`, `lib\index.js`, `lib\check-patch.mjs`,
+  `install.ps1`, `test\memory.test.mjs`, `README.md`), új
+  `tools\harness-memory.mjs`; a szabály az **1.5** pontban.
+  (5) **Amit NEM old meg / korlát:** a plafon-emelés csak **halaszt**
+  (~8 GB-nál a mért ~65 MB/óra mellett ~2–3 nap plusz futásidő); a növekedés
+  okát külön kell megtalálni (heap-snapshot). **Automatikus újraindítás
+  TILOS** (§1.5): a telemetria csak jelez, a munkamenetek újraindítása a
+  felhasználó döntése. A tálca új binárisa a **következő tálca-indításnál** lép
+  életbe; addig a `tools\harness-memory.mjs` „plafon: ALAP (4 288 MB)” sort ír.
+  **(6) HELYESBÍTÉS — a rendszer memóriája NEM fogyott el** (a felhasználó
+  rákérdezett: „a memória nem fogyott el. a virtuális memória kevés?”). MÉRVE
+  (2026-11-23 18:3x, `Get-Counter` a magyar counternévvel:
+  `\Memória\Előjegyzési küszöb (bájt)`, `\Memória\Előjegyzett memória (bájt)`,
+  `\Memória\Rendelkezésre álló memória (bájt)`): **commit limit 63,42 GB,
+  előjegyzett 30,94 GB (51%), szabad 12,23 GB**; lapozófájl `C:\pagefile.sys`
+  32 768/65 536 MB; C: **649 GB szabad**; az összes folyamat private memóriája
+  ~21 GB. A leállás tehát **nem** commit-kimerülés volt: a plafon a **V8 saját
+  JS-heap korlátja** (4 288 MB), amit a Node a `heap_size_limit`-ből ismer és
+  a `--max-old-space-size` állít. A GC-sor `3334,0 (3485,4) -> 3285,6 (3460,1)`
+  értéke **csak az old space** (a zárójel a commit); a nagy objektumok
+  (large-object space: nagy stringek/Bufferek, pl. session-napló dekódolás,
+  nagy tool-kimenet) NEM ebben a számban vannak, ezért a 3,3 GB látszólag
+  „távol” van a 4,288 GB-tól — a fatal a **teljes** heap plafonja és a kért
+  blokk együtteséből jön. Ezt a két lehetőséget (lassú felhalmozódás vs. egy
+  nagy foglalás) a telemetria választja szét: egyenletes emelkedés → felhalmozás,
+  alacsony érték mellett hirtelen halál → nagy blokk. Az emelt plafon tehát a
+  helyes kar, és a mért tartalék (12 GB szabad + 63 GB commit limit) mellett a
+  8 GB biztonságos; ha a trend indokolja, egy sor a 12 GB. **A plafon
+  MÉRTEN skálázható** (ugyanaz a node ezen a gépen: alap **4288 MB**, és
+  `--max-old-space-size` = 6144 → **6336**, 8192 → **8384**, 12288 → **12480**,
+  16384 → **16576 MB**), tehát a 4,3 GB nem hardverkorlát, hanem a V8
+  alap-büdzséje; a 16 GB-ot szándékosan nem használjuk (egy szivárgás akkor a
+  gép tartalékát eszi meg, és a GC-szünetek is nőnek).
+  **(7) CSÚCSFIGYELŐ + a „Ez a kör nem sikerült (content_filter)” üzenet.**
+  A `dsh-heap-guard` 10 másodpercenként mintát vesz, de **csak rekordnál** ír
+  `peak` sort (küszöb **64 MB**, `isNewPeak()`), így az 5 perces minták közé eső
+  hirtelen foglalás is nyomot hagy, naplóáradat nélkül; teszt 7/7. A GUI-ban
+  megjelenő **„Ez a kör nem sikerült — model stopped: content_filter”** a
+  SZOLGÁLTATÓ oldali leállás: a DeepSeek streamje `content_filter` okkal ért
+  véget, ezért az adott kör (nem a feladat, nem a session) véget ért válasz
+  nélkül; a már megírt fájlok a lemezen maradnak (a GUI „Módosított fájlok”
+  listája épp ezt mutatja), és a következő üzenetre a munka folytatható. A
+  kiváltó tartalom a harnessből nem látszik (szolgáltatói döntés, gyakran
+  téves pozitív); ha megismétlődik, a kör rövidítése/újrafogalmazása a teendő,
+  nem a fájlok „megtisztítása”.
 
 - `2026-11-23` (dsh-model-pin: az alapértelmezett modell **rögzítve** — DeepSeek
   V4.1 Flash) — **a felhasználó kérése: „állítsd be, hogy új munkamenet

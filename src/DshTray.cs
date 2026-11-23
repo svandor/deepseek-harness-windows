@@ -939,7 +939,9 @@ namespace DshTray
                     Path.GetDirectoryName(_cfg.DshBin),
                     Path.Combine(_cfg.StateDir, "harness.log"),
                     Path.Combine(_cfg.StateDir, "harness.err.log"),
-                    CaptureTokenUrl);
+                    CaptureTokenUrl,
+                    HarnessHeapFlags);
+                Log.Info("harness node flags: " + HarnessHeapFlags);
                 Log.Info("harness pid=" + pid);
                 _windowUrl = string.Empty;
             }
@@ -1151,6 +1153,27 @@ namespace DshTray
 
         // ── folyamatindítás ────────────────────────────────────────────────
         /// <summary>
+        /// A harness node-példány V8 heap-plafonja.
+        ///
+        /// MÉRT ESET (2026-11-23 18:15:35): a 46 órája futó harness pid 26332
+        /// leállt: `FATAL ERROR: Ineffective mark-compacts near heap limit
+        /// Allocation failed - JavaScript heap out of memory`
+        /// (`state\harness.err.log`). A GC-sorok szerint 3 285,6 MB használt
+        /// heap mellett a V8 lefújta a további foglalást, a Node alap
+        /// `heap_size_limit`-je ezen a gépen 4 288 MB. A folyamat indulásakor
+        /// ~430 MB, a boot első percében ~900-1 700 MB, 46 óra után ~3,3 GB
+        /// heap — ezért a plafont 8 GB-ra emeljük, hogy egy foglalási csúcs ne
+        /// ölje meg a futó munkameneteket (a tálca 11 s múlva újraindította, de
+        /// a megszakadt körök elvesznek).
+        ///
+        /// FIGYELEM: ez a plafon NEM javítja meg a növekedést; a hosszú távú
+        /// megoldás a memória-trend mérése (dsh-heap-guard: state\harness-memory.jsonl)
+        /// és a munkamenetek időnkénti, NYUGODT pillanatban való újraindítása.
+        /// A 32 GB RAM + 32 GB lapozófájl mellett a 8 GB heap biztonságos.
+        /// </summary>
+        private const string HarnessHeapFlags = "--max-old-space-size=8192";
+
+        /// <summary>
         /// Node-folyamat indítása rejtve, a kimenet naplóba írásával.
         ///
         /// MIÉRT KELL A KIMENET ÁTIRÁNYÍTÁSA: a harness a saját token-URL-jét
@@ -1160,9 +1183,13 @@ namespace DshTray
         /// ablakot (401 -> `--restart-if-stale` -> újraindítási hurok).
         /// Ezért minden indított folyamat kimenete naplóba megy, a hívó pedig
         /// sort kaphat kézhez (`onLine`).
+        ///
+        /// `nodeFlags` a szkript ELŐTT kerül a parancssorba (a Node csak ott
+        /// fogadja el a V8 kapcsolóit).
         /// </summary>
         private int StartNode(string script, string extraArgs, string workDir,
-                              string outLog, string errLog, Action<string> onLine)
+                              string outLog, string errLog, Action<string> onLine,
+                              string nodeFlags = "")
         {
             try
             {
@@ -1172,7 +1199,8 @@ namespace DshTray
                 var psi = new ProcessStartInfo
                 {
                     FileName = "node",
-                    Arguments = "\"" + script + "\" " + extraArgs,
+                    Arguments = (string.IsNullOrEmpty(nodeFlags) ? string.Empty : nodeFlags + " ")
+                                + "\"" + script + "\" " + extraArgs,
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     WindowStyle = ProcessWindowStyle.Hidden,
