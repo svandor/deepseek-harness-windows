@@ -348,6 +348,34 @@ tömörítés után is meglegyenek.
 
 ## 4. Változásnapló
 
+- `2026-11-23` (dsh-rule-guard: a session-szabály NE user-üzenetként érkezzen) —
+  **a felhasználó jelezte: „a raider repó teljesen irreleváns válaszokat ad”.**
+  MÉRT OK az utolsó Raider munkamenetből (`session-576aaa5c`): a plugin a
+  `agent.inject`-tel a projekt kemény szabályát (`⛔ RAIDER: törlés csak
+  lomtárba…`) **`role: user`** üzenetként szúrta be a session elejére, így a
+  modell (deepseek-v4-pro, `reasoningEffort: high`) a valódi kérdés
+  („nem működik a vezeték nélküli egér”) mellé második felhasználói kérésnek
+  vette, rákérdezett („milyen törlési szabály? ez hogy jön az egérhez?”), a
+  felhasználó pedig joggal válaszolta: „nem volt ilyen üzenet, honnan vetted?”.
+  **Javítás:** `plugins/dsh-rule-guard/lib/index.js` — az injektált szöveg elé
+  explicit jelölő kerül: `[Rendszerszabály — állandó projekt-kontextus, NEM
+  felhasználói üzenet; nincs belőle feladat, nem kell rá válaszolni vagy
+  rákérdezni.]`. A harness `agent.inject` API-ja csak `UserMessage`-t fogad
+  (a `dsh-agent` `runtime-types.d.ts` szerint), ezért rendszer-role nem
+  adható — a jelölő az elérhető, biztonságos megoldás. A tényleges
+  kényszerítés továbbra is a `tools/pre-execute` kapu. **MÉRVE:**
+  `policy.test.mjs` 23/23, `check-rule-guard.mjs` 15/15, `node --check` OK.
+  **Érvénybe lépés:** a plugin a profilban junction-ön át töltődik, a `policy.json`
+  hot-reload; az `index.js` változása a **következő harness-indításnál** él
+  (§1.5 — futó session miatt nem indítjuk újra). **KÜLÖN GYÖKÉR-OK (a Raider
+  repóban, nem itt):** nincs `AGENTS.md` a `D:\Szerver\Raider`-ben — a modell
+  ezért nem tudta, hogy a repó egy **Ubuntu Linux szervert** ír le
+  (`192.168.1.252`, `ssh svandor@192.168.1.252`, kulcsalapú, sudo nincs), és a
+  **helyi Windows gépet** (VECTOR) debugolta: „milyen windowsról beszélsz? ez
+  egy linux szerver, amin nem megy az egér”. A Raider repóba kell egy
+  `AGENTS.md` a gépek/SSH/„ez nem a helyi gép” tényekkel (lásd a README
+  „Gépek” és „SSH” szakaszát).
+
 - `2026-11-20` (ÁFA a token-költségen: DSH ×1,3462, Ali/OpenRouter ×1,27) —
   **a felhasználó kérése: „finomítani kell a token költségek számításán mind a
   költségelszámolás panelben, mind a delegálási számításoknál … a valós
@@ -426,6 +454,82 @@ tömörítés után is meglegyenek.
   `providers\analyze-escalation.mjs`, `providers\analyze-model-choice.mjs`,
   `providers\autotune.mjs`, `providers\check-vs-bill.mjs`,
   `docs\KOLTSEG-ELSZAMOLAS.md`, `docs\KOLTSEG-ELSZAMOLAS.en.md`.
+  **(11) FELHASZNÁLÓI JELZÉS ugyanezen a napon: „hibás a számítás. a token
+  költség éppen hogy nem tartalmazza az áfát, helyette azt írja, hogy ez nettó,
+  ez pont annak az ellenkezője, amit állítottál. nincs továbbá folyamatjelző,
+  amikor éppen számítást végez a panel, ezért az áfa check box is úgy tűnik,
+  mintha nem működne.”** A (5) pont ELSŐ változata ezt hagyta: amíg a host a
+  régi buildet futtatta, a panel a NETTÓ összeget írta ki „nettó listaár — a
+  mérés még a régi bontásból való” felirattal. Ez elfogadhatatlan: a panelnek
+  MÁR MOST a fizetendő árat kell mutatnia. Ráadásul a `/koltseg/measure` a
+  KORÁBBI eredményt hagyta a képernyőn, csak a válasz után cserélte — semmi nem
+  jelezte, hogy dolgozik, ezért az ÁFA-kapcsoló (ami a mérés
+  `vatPercent`-jéhez volt kötve, nem a konfigurációhoz) „nem működőnek” tűnt.
+  **(12) JAVÍTÁS — a panel MAGA áfázik, host-independensen
+  (`plugins\dsh-koltseg\lib\client.js`):** új tiszta primitívek
+  (`grossRatesOf`, `isHostGross`, `grossRateOfModelName`, `grossFactorOf`, a
+  `__util`-ban exportálva) a válasz `perModel` bontásából számolnak:
+  modellenként ×1,3462 (DSH/ismeretlen) vagy ×1,27 (Alibaba/OpenRouter), az
+  így kapott szorzót a nettó `totals.costUsd`-ra alkalmazva. Ha a host MÁR
+  bruttót ad (`pricing.gross.basis = "gross"`), a panel NEM szoroz (nincs
+  kétszeres áfa). A cache-kedvezmény két összege ugyanezzel a szorzóval megy,
+  a „nettó listaár” felirat **törölve** — a sor mindig „bruttó, áfával”, alatta
+  a bontás (nettó + áfa + DSH-pótdíj, a szorzókkal kiírva).
+  **(13) JAVÍTÁS — folyamatjelző (`busyAt` + CSS pörgő):** a mérés indulásakor
+  és végén állítjuk a `busyAt`-ot; a panel gyökerében egy `<style>` adja a
+  `@keyframes dsh-koltseg-spin`-t (a panel csak inline stílust használ), a
+  jelző a mérés-sornál, a token-sornál ÉS a kapcsolók mellett is megjelenik. A
+  20 s-os háttér-frissítés szándékosan NEM villogtatja. Az **ÁFA-pipa a
+  konfigurációból** olvas (`config.config.vatEnabled`), ezért a kattintás
+  AZONNAL látszik, a hosszabb újraszámolást a pörgő mutatja.
+  **(14) A LÁBLÉC delegálási blokkja is bruttó a régi hostnál
+  (`plugins\dsh-ui-extras\lib\client.js`):** a megtakarítás eddig SZORZÓ NÉLKÜL
+  ment (nettó), a költség-sorok pedig csak a provider-soron kaptak áfát. Most
+  modul-szintű `grossFromModels` / `grossRateOfModelName` / `GROSS_FALLBACK`
+  (exportálva a `check-plugin`-nek) számol a `perModel` és `delegated.models`
+  bontásból; a baseline egységesen ×1,3462; bruttó hostnál nincs szorzás.
+  **(15) MÉRVE:** `check-plugin.mjs` **4 új esete** zöld (modell-család szerinti
+  áfázás; nettó bontásból pontos bruttó; bruttó hostnál nincs dupla szorzás;
+  baseline ×1,3462), a többi tartalmi ellenőrzés változatlanul zöld (a
+  folyamatfa-ölés a sandboxban nem fut, §1); `koltseg` client **16/16** (3 új
+  eset), ui-extras usage **8/8**, a többi készlet zöld. VALÓDI ADATON (ez a
+  munkaterület, 30 nap): a host válasza nettó **$20,4106**, a `perModel`
+  összege **pontosan ugyanennyi**, a panel bruttója **$27,4768** (szorzó
+  1,3462, forrás `model`); a motor ugyanezt **$27,5077**-nak méri — a $0,03
+  különbség a két mérés közti forgalom (a `deepseek-flash` aránya a motor és a
+  panel között 1,34826 a várt 1,3462 helyett, azaz 0,15% adatdrift;
+  `auto-router/auto` és `deepseek-v4-pro`: pontosan ×1,3462). A kiszolgált
+  bundle-ök a HTTP-ről ellenőrizve tartalmazzák az új kódot
+  (`grossFactorOf`/`dsh-koltseg-spin`/`vatOn`, illetve
+  `grossFromModels`/`baselineRate`) → **panel-újratöltés** elég.
+  **(16) HARMADIK FELHASZNÁLÓI JELZÉS ugyanezen a napon: „továbbra sincs
+  folyamatvisszajelzés, ha a költségelszámolásban átkapcsolok munkaterületre,
+  nem lehet tudni, hogy kiírta-e már az eredményt, ha módosítok a
+  beállításon.”** A (13) pörgője önmagában kevés volt: a `/koltseg/measure`
+  **MÉRVE 0,4–0,6 s** alatt válaszol (workspace 621 ms hidegen, 384 ms
+  `fresh=1`-gyel), tehát a jelző egy villanás volt, a számok pedig **csendben**
+  cserélődtek ki — ráadásul a kérés ideje alatt a blokk az ELŐZŐ kiválasztás
+  számait mutatta, ugyanolyan kinézettel, mint a kész eredmény. (17) **JAVÍTÁS
+  (`plugins\dsh-koltseg\lib\client.js`):** a mérés állapota most a kiválasztás
+  KULCSÁT is hordozza (`measureState.key`), és az új, TISZTA
+  `measureFeedback(state, requestedKey, busyAt)` dönti el a jelzést
+  (`stale`, `busy`, `label`; a `__util`-ban exportálva, tesztelve). Hatás:
+  (a) a **számok blokkolja elhalványul (40%)**, amíg az új beállítás mérése fut;
+  (b) felette pörgő + **félkövér** „Újraszámítás folyamatban… (a számok még az
+  előző beállításból valók)”; (c) a blokkban „Ez a szám még az előző
+  beállításból való ({idő})”; (d) sikeres válasz után **„Frissítve: HH:MM:SS”**
+  — ez mondja meg, hogy kiírta-e már; (e) a jelző **minimum 700 ms-ig látszik**
+  (`MIN_BUSY_MILLISECONDS`), hogy észlelhető legyen, a 20 s-os háttér-frissítés
+  viszont nem villogtat. A **`BUILD` felment `2026-11-20.1`-re**, hogy a panel
+  fejlécében (`v2026-11-20.1`) LÁTSZODJON, melyik kliens fut — a korábbi
+  `2026-11-17.4` mellett a felhasználó nem tudhatta, új-e a panel; a
+  „render belépett” diagnosztika is viszi a buildet (`state\koltseg.log`).
+  **MÉRVE:** `koltseg` client **17/17** (új eset: „a számok »elavult« jelzése a
+  kiválasztás kulcsából jön” — friss/átkapcsolt/loading/kulcs nélküli eset), a
+  kiszolgált bundle a HTTP-ről ellenőrizve tartalmazza a `2026-11-20.1`-et, a
+  `status.recalculating`/`status.stale`/`status.updated` szövegeket, a
+  `measureFeedback`-et és a `resultStale` stílust. **Érvénybe lépés:** a panel
+  ÚJRATÖLTÉSE (a fejlécben `v2026-11-20.1` kell legyen).
 - `2026-11-20` (boot utáni kicsi/fehér ablak) — **a felhasználó boot után azt
   látta, hogy „az ablak teljes képernyőn jelent meg, de csak a képernyő egy kis
   részét foglalta el", majd a 2-es ablakra váltva „tiszta fehér lett az egész",

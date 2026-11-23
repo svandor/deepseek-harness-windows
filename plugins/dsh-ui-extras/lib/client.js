@@ -2247,6 +2247,60 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       };
     }
 
+    /**
+     * Bruttó (fizetendő) szorzók tartaléka, ha a host fél még a régi buildet
+     * futtatja (nincs `pricing.gross` a válaszban). Ugyanazok a számok, mint a
+     * host ártáblájában: 27% magyar áfa + 6% DSH-pótdíj = ×1,3462; Alibaba és
+     * OpenRouter ×1,27; az ingyenes lánc ×1.
+     */
+    var GROSS_FALLBACK = { vat: 1.27, dsh: 1.3462 };
+
+    /**
+     * Egy MODELL bruttó szorzója — a host `grossFamily`-jével azonos sorrend:
+     * openrouter ×1,27, alibaba/qwen ×1,27, minden más (DeepSeek és az
+     * ismeretlen, mert az a Flash ár-soron megy) ×1,3462.
+     *
+     * MIÉRT a kliensben is (2026-11-20, felhasználói jelzés): a host-oldali
+     * áfázás csak a következő harness-indításnál él, addig a lábléc a
+     * modell-bontásból (`perModel`, `delegated.models`) számol.
+     */
+    function grossRateOfModelName(model, rates) {
+      var table = rates && typeof rates === "object" ? rates : GROSS_FALLBACK;
+      var lower = String(model ?? "").toLowerCase();
+      if (lower.indexOf("openrouter") !== -1) return table.vat;
+      if (lower.indexOf("alibaba") !== -1 || lower.indexOf("qwen") !== -1) return table.vat;
+      return table.dsh;
+    }
+
+    /**
+     * Bruttó összeg egy modell-bontásból: a nettó ÉS a bruttó is kijön, a
+     * szorzó pedig a bontás arányából (`factor`), amivel a nem bontott
+     * rész-összegek (session, cache) átszámolhatók.
+     *
+     * @param models - `[{ model, <field> }]` (a host válaszának bontása)
+     * @param field - a nettó összeg mezője (`costUsd` / `baselineUsd`)
+     * @param options - `{ basis: "gross"|"net", rates: {vat, dsh} }` — ha a host
+     *   MÁR bruttót ad (`basis: "gross"`), NEM szorzunk (kétszeres áfa lenne).
+     * @returns `{net, gross, factor}` vagy `null`, ha nincs mit számolni.
+     */
+    function grossFromModels(models, field, options) {
+      var list = Array.isArray(models) ? models : [];
+      var opts = options && typeof options === "object" ? options : {};
+      var grossBasis = opts.basis === "gross";
+      var rates = opts.rates && typeof opts.rates === "object" ? opts.rates : GROSS_FALLBACK;
+      var net = 0;
+      var gross = 0;
+      for (var i = 0; i < list.length; i++) {
+        var entry = list[i];
+        var cost = entry !== null && typeof entry === "object" && typeof entry[field] === "number" ? entry[field] : 0;
+        if (!(cost > 0)) continue;
+        net += cost;
+        gross += grossBasis ? cost : cost * grossRateOfModelName(entry.model, rates);
+      }
+      if (!(net > 0) || !(gross > 0)) return null;
+      return { net: net, gross: gross, factor: gross / net };
+    }
+
     /** USD to four decimals, the shape the usage tooltip shows costs in. */
     function formatUsd(value) {
       var amount = Number(value);
@@ -2906,6 +2960,18 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
       var grossRateOfFamily = function (family) {
         return String(family || "") === "deepseek" ? DSH_RATE : VAT_RATE;
       };
+      // A szorzók/összegzés a modul-szintű `grossRateOfModelName` /
+      // `grossFromModels` (a tesztek is ezeket mérik, lásd check-plugin.mjs).
+      var grossRates = { vat: VAT_RATE, dsh: DSH_RATE };
+      var grossOptions = { basis: GROSS_BASIS ? "gross" : "net", rates: grossRates };
+      /**
+       * A kiválasztott ablak bruttó összege: a `perModel` bontásból PONTOSAN
+       * (modellenként ugyanaz a szorzó, mint a hoston); ha nincs bontás, a
+       * konzervatív DSH szorzó.
+       */
+      var windowModels = usageSummary !== null ? grossFromModels(usageSummary.perModel, "costUsd", grossOptions) : null;
+      // A megtakarítás baseline-ja mindig a DSH áron számolódik (egységes szorzó).
+      var baselineRate = GROSS_BASIS ? 1 : DSH_RATE;
       if (usageSummary !== null) {
         tooltipLines.push(t("usageGrossLine", {
           vat: String(VAT_PERCENT_SHOWN),
@@ -2915,19 +2981,27 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
         }));
       }
       var providerLines = [];
+      // A bruttó összeg a modell-bontásból pontos; ha nincs bontás (nagyon régi
+      // host), a DSH szorzó a becslés.
+      var windowFactor = windowModels !== null ? windowModels.factor : DSH_RATE;
+      var grossWindow = function (value) {
+        var amount = typeof value === "number" ? value : 0;
+        return GROSS_BASIS ? amount : amount * windowFactor;
+      };
       if (sessionFigures !== null) {
-        tooltipLines.push(t("usageSessionCost", { cost: formatUsd(sessionFigures.costUsd) }));
+        tooltipLines.push(t("usageSessionCost", { cost: formatUsd(grossWindow(sessionFigures.costUsd)) }));
       } else if (usage) {
         tooltipLines.push(t("usageSessionTokens", { tokens: formatCount(totalTokensOf(usage)) }));
       }
       if (usageSummary && usageSummary.totals) {
         var totals = usageSummary.totals;
-        tooltipLines.push(t("usageWindowCost", { days: String(usageSummary.days), cost: formatUsd(totals.costUsd) }));
-        tooltipLines.push(t("usageWindowAverage", { days: String(usageSummary.days), cost: formatUsd(totals.costUsd / Math.max(1, usageSummary.days)) }));
+        var windowCost = grossWindow(totals.costUsd);
+        tooltipLines.push(t("usageWindowCost", { days: String(usageSummary.days), cost: formatUsd(windowCost) }));
+        tooltipLines.push(t("usageWindowAverage", { days: String(usageSummary.days), cost: formatUsd(windowCost / Math.max(1, usageSummary.days)) }));
         if (usageSummary.activeDays > 0) {
           tooltipLines.push(t("usageActiveDays", {
             days: String(usageSummary.activeDays),
-            cost: formatUsd(totals.costUsd / usageSummary.activeDays)
+            cost: formatUsd(windowCost / usageSummary.activeDays)
           }));
         }
         tooltipLines.push(t("usageWindowTokens", {
@@ -2955,16 +3029,23 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
             var freePocket = delegated.free && typeof delegated.free.requests === "number" ? delegated.free : null;
             var paidPocket = delegated.paid && typeof delegated.paid.requests === "number" ? delegated.paid : null;
             var freeSaving = typeof delegated.freeSavingsUsd === "number" ? delegated.freeSavingsUsd : (delegated.savedUsd || 0);
-            tooltipLines.push(t("usageSavingsAmount", { saved: formatUsd(freeSaving) }));
+            // A megtakarítás is BRUTTÓ: a baseline a DSH áfás árán számol, tehát
+            // egységes szorzóval (a régi host nettó számát itt szorozzuk).
+            var freeSavingShown = freeSaving * baselineRate;
+            tooltipLines.push(t("usageSavingsAmount", { saved: formatUsd(freeSavingShown) }));
+            // A delegált modellek bontása: modellenként pontos bruttó.
+            var delegatedModelsAll = Array.isArray(delegated.models) ? delegated.models : [];
+            var paidModels = delegatedModelsAll.filter(function (entry) { return entry.free !== true; });
+            var paidModelsGross = grossFromModels(paidModels, "costUsd", grossOptions);
             if (freePocket !== null && paidPocket !== null) {
               tooltipLines.push(t("usageDelegatedFree", {
                 requests: formatCount(freePocket.requests),
-                cost: formatUsd(freePocket.costUsd || 0),
+                cost: formatUsd(grossWindow(freePocket.costUsd || 0)),
                 sessions: formatCount(freePocket.sessions || 0)
               }));
               tooltipLines.push(t("usageDelegatedPaid", {
                 requests: formatCount(paidPocket.requests),
-                cost: formatUsd(paidPocket.costUsd || 0)
+                cost: formatUsd(paidModelsGross !== null ? paidModelsGross.gross : grossWindow(paidPocket.costUsd || 0))
               }));
             }
             tooltipLines.push(t("usageSavingsShare", {
@@ -2972,22 +3053,22 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
               total: formatCount(totals.requests),
               share: Math.round((delegated.share || 0) * 1000) / 10 + "%"
             }));
-            var delegatedModels = Array.isArray(delegated.models) ? delegated.models.slice(0, 5) : [];
+            var delegatedModels = delegatedModelsAll.slice(0, 5);
             for (var modelIndex = 0; modelIndex < delegatedModels.length; modelIndex++) {
               var entry = delegatedModels[modelIndex];
               tooltipLines.push(t("usageDelegatedModel", {
                 tag: entry.free === true ? t("usageDelegatedFreeTag") : t("usageDelegatedPaidTag"),
                 model: entry.model || t("unknown"),
                 requests: formatCount(entry.requests || 0),
-                cost: formatUsd(entry.costUsd || 0)
+                cost: formatUsd(grossOf(entry.costUsd || 0, grossRateOfModelName(entry.model, grossRates)))
               }));
             }
             if (freePocket === null || paidPocket === null) {
               // Regi host: a fa, osszevont sor marad, hogy ne vesszen el az adat.
               tooltipLines.push(t("usageSavingsDetail", {
-                cost: formatUsd(delegated.costUsd || 0),
+                cost: formatUsd(grossWindow(delegated.costUsd || 0)),
                 model: delegated.baselineModel || "deepseek-flash",
-                baseline: formatUsd(delegated.baselineUsd || 0),
+                baseline: formatUsd((delegated.baselineUsd || 0) * baselineRate),
                 sessions: formatCount(delegated.sessions || 0)
               }));
             }
@@ -11105,6 +11186,12 @@ var OPENROUTER_ROUTE = "/ui-extras/openrouter";
     // console) report the total INCLUDING the granted credit. A wrong figure in
     // the footer looks like a wrong balance, so the rule gets a test.
     exports.balanceFigures = balanceFigures;
+    // A bruttó (áfás) ár modul-szintű primitívjei — a `tools/check-plugin.mjs`
+    // ezekkel bizonyítja, hogy a lábléc nem szoroz kétszer, és hogy a
+    // delegálási megtakarítás is bruttó.
+    exports.grossFromModels = grossFromModels;
+    exports.grossRateOfModelName = grossRateOfModelName;
+    exports.GROSS_FALLBACK = GROSS_FALLBACK;
     exports.formatMoney = formatMoney;
     // A composer modellfészke (szolgáltató → modell) — a sorokat TISZTA
     // függvény adja, ezért a viselkedés böngésző nélkül tesztelhető.

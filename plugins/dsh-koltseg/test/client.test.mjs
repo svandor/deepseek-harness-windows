@@ -376,3 +376,102 @@ test("kliens: a token költség magyar alakban (tizedesvessző, nem pont)", () =
   assert.equal(fmtUsd(0), "$0,0000");
   assert.equal(fmtUsd(133.7558), "$133,7558");
 });
+
+/* ── Bruttó (áfás) ár a panelben (2026-11-20, felhasználói jelzés) ───────────
+ *
+ * MÉRT HIBA: „a token költség éppen hogy nem tartalmazza az áfát, helyette azt
+ * írja, hogy ez nettó”. A host-oldali áfázás csak a következő harness-indításnál
+ * él, ezért a panel a MODELL-BONTÁSBÓL számol: modellenként ugyanaz a szorzó,
+ * mint a host `grossFamily`-je → az összeg akkor is bruttó, ha a host régi.
+ */
+test("kliens: a bruttó szorzók a host táblájából (vagy a beégetett tartalékból)", () => {
+  const { exported } = loadClient();
+  const { grossRatesOf, isHostGross, FALLBACK_GROSS_RATES } = exported.__util;
+  // Régi host: nincs `pricing.gross` -> beégetett szorzók (1,3462 / 1,27).
+  const oldHost = grossRatesOf({ totals: { costUsd: 10 } });
+  assert.equal(oldHost.dsh, 1.3462);
+  assert.equal(oldHost.alibaba, 1.27);
+  assert.equal(oldHost.openrouter, 1.27);
+  assert.equal(oldHost.free, 1);
+  assert.equal(oldHost.vat, 27);
+  assert.equal(oldHost.surcharge, 6);
+  assert.equal(isHostGross({ totals: { costUsd: 10 } }), false, "régi host: nettó összeget ad");
+  // Új host: a szorzók a válaszból jönnek, és a `basis` kimondja a bruttót.
+  const newHost = grossRatesOf({ pricing: { gross: { basis: "gross", vatPercent: 27, dshSurchargePercent: 6, rates: { dsh: 1.3462, alibaba: 1.27, openrouter: 1.27, free: 1 } } } });
+  assert.equal(newHost.dsh, 1.3462);
+  assert.equal(isHostGross({ pricing: { gross: { basis: "gross" } } }), true, "új host: NE szorozzunk újra");
+  assert.equal(FALLBACK_GROSS_RATES.dsh, 1.3462);
+});
+
+test("kliens: az áfázás a modell-bontásból pontos (DSH ×1,3462, Alibaba/OpenRouter ×1,27)", () => {
+  const { exported } = loadClient();
+  const { grossRateOfModel, grossFactorOf, grossRatesOf } = exported.__util;
+  const rates = grossRatesOf({});
+  assert.equal(grossRateOfModel("deepseek-official/deepseek-flash", rates), 1.3462);
+  assert.equal(grossRateOfModel("deepseek-flash", rates), 1.3462, "provider-előtag nélkül is DSH");
+  assert.equal(grossRateOfModel("alibaba/qwen3.7-flash", rates), 1.27);
+  assert.equal(grossRateOfModel("alibaba-intl/qwen3.8-flash", rates), 1.27);
+  assert.equal(grossRateOfModel("openrouter/anthropic/claude-sonnet-5", rates), 1.27);
+  assert.equal(grossRateOfModel("auto-router/auto", rates), 1.3462, "ismeretlen -> a Flash ár-sor, azaz DSH");
+  // 8 USD DSH + 2 USD Alibaba: (8×1,3462 + 2×1,27) / 10 = 1,33096
+  const mixed = grossFactorOf({ perModel: [
+    { model: "deepseek-official/deepseek-flash", costUsd: 8 },
+    { model: "alibaba/qwen3.7-flash", costUsd: 2 },
+  ] }, rates);
+  assert.equal(mixed.source, "model");
+  assert.ok(Math.abs(mixed.factor - (8 * 1.3462 + 2 * 1.27) / 10) < 1e-12, `a kevert szorzó ${mixed.factor}`);
+  // Csak ingyenes/0 sorok: nincs mit szorozni -> konzervatív DSH becslés.
+  const empty = grossFactorOf({ perModel: [{ model: "worker", costUsd: 0 }] }, rates);
+  assert.equal(empty.source, "estimated");
+  assert.equal(empty.factor, 1.3462);
+});
+
+test("kliens: a panel bruttó összege nem kisebb a nettónál (a felhasználói panasz lényege)", () => {
+  const { exported } = loadClient();
+  const { grossFactorOf, grossRatesOf } = exported.__util;
+  const rates = grossRatesOf({});
+  const net = 20.2673;
+  const { factor } = grossFactorOf({ perModel: [{ model: "deepseek-official/deepseek-flash", costUsd: net }] }, rates);
+  const gross = net * factor;
+  assert.ok(gross > net, `a bruttó (${gross}) nagyobb a nettónál (${net})`);
+  assert.ok(Math.abs(gross - net * 1.3462) < 1e-9, "DSH-only bontásnál pontosan ×1,3462");
+});
+
+/* ── Folyamatvisszajelzés (2026-11-20, felhasználói jelzés) ─────────────────
+ *
+ * MÉRT HIBA: „továbbra sincs folyamatvisszajelzés, ha a költségelszámolásban
+ * átkapcsolok munkaterületre, nem lehet tudni, hogy kiírta-e már az eredményt”.
+ * A `/koltseg/measure` MÉRVE 0,4–0,6 s, a kijelzett számok viszont addig az
+ * ELŐZŐ kiválasztásból valók. A `measureFeedback` dönti el, hogy a felület
+ * elhalványítson-e, és mit írjon a pörgő mellé.
+ */
+test("kliens: a számok „elavult” jelzése a kiválasztás kulcsából jön", () => {
+  const { exported } = loadClient();
+  const { measureFeedback, snapshotKey } = exported.__util;
+  const workspaceKey = snapshotKey(["workspace", "", "D:\\ws", "-", ""]);
+  const sessionKey = snapshotKey(["session", "s1", "D:\\ws", "-", ""]);
+  const ready = { status: "ready", data: { minutes: 10 }, key: workspaceKey };
+
+  // A mérés a MOSTANI kiválasztáshoz tartozik -> nincs jelzés.
+  const fresh = measureFeedback(ready, workspaceKey, 0);
+  assert.equal(fresh.stale, false);
+  assert.equal(fresh.busy, false);
+  assert.equal(fresh.data.minutes, 10);
+
+  // Átkapcsoltunk munkamenetre, a válasz még repül -> ELHALVÁNYÍT + kimondás.
+  const switched = measureFeedback(ready, sessionKey, Date.now());
+  assert.equal(switched.stale, true, "a régi beállítás számai nem tűnhetnek késznek");
+  assert.equal(switched.label, "recalculating");
+  assert.equal(switched.busy, true);
+
+  // Repülő kérés, még nincs adat -> „számítás folyamatban”, adat nélkül.
+  const loading = measureFeedback({ status: "loading", data: null, key: "" }, workspaceKey, 0);
+  assert.equal(loading.busy, true);
+  assert.equal(loading.stale, false);
+  assert.equal(loading.data, null);
+
+  // Régi (kulcs nélküli) állapot: ne riasszon hamis „elavult” jelzéssel.
+  const noKey = measureFeedback({ status: "ready", data: { minutes: 5 } }, workspaceKey, 0);
+  assert.equal(noKey.stale, false);
+  assert.equal(noKey.data.minutes, 5);
+});

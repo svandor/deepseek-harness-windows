@@ -354,6 +354,52 @@ try {
       fail('a missing balance was formatted as a real amount');
     }
 
+    // --- the footer's GROSS (VAT-inclusive) costs ---------------------------
+    //
+    // MÉRT HIBA (2026-11-20, felhasználói jelzés): a lábléc DSH-oldala csak
+    // ×1,06-ot szorzott (a 27% áfa hiányzott), a delegálási megtakarítás pedig
+    // egyáltalán nem kapott szorzót. A host-oldali áfázás a következő
+    // harness-indításig nem él, ezért a kliens a modell-bontásból számol — és
+    // ha a host MÁR bruttót ad, NEM szoroz újra.
+    const rateOf = plugin.grossRateOfModelName;
+    if (rateOf('deepseek-official/deepseek-flash') === 1.3462
+      && rateOf('alibaba/qwen3.7-flash') === 1.27
+      && rateOf('alibaba-intl/qwen3.8-flash') === 1.27
+      && rateOf('openrouter/anthropic/claude-sonnet-5') === 1.27
+      && rateOf('auto-router/auto') === 1.3462) {
+      ok('a footer a modell-család szerint áfázik (DSH ×1,3462; Alibaba/OpenRouter ×1,27)');
+    } else {
+      fail('a footer modell-szorzói nem a host tábláját követik');
+    }
+    const netBasis = { basis: 'net' };
+    const netModels = plugin.grossFromModels([
+      { model: 'deepseek-official/deepseek-flash', costUsd: 8 },
+      { model: 'alibaba/qwen3.7-flash', costUsd: 2 },
+    ], 'costUsd', netBasis);
+    const expectedGross = 8 * 1.3462 + 2 * 1.27;
+    if (netModels && Math.abs(netModels.gross - expectedGross) < 1e-9) {
+      ok(`a nettó host válaszából a bruttó összeg pontos ($${netModels.gross.toFixed(4)} = 8×1,3462 + 2×1,27)`);
+    } else {
+      fail(`a nettó bontásból a bruttó ${JSON.stringify(netModels)} lenne, várt $${expectedGross.toFixed(4)}`);
+    }
+    // Új host: a `costUsd` már bruttó -> a duplázás tilos.
+    const grossModels = plugin.grossFromModels([
+      { model: 'deepseek-official/deepseek-flash', costUsd: 8 },
+      { model: 'alibaba/qwen3.7-flash', costUsd: 2 },
+    ], 'costUsd', { basis: 'gross' });
+    if (grossModels && Math.abs(grossModels.gross - 10) < 1e-9 && Math.abs(grossModels.factor - 1) < 1e-9) {
+      ok('a bruttót adó host válaszát a lábléc NEM szorozza meg újra (nincs kétszeres áfa)');
+    } else {
+      fail(`a bruttó host válasza ${JSON.stringify(grossModels)} lenne, várt 10`);
+    }
+    // A delegálási baseline a DSH áfás árán: 1 nettó dollár -> 1,3462 bruttó.
+    const baseline = plugin.grossFromModels([{ model: 'deepseek-flash', baselineUsd: 1 }], 'baselineUsd', netBasis);
+    if (baseline && Math.abs(baseline.gross - 1.3462) < 1e-9) {
+      ok('a delegálási megtakarítás baseline-ja is bruttó (×1,3462)');
+    } else {
+      fail(`a baseline bruttó értéke ${JSON.stringify(baseline)} lenne, várt 1,3462`);
+    }
+
     // --- the conversation phase readers ------------------------------------
     //
     // The corner controls and the statistics row are registered TWICE: once in

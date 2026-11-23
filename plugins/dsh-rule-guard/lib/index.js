@@ -142,7 +142,18 @@ function apply(ctx, config = {}) {
         const match = workspaceForCwd(policy, cwd);
         const lines = match?.workspace?.sessionRules;
         if (!Array.isArray(lines) || lines.length === 0) return;
-        const text = lines.join('\n\n');
+        // A szabály RENDSZER-kontextusként megy a modell elé. A harness
+        // `agent.inject` csak user-role üzenetet fogad, ezért a szöveget explicit
+        // jelölővel látjuk el, hogy a modell NE kezelje felhasználói feladatnak
+        // vagy kérdésnek. MÉRT ESET (2026-11-23, Raider): a modell a "⛔ RAIDER:
+        // törlési szabály"-ra rákérdezett ("milyen törlési szabály? ez hogy jön az
+        // egérhez?"), mintha a felhasználó kérte volna — pedig csak injektált
+        // kontextus volt. A tényleges kényszerítés a `tools/pre-execute` kapu;
+        // ez az üzenet csak tömörítés-álló emlékeztető.
+        const text =
+          '[Rendszerszabály — állandó projekt-kontextus, NEM felhasználói üzenet; ' +
+          'nincs belőle feladat, nem kell rá válaszolni vagy rákérdezni.]\n\n' +
+          lines.join('\n\n');
         if (typeof agent?.inject === 'function') agent.inject(pluginMessage(text));
       } catch (error) {
         logLine(ctx, 'warn', `session-szabály injektálás hiba: ${String(error)}`);

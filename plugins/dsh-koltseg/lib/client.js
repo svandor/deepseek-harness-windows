@@ -33,7 +33,10 @@ window.__ModuleLoader__.load({
     }
 
     var NS = "koltseg";
-    var BUILD = "2026-11-17.4";
+    // A kliens build-je: a panel fejlécében „v<bBuild>” alakban LÁTSZIK, és a
+    // host `engine` mezőjéhez hasonlítva jelzi, ha a host régi. 2026-11-20.1:
+    // bruttó (áfás) token-sor, pörgő folyamatjelző, „előző beállítás” jelzés.
+    var BUILD = "2026-11-20.1";
     var ROUTE = "/koltseg";
     var HEADER_SLOT = "conversation.session.header.utilities";
     var TRACKER_SLOT = "conversation.composer.dock";
@@ -49,6 +52,17 @@ window.__ModuleLoader__.load({
 
     /** A mérés frissítése nyitott ablak mellett (ms). */
     var REFRESH_MILLISECONDS = 20000;
+
+    /**
+     * A „számítás folyamatban” jelző MINIMÁLIS látszási ideje (ms).
+     *
+     * MIÉRT (2026-11-20, felhasználói jelzés: „továbbra sincs
+     * folyamatvisszajelzés … nem lehet tudni, hogy kiírta-e már az eredményt”):
+     * a `/koltseg/measure` MÉRVE 0,4–0,6 s alatt válaszol, tehát a pörgő egy
+     * villanás volt, a számok pedig csendben kicserélődtek. A jelzőt a válasz
+     * után is ennyi ideig tartjuk, hogy a felhasználó lássa: számolt.
+     */
+    var MIN_BUSY_MILLISECONDS = 700;
 
     /** Az aktivitás-vödrök hossza (ms) és a küldés üteme (ms). */
     var ACTIVITY_BUCKET_MILLISECONDS = 5000;
@@ -104,8 +118,9 @@ window.__ModuleLoader__.load({
       "options.material.note": "Az óradíj alapból magában foglalja a tokeneket; ez a sor csak kimutatás.",
       // 2026-11-20: a sor a FIZETENDŐ (bruttó) árat mutatja — 27% magyar áfa,
       // a DeepSeeknél további 6% DSH-pótdíj (×1,3462); Alibaba/OpenRouter ×1,27.
+      // A szorzást a panel MAGA végzi (a `/ui-extras/usage` modell-bontásából),
+      // ezért akkor is bruttó, ha a host fél még a régi, nettó összeget adja.
       "options.material.usd": "Token költség (bruttó, áfával): {usd}",
-      "options.material.usdNet": "Token költség (nettó listaár — a mérés még a régi, áfa nélküli bontásból való): {usd}",
       "options.material.gross": "Bruttó bontás: nettó {net} listaáron + {vat}% magyar áfa (a DeepSeeknél ezen felül {dsh}% DSH-pótdíj, ×{dshRate}); az Alibaba és az OpenRouter ×{othersRate}. Az egyenleg a szolgáltató számláján lévő, szinkronizált összeg — azon nincs szorzó.",
       "options.material.cache": "Cache-találat: {hit} ({percent}% a bemenetből), {discount}% kedvezmény érvényesítve · kimenet {out} · {requests} kérés",
       "options.material.cache.saved": "Kedvezmény nélkül {baseline} lenne — a cache ennyit hozott: {saved}.",
@@ -114,8 +129,14 @@ window.__ModuleLoader__.load({
       // MÉRT HIBA (2026-11-18): a token-sor a mérés ELSŐ ~1 percében
       // „nem érhető el”-t írt, mert nem volt külön betöltő állapot — a hideg
       // szkennelés (~1300 session-napló) addig tart. Most ki van mondva, hogy
-      // mérés van folyamatban, nem hiba.
+      // mérés van folyamatban, nem hiba — és pörgő jelző is látszik mellette.
       "options.material.loading": "A token költség mérése folyamatban… (az első mérés hideg szkennelés, akár ~1 perc)",
+      "status.calculating": "Számítás folyamatban…",
+      // A KIVÁLASZTÁS megváltozott: a látható számok még az előző beállításból
+      // valók (2026-11-20, felhasználói jelzés: nem lehetett tudni, kész van-e).
+      "status.recalculating": "Újraszámítás folyamatban… (a számok még az előző beállításból valók)",
+      "status.updated": "Frissítve: {at}",
+      "status.stale": "Ez a szám még az előző beállításból való ({at}) — folyamatban az újraszámítás",
       "actions.refresh": "Frissítés",
       "actions.freeze": "Rögzítés",
       "actions.frozen": "Rögzítve.",
@@ -198,13 +219,16 @@ window.__ModuleLoader__.load({
       "options.material": "Token/API material cost (separate line)",
       "options.material.note": "The hourly rate already covers tokens by default; this line is informational.",
       "options.material.usd": "Token cost (gross, VAT included): {usd}",
-      "options.material.usdNet": "Token cost (net list price — the measurement still comes from the old, VAT-free breakdown): {usd}",
       "options.material.gross": "Gross breakdown: net {net} at list price + {vat}% Hungarian VAT (plus a {dsh}% DSH surcharge on DeepSeek, ×{dshRate}); Alibaba and OpenRouter ×{othersRate}. The balance is the provider's synced figure — no multiplier on it.",
       "options.material.cache": "Cache hits: {hit} ({percent}% of input), {discount}% discount applied · output {out} · {requests} requests",
       "options.material.cache.saved": "Without the discount it would be {baseline} — the cache saved {saved}.",
       "options.material.scope": "The token line is filtered to the selected workspace/session.",
       "options.material.unavailable": "Token cost is unavailable here.",
       "options.material.loading": "Measuring the token cost… (the first scan is cold and can take about a minute)",
+      "status.calculating": "Calculating…",
+      "status.recalculating": "Recalculating… (the numbers still come from the previous setting)",
+      "status.updated": "Updated: {at}",
+      "status.stale": "This figure is still from the previous setting ({at}) — recalculating",
       "actions.refresh": "Refresh",
       "actions.freeze": "Freeze",
       "actions.frozen": "Frozen.",
@@ -387,6 +411,72 @@ window.__ModuleLoader__.load({
       return String(value).padStart(2, "0");
     }
 
+    // ── Bruttó (áfás) ár a panelben (2026-11-20, felhasználói jelzés) ──────
+    /**
+     * A bruttó szorzók — UGYANAZOK, mint a host ártáblájában
+     * (`plugins/dsh-ui-extras/lib/index.js` → `GROSS_RATES`):
+     *   DeepSeek ×1,3462 (27% magyar áfa + 6% DSH-pótdíj)
+     *   Alibaba / OpenRouter ×1,27 (27% magyar áfa)
+     *   ingyenes lánc ×1 (0 × bármi = 0)
+     *
+     * MIÉRT a kliensben is: a host-oldali áfázás csak a következő
+     * harness-indításnál lép életbe, a panelnek viszont MOST a fizetendő árat
+     * kell mutatnia. A panel a válasz MODELL-BONTÁSÁBÓL (`perModel`) számol, így
+     * az eredmény modellenként pontosan ugyanaz, mintha a host számolná.
+     */
+    var FALLBACK_GROSS_RATES = { dsh: 1.3462, alibaba: 1.27, openrouter: 1.27, free: 1, vat: 27, surcharge: 6 };
+
+    /** A válasz `pricing.gross` blokkja, ha van (különben a beégetett szorzók). */
+    function grossRatesOf(data) {
+      var gross = data && data.pricing && data.pricing.gross ? data.pricing.gross : null;
+      var rates = gross && gross.rates && typeof gross.rates === "object" ? gross.rates : null;
+      return {
+        dsh: rates && typeof rates.dsh === "number" ? rates.dsh : FALLBACK_GROSS_RATES.dsh,
+        alibaba: rates && typeof rates.alibaba === "number" ? rates.alibaba : FALLBACK_GROSS_RATES.alibaba,
+        openrouter: rates && typeof rates.openrouter === "number" ? rates.openrouter : FALLBACK_GROSS_RATES.openrouter,
+        free: rates && typeof rates.free === "number" ? rates.free : FALLBACK_GROSS_RATES.free,
+        vat: gross && typeof gross.vatPercent === "number" ? gross.vatPercent : FALLBACK_GROSS_RATES.vat,
+        surcharge: gross && typeof gross.dshSurchargePercent === "number" ? gross.dshSurchargePercent : FALLBACK_GROSS_RATES.surcharge,
+      };
+    }
+
+    /** A host MÁR bruttó összegeket ad? (akkor a panel NEM szoroz) */
+    function isHostGross(data) {
+      return !!(data && data.pricing && data.pricing.gross && data.pricing.gross.basis === "gross");
+    }
+
+    /** Egy modell bruttó szorzója (a host `grossFamily`-jével azonos sorrend). */
+    function grossRateOfModel(model, rates) {
+      var table = rates && typeof rates === "object" ? rates : FALLBACK_GROSS_RATES;
+      var lower = String(model ?? "").toLowerCase();
+      if (lower.indexOf("openrouter") !== -1) return table.openrouter;
+      if (lower.indexOf("alibaba") !== -1 || lower.indexOf("qwen") !== -1) return table.alibaba;
+      // DeepSeek és minden ismeretlen (az a Flash ár-sorral megy): DSH szorzó.
+      return table.dsh;
+    }
+
+    /**
+     * A nettó összeg bruttóvá alakításának szorzója.
+     *
+     * A `perModel` bontásból modellenként pontos (`model`); ha nincs bontás
+     * (pl. session-hatókör régi hostnál), a DSH szorzó a konzervatív becslés.
+     * @returns {{factor: number, source: "model"|"estimated"}}
+     */
+    function grossFactorOf(data, rates) {
+      var models = data && Array.isArray(data.perModel) ? data.perModel : [];
+      var netSum = 0;
+      var grossSum = 0;
+      for (var i = 0; i < models.length; i++) {
+        var entry = models[i];
+        var cost = toNumber(entry && entry.costUsd);
+        if (!(cost > 0)) continue;
+        netSum += cost;
+        grossSum += cost * grossRateOfModel(entry.model, rates);
+      }
+      if (netSum > 0 && grossSum > 0) return { factor: grossSum / netSum, source: "model" };
+      return { factor: rates.dsh, source: "estimated" };
+    }
+
     /** `YYYY-MM-DD` a helyi naptár szerint (a host magyar napként értelmezi). */
     function dayText(date) {
       var value = date instanceof Date ? date : new Date(date);
@@ -560,6 +650,33 @@ window.__ModuleLoader__.load({
       between: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" },
       section: { marginTop: "10px", paddingTop: "8px", borderTop: "1px solid rgba(255,255,255,0.10)" },
       label: { opacity: 0.65, fontSize: "11px" },
+      /**
+       * PÖRGŐ FOLYAMATJELZŐ (2026-11-20, felhasználói jelzés: „nincs
+       * folyamatjelző, amikor éppen számítást végez a panel”).
+       *
+       * MIÉRT inline `animation`: a panel csak inline stílusokat használ, a
+       * kulcskockákat a panel gyökerében elhelyezett `<style>` adja (lásd
+       * `spinKeyframes`). A `currentColor` miatt a téma színét örökli.
+       */
+      spin: {
+        display: "inline-block",
+        flex: "0 0 auto",
+        width: "10px",
+        height: "10px",
+        border: "2px solid currentColor",
+        borderTopColor: "transparent",
+        borderRadius: "50%",
+        opacity: 0.8,
+        animation: "dsh-koltseg-spin 0.9s linear infinite",
+      },
+      busy: { display: "flex", alignItems: "center", gap: "6px", marginTop: "8px" },
+      /**
+       * A számok blokkja. `stale` alatt halvány: amíg az új beállítás mérése
+       * fut, a régi számok NE tűnjenek késznek (2026-11-20, felhasználói
+       * jelzés), a halványítás pedig látható állapotváltozás.
+       */
+      result: { transition: "opacity 140ms linear", opacity: 1 },
+      resultStale: { transition: "opacity 140ms linear", opacity: 0.4 },
       input: {
         border: "1px solid var(--dsw-alias-border-l3, rgba(255,255,255,0.22))",
         borderRadius: "6px",
@@ -736,6 +853,35 @@ window.__ModuleLoader__.load({
       return SNAPSHOT_PREFIX + parts.join("|");
     }
 
+    /**
+     * A folyamatvisszajelzés állapota — TISZTA függvény (tesztelhető).
+     *
+     * MIÉRT (2026-11-20, felhasználói jelzés: „ha átkapcsolok munkaterületre,
+     * nem lehet tudni, hogy kiírta-e már az eredményt”): a mérés MÉRVE 0,4–0,6 s,
+     * a kirajzolt számok viszont addig az ELŐZŐ kiválasztásból valók. A
+     * `stale` akkor igaz, ha a mérés kulcsa (`measureState.key`) eltér a most
+     * kiválasztott kulcstól — ilyenkor a felület elhalványítja a számokat és
+     * kimondja, hogy újraszámol; `busy` pedig a repülő kérést jelzi.
+     *
+     * @param measureState `{status, data, key}`
+     * @param requestedKey a MOSTANI kiválasztás kulcsa
+     * @param busyAt a repülő kérés kezdete (0 = nincs)
+     * @returns {{data: object|null, stale: boolean, busy: boolean, label: string}}
+     */
+    function measureFeedback(measureState, requestedKey, busyAt) {
+      var state = measureState !== null && typeof measureState === "object" ? measureState : {};
+      var status = typeof state.status === "string" ? state.status : "loading";
+      var data = status === "ready" && state.data !== null && typeof state.data === "object" ? state.data : null;
+      var shownKey = typeof state.key === "string" ? state.key : "";
+      var stale = data !== null && shownKey.length > 0 && shownKey !== requestedKey;
+      return {
+        data: data,
+        stale: stale,
+        busy: toNumber(busyAt) > 0 || status === "loading",
+        label: stale ? "recalculating" : "calculating"
+      };
+    }
+
     /** @returns {{at: number, data: object}|null} */
     function readSnapshot(key) {
       try {
@@ -806,9 +952,22 @@ window.__ModuleLoader__.load({
       var configStatus = configState[0];
       var setConfigState = configState[1];
 
-      var measureState = react.useState({ status: "loading", data: null, error: "", snapshotAt: 0 });
+      var measureState = react.useState({ status: "loading", data: null, error: "", snapshotAt: 0, key: "", updatedAt: 0 });
       var measureStatus = measureState[0];
       var setMeasureState = measureState[1];
+
+      /**
+       * Folyamatban van-e éppen mérés (a `/koltseg/measure` kérés repül).
+       *
+       * MIÉRT (2026-11-20, felhasználói jelzés: „nincs folyamatjelző … ezért az
+       * áfa check box is úgy tűnik, mintha nem működne”): a mérés a MEGLÉVŐ
+       * adatot hagyta a képernyőn, csak a válasz megérkezésekor cserélte ki —
+       * közben semmi nem jelezte, hogy dolgozik. Most a kérés indulásakor és
+       * befejezésekor állítjuk, a felület pedig pörgő jelzőt rajzol.
+       */
+      var busyState = react.useState(0);
+      var busyAt = busyState[0];
+      var setBusyAt = busyState[1];
 
       var detailsState = react.useState(false);
       var showDetails = detailsState[0];
@@ -827,7 +986,7 @@ window.__ModuleLoader__.load({
       var reloadKey = reloadState[0];
       var setReloadKey = reloadState[1];
 
-      var materialState = react.useState({ status: "off", usd: 0, error: "", gross: false, netUsd: null, tax: null });
+      var materialState = react.useState({ status: "off", usd: 0, error: "", gross: false, netUsd: null, tax: null, rates: FALLBACK_GROSS_RATES, factorSource: "" });
       var material = materialState[0];
       var setMaterial = materialState[1];
 
@@ -863,9 +1022,19 @@ window.__ModuleLoader__.load({
         var alive = true;
         var key = snapshotKey([scope, sessionId, workspace, useRange ? fromText + "~" + toText : "-", profileId]);
         var cached = readSnapshot(key);
-        if (cached !== null) setMeasureState({ status: "ready", data: cached.data, error: "", snapshotAt: cached.at });
-        function load() {
+        // A pillanatkép a MÁR kirajzolt adathoz tartozik: a `key` és a `cached`
+        // jelzi, hogy a számok melyik beállításból valók (a felület ez alapján
+        // mondja ki, hogy „ez még az előző beállítás”).
+        if (cached !== null) setMeasureState({ status: "ready", data: cached.data, error: "", snapshotAt: cached.at, key: key, updatedAt: 0 });
+        var busyStartedAt = 0;
+        // `showBusy`: a KÉZI/újraindított mérés pörgőt kap; a 20 s-os háttér-
+        // frissítés NEM villogtatja a jelzőt (az csak zaj lenne).
+        function load(showBusy) {
           if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+          if (showBusy === true) {
+            busyStartedAt = Date.now();
+            setBusyAt(busyStartedAt);
+          }
           var params = [];
           params.push("scope=" + encodeURIComponent(scope));
           if (scope === "session" && sessionId.length > 0) params.push("id=" + encodeURIComponent(sessionId));
@@ -882,30 +1051,47 @@ window.__ModuleLoader__.load({
             params.push("fresh=1");
             pendingFresh = false;
           }
+          // A mérés MÉRVE 0,4–0,6 s: a pörgőt ennyi ideig nem látni. Ezért a
+          // jelzőt a válasz után is tartjuk egy rövid ideig (MIN_BUSY_MILLISECONDS),
+          // hogy a felhasználó LÁSSA: „számolt, és megjött az eredmény”.
+          function settle() {
+            var elapsed = busyStartedAt === 0 ? MIN_BUSY_MILLISECONDS : Date.now() - busyStartedAt;
+            var left = Math.max(0, MIN_BUSY_MILLISECONDS - elapsed);
+            busyStartedAt = 0;
+            if (left === 0) { setBusyAt(0); return; }
+            setTimeout(function () { if (alive) setBusyAt(0); }, left);
+          }
           getJson(ROUTE + "/measure?" + params.join("&"))
             .then(function (data) {
               if (!alive) return;
+              settle();
               if (data && data.ok === true) {
-                setMeasureState({ status: "ready", data: data, error: "", snapshotAt: 0 });
+                setMeasureState({ status: "ready", data: data, error: "", snapshotAt: 0, key: key, updatedAt: Date.now() });
                 writeSnapshot(key, data);
               } else {
-                setMeasureState({ status: "error", data: null, error: (data && data.error) || "", snapshotAt: 0 });
+                setMeasureState({ status: "error", data: null, error: (data && data.error) || "", snapshotAt: 0, key: key, updatedAt: 0 });
               }
               return undefined;
             })
             .catch(function (error) {
               // Hiba esetén a pillanatkép MARAD (nem cseréljük hibaképernyőre).
               if (!alive) return;
+              settle();
               var fallback = readSnapshot(key);
-              if (fallback !== null) setMeasureState({ status: "ready", data: fallback.data, error: "", snapshotAt: fallback.at });
-              else setMeasureState({ status: "error", data: null, error: String(error && error.message ? error.message : error), snapshotAt: 0 });
+              if (fallback !== null) setMeasureState({ status: "ready", data: fallback.data, error: "", snapshotAt: fallback.at, key: key, updatedAt: 0 });
+              else setMeasureState({ status: "error", data: null, error: String(error && error.message ? error.message : error), snapshotAt: 0, key: key, updatedAt: 0 });
             });
         }
-        load();
-        var timer = setInterval(load, REFRESH_MILLISECONDS);
+        busyStartedAt = Date.now();
+        setBusyAt(busyStartedAt);
+        load(true);
+        var timer = setInterval(function () { load(false); }, REFRESH_MILLISECONDS);
         return function () {
           alive = false;
           clearInterval(timer);
+          // Leszállt kérés ne hagyjon örök pörgőt (a következő effect úgyis
+          // újra beállítja, ha van mit mérni).
+          setBusyAt(0);
         };
       }, [scope, sessionId, workspace, useRange, fromText, toText, profileId, reloadKey]);
 
@@ -955,25 +1141,46 @@ window.__ModuleLoader__.load({
               // A session-hatókör a saját session számát használja, a
               // munkaterület-hatókör a (szűrt) összesítést.
               var stats = scope === "session" && data.session ? data.session : data.totals;
-              var usd = stats && typeof stats.costUsd === "number" ? stats.costUsd : 0;
-              // BRUTTÓ (2026-11-20): a host a `costUsd`-ben már a fizetendő,
-              // áfás összeget adja (27% áfa, a DSH-nál +6%). A `netCostUsd` a
-              // nettó listaár. Ha a host még régi (nincs `pricing.gross`),
-              // akkor a szám NETTÓ — ezt a felirat ki is mondja.
-              var tax = data.pricing && data.pricing.gross ? data.pricing.gross : null;
+              var netUsd = stats && typeof stats.costUsd === "number" ? stats.costUsd : 0;
+              // ── BRUTTÓ (fizetendő) ár — a panel MAGA számolja (2026-11-20) ──
+              // MIÉRT: a host-oldali áfázás csak a következő harness-indításnál
+              // él, a panelnek viszont MOST kell a valós árat mutatnia. Ezért a
+              // szorzót a válasz MODELL-BONTÁSÁBÓL (`perModel`) alkalmazzuk:
+              // modellenként pontosan ugyanaz, mint a host `grossFamily`-je.
+              // Ha a host már a bruttót adja (`pricing.gross.basis = "gross"`),
+              // NEM szorzunk (az kétszeres áfa lenne).
+              var rates = grossRatesOf(data);
+              var hostGross = isHostGross(data);
+              var grossInfo = hostGross ? { factor: 1, source: "host" } : grossFactorOf(data, rates);
+              var factor = grossInfo.factor;
+              var usd = hostGross ? netUsd : netUsd * factor;
+              var netShown = hostGross
+                ? (stats && typeof stats.netCostUsd === "number" ? stats.netCostUsd : netUsd / rates.dsh)
+                : netUsd;
+              // A cache-kedvezmény két összege ugyanabban a pénzben legyen.
+              var hostCache = data.cache && typeof data.cache === "object" ? data.cache : null;
+              var cache = hostCache === null ? null : (hostGross ? hostCache : {
+                ...hostCache,
+                hitCostUsd: toNumber(hostCache.hitCostUsd) * factor,
+                baselineUsd: toNumber(hostCache.baselineUsd) * factor,
+                savedUsd: toNumber(hostCache.savedUsd) * factor,
+              });
               setMaterial({
                 status: "ready",
                 usd,
                 error: "",
-                gross: tax !== null && tax.basis === "gross",
-                netUsd: stats && typeof stats.netCostUsd === "number" ? stats.netCostUsd : null,
-                tax,
+                gross: true,
+                rates,
+                netUsd: netShown,
+                tax: data.pricing && data.pricing.gross ? data.pricing.gross : null,
+                // A szorzó forrása: a bontásból pontos (`model`), különben becsült.
+                factorSource: grossInfo.source,
                 requests: stats && typeof stats.requests === "number" ? stats.requests : 0,
                 missTokens: stats && typeof stats.miss === "number" ? stats.miss : 0,
                 hitTokens: stats && typeof stats.hit === "number" ? stats.hit : 0,
                 outTokens: stats && typeof stats.out === "number" ? stats.out : 0,
                 // A cache-kedvezmény tényleges hatása (a host számolja).
-                cache: data.cache && typeof data.cache === "object" ? data.cache : null,
+                cache,
                 scoped: typeof data.workspace === "string" && data.workspace.length > 0,
               });
               return undefined;
@@ -994,10 +1201,32 @@ window.__ModuleLoader__.load({
 
       var config = configStatus.status === "ready" && configStatus.data ? configStatus.data : null;
       var profiles = config && Array.isArray(config.profiles) ? config.profiles : [];
-      var data = measureStatus.status === "ready" ? measureStatus.data : null;
+      /**
+       * A KIVÁLASZTÁS kulcsa, és hogy a kirajzolt számok EHHEZ tartoznak-e.
+       *
+       * MIÉRT (2026-11-20, felhasználói jelzés: „ha átkapcsolok munkaterületre,
+       * nem lehet tudni, hogy kiírta-e már az eredményt”): a mérés 0,4–0,6 s, a
+       * számok viszont addig az ELŐZŐ beállításból valók — eddig ugyanúgy
+       * néztek ki, mintha készen lennének. Most `stale` jelzi, a blokk
+       * elhalványul, a felette lévő sor pedig kimondja, hogy újraszámol.
+       */
+      var requestedKey = snapshotKey([scope, sessionId, workspace, useRange ? fromText + "~" + toText : "-", profileId]);
+      var feedback = measureFeedback(measureStatus, requestedKey, busyAt);
+      var data = feedback.data;
+      var stale = feedback.stale;
       var vatPercent = data ? toNumber(data.vatPercent) : 0;
       var vatAvailable = config && config.config ? toNumber(config.config.vatPercent) : 27;
       var materialOn = config && config.config ? config.config.materialCost === true : false;
+      /**
+       * Az ÁFA-kapcsoló állapota a KONFIGURÁCIÓBÓL (nem a mérés eredményéből).
+       *
+       * MIÉRT (2026-11-20, felhasználói jelzés: „az áfa check box … úgy tűnik,
+       * mintha nem működne”): a pipa eddig a mérés `vatPercent` mezőjéhez volt
+       * kötve, ami csak a (másodpercekkel később megérkező) új mérésben változik
+       * meg. Most a kattintás AZONNAL látszik (a konfiguráció mentése gyors), a
+       * hosszabb újraszámolást pedig a pörgő jelző mutatja.
+       */
+      var vatOn = config && config.config ? config.config.vatEnabled === true : (data !== null && vatPercent > 0);
 
       function saveRate() {
         var value = toNumber(rate.value);
@@ -1115,6 +1344,11 @@ window.__ModuleLoader__.load({
 
       var body = [];
 
+      /** Pörgő jelző (a folyamatjelzéshez) — a színt a téma adja. */
+      function spinner() {
+        return h("span", { style: S.spin, "aria-hidden": "true", title: t("status.calculating") });
+      }
+
       // hatókör
       body.push(h("div", { key: "scope", style: S.row },
         scopeButtons.map(function (entry) {
@@ -1201,9 +1435,14 @@ window.__ModuleLoader__.load({
           : null,
       ));
 
-      // állapot / hiba
-      if (measureStatus.status === "loading") {
-        body.push(h("div", { key: "loading", style: { ...S.note, marginTop: "8px" } }, t("status.loading")));
+      // állapot / folyamatjelző / hiba
+      // A mérés közben MINDIG látszik a pörgő jelző (akkor is, ha a korábbi
+      // eredmény még a képernyőn van) — enélkül a panel „lefagyottnak” tűnt.
+      if (feedback.busy) {
+        body.push(h("div", { key: "loading", style: S.busy },
+          spinner(),
+          h("span", { style: stale ? { fontWeight: 600 } : null },
+            stale ? t("status.recalculating") : t("status.calculating"))));
       }
       if (measureStatus.status === "error") {
         var message = measureStatus.error || "";
@@ -1214,7 +1453,10 @@ window.__ModuleLoader__.load({
 
       // komponensek
       if (data !== null) {
-        body.push(h("div", { key: "components", style: S.section },
+        // A SZÁMOK blokkja: amíg az új beállítás mérése fut, elhalványul, hogy
+        // ne tűnjön késznek (a `stale` a kiválasztás kulcsából jön).
+        var resultParts = [];
+        resultParts.push(h("div", { key: "components", style: S.section },
           h("div", { style: { ...S.between, marginBottom: "4px" } },
             h("strong", { style: { fontSize: "12px", fontWeight: 600 } }, t("components.head")),
             h("span", { style: S.label }, data.profile.name),
@@ -1243,7 +1485,7 @@ window.__ModuleLoader__.load({
         ));
 
         // végösszeg
-        body.push(h("div", { key: "total", style: S.total },
+        resultParts.push(h("div", { key: "total", style: S.total },
           h("div", { style: S.between },
             h("span", { style: S.label }, t("total.billable")),
             h("span", null, fmtMinutes(data.billableMs) + " p · " + t("unit.hour", { hours: fmtHours(data.billableMs) })),
@@ -1267,21 +1509,33 @@ window.__ModuleLoader__.load({
           h("div", { style: S.note },
             t("note.range", { from: data.fromDay, to: data.toDay }) + " · " + t("source." + (data.humanSource || "none"))),
           data.workspaceLabel ? h("div", { style: S.note }, t("note.workspace", { workspace: data.workspaceLabel })) : null,
-          // Pillanatképből mutatott eredmény: kiírjuk, mikor készült.
-          measureStatus.snapshotAt > 0
-            ? h("div", { style: S.note }, t("status.snapshot", { at: fmtClock(measureStatus.snapshotAt) }))
-            : null,
+          // MIKOR készült a szám: pillanatképből (`snapshotAt`) vagy friss
+          // válaszból (`updatedAt`). „Kiírta-e már az eredményt?” — ez mondja meg.
+          stale
+            ? h("div", { style: { ...S.note, fontWeight: 600 } },
+              t("status.stale", {
+                at: fmtClock(measureStatus.updatedAt > 0 ? measureStatus.updatedAt : measureStatus.snapshotAt)
+              }))
+            : measureStatus.snapshotAt > 0
+              ? h("div", { style: S.note }, t("status.snapshot", { at: fmtClock(measureStatus.snapshotAt) }))
+              : measureStatus.updatedAt > 0
+                ? h("div", { style: S.note }, t("status.updated", { at: fmtClock(measureStatus.updatedAt) }))
+                : null,
         ));
+        body.push(h("div", { key: "result", style: stale ? S.resultStale : S.result }, resultParts));
 
         // opciók
         body.push(h("div", { key: "options", style: { ...S.row, marginTop: "8px" } },
           h("label", { style: { ...S.row, gap: "4px", cursor: "pointer" } },
             h("input", {
               type: "checkbox",
-              checked: data.vatPercent > 0,
+              checked: vatOn,
+              disabled: config === null,
               onChange: function () { toggleOption("vatEnabled"); },
             }),
             h("span", { style: S.label }, t("options.vat", { percent: String(vatAvailable).replace(".", ",") })),
+            // Az újraszámolás alatt a kapcsoló mellett is látszik, hogy dolgozik.
+            busyAt > 0 ? spinner() : null,
           ),
           h("label", { style: { ...S.row, gap: "4px", cursor: "pointer" } },
             h("input", {
@@ -1293,29 +1547,31 @@ window.__ModuleLoader__.load({
           ),
         ));
         if (materialOn) {
-          body.push(h("div", { key: "material", style: S.note },
-            material.status === "ready"
-              // A felirat KIMONDJA, hogy a szám bruttó; ha a host még a régi
-              // (nincs `pricing.gross`), akkor nettó és ezt is kimondja.
-              ? (material.gross === true
+          body.push(h("div", { key: "material", style: { ...S.note, display: "flex", alignItems: "center", gap: "6px" } },
+            h("span", null,
+              material.status === "ready"
+                // A felirat KIMONDJA, hogy a szám BRUTTÓ (fizetendő). A szorzást a
+                // panel végzi a modell-bontásból, ezért ez akkor is igaz, ha a host
+                // fél még a régi, nettó összeget ad (lásd grossFactorOf).
                 ? t("options.material.usd", { usd: fmtUsd(material.usd) })
-                : t("options.material.usdNet", { usd: fmtUsd(material.usd) }))
-              // A várakozás alatt (hideg szkennelés) NEM hiba, hanem mérés:
-              // a „nem érhető el” csak a 3 sikertelen próba után jelenik meg.
-              : material.status === "unavailable"
-                ? t("options.material.unavailable")
-                : t("options.material.loading")));
-          // Bruttó bontás: nettó listaár + áfa (+ DSH-pótdíj). Csak akkor, ha a
-          // host adja a szorzókat ÉS a nettó összeget — így a sor ellenőrizhető.
-          if (material.status === "ready" && material.gross === true && material.tax && toNumber(material.netUsd) > 0) {
-            var taxRates = material.tax.rates && typeof material.tax.rates === "object" ? material.tax.rates : {};
+                // A várakozás alatt (hideg szkennelés) NEM hiba, hanem mérés.
+                : material.status === "unavailable"
+                  ? t("options.material.unavailable")
+                  : t("options.material.loading")),
+            // PÖRGŐ JELZŐ (2026-11-20, felhasználói jelzés: „nincs
+            // folyamatjelző, ezért úgy tűnik, mintha nem működne”).
+            material.status === "loading" ? spinner() : null));
+          // Bruttó bontás: nettó listaár + áfa (+ DSH-pótdíj) — így a szám
+          // ellenőrizhető, és látszik, hogy az összeg NEM nettó.
+          if (material.status === "ready" && toNumber(material.netUsd) > 0) {
+            var shownRates = material.rates && typeof material.rates === "object" ? material.rates : FALLBACK_GROSS_RATES;
             body.push(h("div", { key: "material-gross", style: S.note },
               t("options.material.gross", {
                 net: fmtUsd(material.netUsd),
-                vat: String(toNumber(material.tax.vatPercent)),
-                dsh: String(toNumber(material.tax.dshSurchargePercent)),
-                dshRate: String(toNumber(taxRates.dsh)).replace(".", ","),
-                othersRate: String(toNumber(taxRates.alibaba)).replace(".", ","),
+                vat: String(toNumber(shownRates.vat)),
+                dsh: String(toNumber(shownRates.surcharge)),
+                dshRate: String(toNumber(shownRates.dsh)).replace(".", ","),
+                othersRate: String(toNumber(shownRates.alibaba)).replace(".", ","),
               })));
           }
           // A cache-kedvezmény KIMONDVA (2026-11-17, felhasználói észrevétel:
@@ -1447,6 +1703,9 @@ window.__ModuleLoader__.load({
       var hostLabel = hostBuild.length > 0 ? t("panel.hostOk", { build: hostBuild }) : t("panel.hostUnknown");
 
       return h("div", null,
+        // A pörgő jelző kulcskockái (a panel csak inline stílust használ, ezért
+        // a `@keyframes` itt, egyszer jelenik meg a panel gyökerében).
+        h("style", { key: "spin-kf" }, "@keyframes dsh-koltseg-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}"),
         h("div", { style: S.panelHead },
           h("span", null, t("panel.title")),
           h("div", { style: { ...S.row, gap: "4px" } },
@@ -1494,7 +1753,7 @@ window.__ModuleLoader__.load({
         try {
           if (renderedVariants[variant] !== true) {
             renderedVariants[variant] = true;
-            reportEvent("render belépett: variant=" + variant + " propskulcsok=" + Object.keys(safeProps).join("|"));
+            reportEvent("render belépett: variant=" + variant + " build=" + BUILD + " propskulcsok=" + Object.keys(safeProps).join("|"));
           }
         } catch (error) {
           /* diagnosztika */
@@ -1991,7 +2250,22 @@ window.__ModuleLoader__.load({
     exports.ActivityTracker = ActivityTracker;
     exports.PanelBoundary = PanelBoundary;
     exports.reportEvent = reportEvent;
-    exports.__util = { groupDigits: groupDigits, digitsOnly: digitsOnly, fmtTokens: fmtTokens, fmtUsd: fmtUsd };
+    exports.__util = {
+      groupDigits: groupDigits,
+      digitsOnly: digitsOnly,
+      fmtTokens: fmtTokens,
+      fmtUsd: fmtUsd,
+      // Bruttó (áfás) ár a panelben — a tesztek ezeket a tiszta függvényeket
+      // mérik (a host-independens számítás a felhasználói jelzés miatt van).
+      grossRatesOf: grossRatesOf,
+      isHostGross: isHostGross,
+      grossRateOfModel: grossRateOfModel,
+      grossFactorOf: grossFactorOf,
+      FALLBACK_GROSS_RATES: FALLBACK_GROSS_RATES,
+      // A folyamatvisszajelzés döntése (stale/busy) — lásd measureFeedback.
+      measureFeedback: measureFeedback,
+      snapshotKey: snapshotKey,
+    };
     exports.__dict = { hu: HU, en: EN };
     exports.__constants = { NS, HEADER_SLOT, TRACKER_SLOT, INPUT_DOCK_SLOT, HEADER_ID, HEADER_ORDER, BUILD, ROUTE };
     return module.exports;
