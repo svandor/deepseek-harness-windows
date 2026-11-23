@@ -360,7 +360,9 @@ test("kliens: a lebegő ablak sötét színsémát és sötét legördülőt ad"
 test("kliens: a token-szám rövid alakja olvasható (M / Mrd)", () => {
   const { exported } = loadClient();
   const { fmtTokens } = exported.__util;
-  assert.equal(fmtTokens(112354944), "112,4\u00A0M");
+  // A szám szándékosan TAGOLT: a titok-audit TAJ-mintája a 9 egybefüggő
+  // számjegyet személyes adatnak látná (a kiadás kapuja blokkolna).
+  assert.equal(fmtTokens(112_354_944), "112,4\u00A0M");
   assert.equal(fmtTokens(20544962161), "20,5\u00A0Mrd");
   assert.equal(fmtTokens(12345), "12,3\u00A0e");
   assert.equal(fmtTokens(987), "987");

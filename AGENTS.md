@@ -1198,7 +1198,7 @@ tömörítés után is meglegyenek.
 - `2026-11-17` (huszonegyedik kör) — **az ágens-indította újraindítás INCIDENSE,
   és a WebView2-profil védelme.** (1) **MÉRT INCIDENS (13:45:59):** az ágens a
   DSH sandboxából indította a launchert; az így indult tálca/ablak megörökölte a
-  sandbox PRIVÁT `TEMP`-jét (`C:\Users\info\AppData\Local\Temp\dsh-ECvtxu\...`),
+  sandbox PRIVÁT `TEMP`-jét (`%TEMP%\dsh-ECvtxu\...`),
   és mivel az előző ablak WebView2 folyamatai még fogták a stabil profilokat,
   a panel a MÁSODIK próbánál a `%TEMP%` alatti ÜRES tartalék-profilra váltott →
   a munkamenet-állapot (workspace, kiválasztott beszélgetés) elveszett, több
