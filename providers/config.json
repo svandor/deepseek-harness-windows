@@ -362,8 +362,8 @@
       "_fizetos_tartalek_megjegyzes": "2026-10-26: a fizetős Alibaba SZANDEKOSAN kikerült a subagent-láncokból (worker, free-quota, vision-worker). Ha mégis kell, külön, nevén nevezett route-ba tedd, és a panelben árazd be — ne a 'free' lánc végére.",
       "targets": [
         "groq/openai/gpt-oss-120b",
-        "google/gemini-3.1-flash-lite",
         "openrouter/nvidia/nemotron-3.5-lightning:free",
+        "google/gemini-3.1-flash-lite",
         "google/gemini-3-flash-preview",
         "openrouter/nvidia/nemotron-3.5-super-vl:free"
       ],
@@ -376,8 +376,8 @@
       "maxTokens": 8192,
       "targets": [
         "groq/openai/gpt-oss-120b",
-        "google/gemini-3.1-flash-lite",
         "openrouter/nvidia/nemotron-3.5-lightning:free",
+        "google/gemini-3.1-flash-lite",
         "google/gemini-3-flash-preview",
         "openrouter/nvidia/nemotron-3.5-super-vl:free"
       ],
