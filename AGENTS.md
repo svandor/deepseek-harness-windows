@@ -391,6 +391,112 @@ tömörítés után is meglegyenek.
 
 ## 4. Változásnapló
 
+- `2026-11-26` (sandbox-kapacitás, 2. sáv: `browser` tool + a D3/D4 döntések) —
+  **a felhasználó kérése: „3. pont: nyilván mind a három szintet el kell tudni érni
+  böngészővel. építsd ki a javasoltak szerint. a külső oldalakra is kell néha a
+  kattintás, tegnap pont ez hiányzott a lineageos repóban. oké az eldobható profil,
+  de tudj tartósabbat is létrehozni egyes feladatokra (pl hogy ne kelljen minden
+  próbálkozásnál bejelentkeznem). a letöltést kötheted engedélykéréshez, de tegnap
+  is pont ez kellett volna. 4. pont: a."** (1) **MEGVALÓSÍTÁS — új
+  `plugins\dsh-browser`** (agent-síkos plugin, a `dsh-terminal-tool` mintáján): a
+  Chromium a sandboxban szerkezetileg nem indul (mojo platform channel + crashpad:
+  `A hozzáférés megtagadva (0x5)`), ezért a tool a **HOST processzben** indít
+  headless Edge-et és **nyers CDP-vel** vezérli (függőség nélkül; a bizonyított
+  minta `.test-dsh-home\probe-hero.mjs`). A tervhez képest **nincs host-oldali HTTP
+  route és nincs fájl-postafiók**: az agent-síkos plugin toolja maga is a host
+  processzben fut, ezért a motor közvetlenül hívható. Fájlok: `lib\edge.js`
+  (indítás/port/DevTools-végpont/szabályos zárás), `lib\cdp.js` (protokoll-kliens +
+  lapműveletek), `lib\scope.js` (célterület), `lib\profiles.js` (profilok),
+  `lib\index.js` (a `browser` tool), `install.ps1`, `README.md`, `test\*` (4 fájl),
+  `tools\browser-doctor.mjs`. (2) **Műveletek:** `open`, `read`, `click`, `type`,
+  `eval`, `shot` (PNG-útvonal → `read_image`), `download`, `console`, `profiles`,
+  `close`, `status`. **Célterület mindhárom fokozata elérhető** (`loopback` / `lan` /
+  `any`, **alap az `any`**), **külső oldalon is lehet kattintani és gépelni** (a
+  felhasználó döntése); a nem http(s) séma (`file:`, `javascript:`, `data:`) mindig
+  tiltott. **Profilok:** eldobható az alap (`tmp-*`, zárás után törölve), de
+  **tartós** is létrehozható (`profile: "lineageos"` → `state\browser-profiles\…`),
+  így a bejelentkezés megmarad; a törlés **lomtárba** megy (`.trash-…`), nem töröl.
+  **Letöltés jóváhagyáshoz kötve:** a `download` a `ctx.approval`-on **egyszeri
+  engedélyt** kér, és jóváhagyás nélkül el sem indul (a válasz kimondja, hogy a
+  felhasználót kell megkérni). (3) **MÉRVE:** `node plugins\dsh-browser\test\*` →
+  **33/33** (11 célterület + 8 profil + 6 CDP + 8 kapu, böngésző indítása nélkül);
+  `node tools\browser-doctor.mjs --allow-download` → **7/7 ok** (valódi Edge):
+  `loopback-ui` a saját felületről **44 079 B-os képernyőkép** (a munkaterület-lista,
+  a hero és a modellválasztó látszik), `external-read` 917 karakter,
+  `external-click` `example.com` → `www.iana.org/help/example-domains`,
+  `persistent-profile` **süti túlélte az újraindítást**, `download` 19 B. (4) **A
+  MÉRÉS KÉT HIBÁT TALÁLT, mindkettő javítva:** (a) a `Page.navigate` után a
+  `waitReady` az **előző** dokumentum `readyState`-jét látta „complete"-nek, ezért az
+  olvasás félig töltött lapra esett (üres `h1`) — most a `Page.loadEventFired`
+  eseményt várjuk be (feliratkozás a navigate ELŐTT); (b) a `taskkill /F /T`
+  azonnal megölte a böngészőt, ezért **nem írta ki a profilt** és a tartós profilba
+  tett süti elveszett — most előbb `Browser.close`, utána a maradék fa. (5)
+  **TELEPÍTVE:** junction `~\.dsh\profiles\node_modules\dsh-browser` → a repó
+  pluginja, és `- id: tool-browser` a
+  `~\.dsh\.agent-presets\standard-free\agent.cordis.yml`-ba (mentés:
+  `agent.cordis.yml.bak-20261126-051734`); `install.ps1 -Check` → `TOOL=browser`.
+  **Érvénybe lépés:** a tool a **következő session-létrehozáskor** kerül a modell
+  eszközei közé (a futó Harness-t nem indítottuk újra, §1.5). (6) **DÖNTÉSEK
+  RÖGZÍTVE:** **D3 = mindhárom szint + külső interakció + eldobható és tartós profil
+  + jóváhagyáshoz kötött letöltés**; **D4 = (a)**, azaz mind a három állandó
+  jóváhagyási szabály (`pwsh`, `edit`, `write`) **változatlanul marad** — a
+  `state\approvals.json`-hoz nem nyúltunk. (7) **BIZTONSÁGI KERET:** csak
+  `--headless=new` (§1: nincs látható ablak, nincs fókuszlopás), mindig saját
+  `--user-data-dir` (soha nem a felhasználó bejelentkezett profilja), egyszerre egy
+  böngésző, `idleMs` (3 perc) után automatikus zárás, leállítás **csak a saját
+  PID-del** (`taskkill /T /F`, §1.6), és minden navigáció/letöltés a
+  `state\browser.log`-ba. **Korlát (kimondva):** az `eval` bármit futtathat az
+  oldalon, ezért az azon át kezdeményezett navigációt a tool csak utólag jelenti; a
+  szűkítés a `dsh-rule-guard` szabályával lehetséges. A dokumentáció:
+  `docs\SANDBOX-KAPACITAS-TERV.md` (+ `.en.md`) 2. sávja és 5. pontja, valamint a
+  plugin `README.md`-je. **Nyitott:** Sáv 1 (`dsh-sandbox-sentinel`), Sáv 3
+  (`tools\sandbox-doctor.mjs`, `AGENTS.md` 5. pont, `git-sandbox-config.mjs`,
+  upstream).
+
+- `2026-11-26` (sandbox-kapacitás, 0. sáv: SSH + GitHub véglegesen, konfigurációból) —
+  **a felhasználói panasz: „folyamatosan kapok visszajelzéseket a sandbox
+  indokolatlan korlátai miatt ssh-ra, githubra, böngésző használatra”.** (1) **MÉRT
+  GYÖKÉR-OKOK** (a teljes mérés a `docs\SANDBOX-KAPACITAS-TERV.md`-ben): a
+  `write-restricted` token restricting SID-listájából szándékosan kimarad az
+  `Authenticated Users`, ezért **minden schannel-alapú TLS elhasal** (`curl`,
+  `Invoke-WebRequest`, `.NET HttpClient`, `git` https-en → `SEC_E_NO_CREDENTIALS
+  (0x8009030e)`), miközben a Node OpenSSL és a `gh` (Go TLS) ugyanazon a gépen
+  átmegy; a named pipe írása nem adható meg, ezért (a) a PowerShell nem tudja
+  elfogni natív program kimenetét (`Access to the path '\\.\pipe\LOCAL\dotnet_…' is
+  denied`), (b) az MSYS `sh.exe` fork-emulációja elhal
+  (`couldn't create signal pipe, Win32 error 5`) → `core.sshCommand`/`GIT_SSH_COMMAND`
+  és a `!gh auth git-credential` helper **mindig** elbukik, (c) a Chromium/Edge
+  (mojo + crashpad) és a node `stdio:'pipe'` (`EPERM`) sem indul; végül a tool-réteg
+  `denialSignatures`-listája **csak három angol** kifejezésre illeszkedik, ezért a
+  mért 4 hibaosztályból 3 **néma** (nincs `[sandbox: …]` jelölő, nincs eszkalációs
+  útmutatás) — ez a panaszok fő oka, nem a korlátozás szándéka. (2) **VÉGREHAJTVA
+  (0. sáv, egy jóváhagyott eszkalált hívásban, mert a `~\.gitconfig` és a
+  `HKCU\Environment` a sandboxon kívül van):** `git config --global
+  http.sslBackend openssl`; **felhasználói env** `GIT_SSH=C:\Windows\System32\OpenSSH\ssh.exe`
+  + `GIT_SSH_VARIANT=ssh`; **a 6 HTTPS repó remote-ja SSH-ra** (Deepseek Harness,
+  Felpuffanto, LineageOS, Raider, Vector, Video → `git@github.com:svandor/…`).
+  (3) **MÉRVE — sandboxban, `$env:GIT_SSH` per-call idiómával + `cmd /c "… > fájl"`
+  átirányítással:** mind a 6 repó `git ls-remote --heads origin` → **OK** (6/6);
+  `git push --dry-run origin HEAD` → **exit 0, „Everything up-to-date"**;
+  `git ls-remote https://github.com/git/git.git` (globális openssl backenddel) →
+  exit 0. **Tehát az SSH-s git és a HTTPS-es olvasás a sandboxban, engedélykérés
+  nélkül működik.** (4) **HELYETTESÍTETT TUDÁS (a lényeg):** git SSH-hoz **`GIT_SSH`
+  kell, nem `core.sshCommand`** — utóbbi héjon (`sh`) megy át és elhal; a *privát*
+  HTTPS repókhoz a `!`-lel kezdődő credential helper igényel shellt, ezért a
+  megoldás az SSH remote (a felhasználó döntése, D1). Webes kérésre `web_fetch`/
+  `node -e fetch`, **ne** `curl`/`Invoke-WebRequest`; kimenet-elfogásra
+  `cmd /c "… > fájl"`. (5) **MENTÉS/VISSZAÁLLÁS:** `~\.gitconfig.bak-20261126-045839`;
+  remote-onként `git remote set-url origin https://github.com/svandor/<Repo>.git`,
+  a két env változó törlése. (6) **ÉRVÉNYBE LÉPÉS:** a felhasználói env változó a
+  **következő harness-indítástól** él (addig a per-call idióma); a futó Harness-t
+  **nem** indítottuk újra (§1.5). (7) **FÁJLOK:** új `docs\SANDBOX-KAPACITAS-TERV.md`
+  + `.en.md` (a teljes terv: mért állapot, 4 sáv, D3/D4 pontosítva, elfogadási
+  kritériumok, függelék a mérési parancsokkal). **Nyitott:** Sáv 1
+  (`dsh-sandbox-sentinel`: a 3 néma hibaosztály jelölése + playbook-injektálás),
+  Sáv 2 (`dsh-browser` host-oldali CDP tool), Sáv 3 (`tools\sandbox-doctor.mjs`,
+  `AGENTS.md` 5. pont, `tools\git-sandbox-config.mjs` idempotens változata, upstream
+  beadvány).
+
 - `2026-11-23` (a harness V8 heap OOM-ja: emelt plafon + memória-telemetria) —
   **a felhasználó jelezte: „miért indult újra az előbb a dsh? ez nem történhetett
   volna meg”.** (1) **MÉRT OK — nem tervezett újraindítás és nem leállítás

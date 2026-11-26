@@ -1,0 +1,23 @@
+{
+  "name": "dsh-browser",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent-oldali `browser` tool: headless Edge/CDP a HOST processzben (a sandboxon kívül), eldobható és tartós profilokkal, hatókör-ellenőrzéssel és jóváhagyáshoz kötött letöltéssel.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./scope": "./lib/scope.js",
+    "./profiles": "./lib/profiles.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node test/scope.test.mjs && node test/profiles.test.mjs && node test/cdp.test.mjs && node test/tool.test.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.2"
+  },
+  "license": "MIT"
+}
