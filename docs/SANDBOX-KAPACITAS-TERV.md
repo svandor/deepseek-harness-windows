@@ -306,6 +306,29 @@ megvolt, csak nem jutott el a modellig. **Ez a sáv pontosan ezt a rést zárja.
    ebből mérhető, hogy a panaszok megszűntek-e.
 4. **Biztonságos**: minden ág `try/catch`, hiba esetén `next()` — a plugin soha nem
    rontja el a hívást és nem állítja meg a bootot.
+5. **`isError` helyreállítása** (ez a DSH-viselkedés javítása, nem csak jegyzet): öt
+   osztályban (`pipe-capture`, `msys-sh`, `node-spawn`, `schannel-tls`,
+   `chromium-sandbox`) a hívás **biztosan bukott**, ezért a plugin `kind:'block'`
+   döntéssel `isError: true`-vá teszi — az eredeti kimenet megmarad, csak a jegyzet
+   kerül a végére. Eddig ez a `pwsh` tool `isError: false`-szal adta vissza, vagyis
+   a modell „sikeres" lépésként látta a bukást. A `sandbox-write` (a harness már
+   jelöli) és az `access-denied-hu` (lehet ártalmatlan) szándékosan **nem** kap
+   átminősítést.
+
+**NYITOTT DSH-HIBA (nem javítva, upstream kell):** a munkamenet 1. köre azért
+állt meg **válasz nélkül**, mert a modell 7. lépése **csak félbeszakadt
+gondolkodást** adott vissza (846 karakter, szöveg és tool-hívás nélkül), a
+harness pedig ezt **befejezett körnek** látta (`turn/end reason=completed`), és nem
+írt semmit a felhasználónak. A stream a **közvetlen DeepSeek-route-on** jött
+(`deepseek-official/deepseek-flash`, `maxTokens: 256000`), tehát nem a helyi
+proxy, és nem a sandbox. A plugin-rétegből ez **nem javítható**: a híváskáderben
+nincs `turn/end` (vagy azzal egyenértékű) hook — a rendelkezésre állók:
+`agent/created`, `agent/pre-step`, `agent/request`, `agent/status`, `agent/disposed`,
+`agent/session-start`, `tools/pre-execute`, `tools/post-execute`; az `agent/status`
+csak `{agent, status}`-t ad, üzenet-tartalmat nem. Ezért ez **upstream beadvány**
+(Sáv 3), és addig a gyakorlati védelem az, hogy a modell a következő körben
+megkapja a helyes eszköz-mintát (ez a sáv). **A Harness maga nem omlott össze**
+(pid 26620, indult 2026-11-25 06:31; a `harness.err.log` utolsó írása 2026-11-23).
 
 **MÉRVE:** `node plugins\dsh-sandbox-sentinel\test\classify.test.mjs` → **13/13**
 (a mért sztringekkel, köztük a fenti két parancs kimenetével és a magyar üzenettel;
@@ -384,7 +407,60 @@ Ezzel a `tools/browser-probe.mjs`, `tools/probe-terminal.mjs`,
 `tools/probe-hero.mjs` és minden jövőbeli képi ellenőrzés **eszkaláció nélkül**
 fut, és a „böngésző" panasz megszűnik.
 
-### Sáv 3 — Tudás, mérés, upstream (~1–2 óra)
+### Sáv 4 — Ágens-koordináció: gép-állapot-zár — **KÉSZ (2026-11-27)**
+
+**MIÉRT (a felhasználó jelzése):** „ha a másik, futó ágenssel versenyezve a másik repó
+feladatát akartad elvégezni, az is DSH-hiba." Igaza van: a DSH **egyetlen
+host-processzben** futtat minden munkamenetet, és köztük **nincs semmilyen
+koordináció** — nincs zár, nincs jelzés, nincs „más ágens dolgozik itt".
+
+**MÉRT ESET (2026-11-27, ugyanaznap, mint a fenti):** a DSH-repó ágense (ez a session)
+10:36:22-kor lefuttatta a `display-guard.exe --apply` parancsot, ami a kijelzőt
+240 → 120 Hz-re váltott — **miközben a Vector-ágens (`765b76d2`) éppen azt a
+kijelző-állapotot vizsgálta**. A Vector-ágens naplója (saját session-logja) szerint:
+
+| idő (UTC) | lépés | mit írt a modell |
+|---|---|---|
+| 09:37:46 | 9 | „the UXD log got entries at 10:36:23 … Maybe the user is interacting with the display settings right now" |
+| 09:39:01 | 15 | „WM_DISPLAYCHANGE occurred at … 10:36:22-24. Those are timestamps of display changes" |
+| 09:39:25 | 16 | „Hmm — maybe the user locked and unlocked the screen at 10:36?" |
+| (később) | 21–22 | „WHOA. The path 0 target refreshRate is now 120/1! … did I change it? No. … did the *user* change it?" |
+
+Vagyis **legalább 4 lépést a rossz nyomon** töltött, és a **felhasználót gyanúsította**
+— mert semmi nem mondta meg neki, hogy a gépen egy másik ágens dolgozik. Ez ugyanaz a
+hibaosztály, mint a sandbox néma elutasításai: **a rendszer nem mondja meg, mi történt**.
+
+**MEGVALÓSÍTÁS — a `dsh-rule-guard` bővítése (nem új plugin, mert a kapu ott van):**
+
+- `lib/lease.js` (tiszta modul): `resourceFor` (melyik parancs melyik erőforrást
+  módosítja), `requestLease` (ad / elutasít indoklással), `releaseAll`, `prune`,
+  `describeActive`.
+- `policy.json` → **`leases`** blokk (hot-reload): `ttlMinutes: 20`, két erőforrás:
+  `display-mode` (`display-guard --apply/--watch`, `display-mode.ps1 -Set`) és
+  `gpu-power` (`nvidia-smi --power-limit`, `--persistence-mode`). **Az olvasás
+  (`-Status`) szándékosan nem ütközik.**
+- `tools/pre-execute`: a szabályok ELŐTT zár-kapu — ha más **élő** ágens birtokolja,
+  `deny` + indoklás, benne: birtokos, kezdés, hátralévő idő, **miért** (a mért eset),
+  és a három kiút (olvasás / kérdezd a felhasználót / várd meg a lejáratot).
+- `agent/session-start`: minden session megkapja, hogy **„NEM vagy egyedül a gépen"**,
+  és lássa az aktív zárakat. `agent/disposed`: a session zárja elengedi.
+- Napló: `~\.dsh\rule-guard.log` (`lease-acquire`, `lease-deny`, `lease-release`).
+
+**MÉRVE:** `node plugins\dsh-rule-guard\test\lease.test.mjs` → **11/11** (felismerés,
+olvasás kizárva, két ágens ütközése indoklással, saját újraigénylés, TTL-lejárat,
+elengedés, bekötött kapu: az első hívás átmegy / a második blokkol / a `-Status`
+átmegy / a súgó beinjektálódik); a meglévő `policy.test.mjs` **23/23** változatlan;
+`node tools\check-rule-guard.mjs` → **15 rendben, 0 hiba**; a `policy.json` érvényes
+JSON (10 724 bájt).
+
+**KORLÁT (kimondva):** a `policy.json` hot-reload, de a kapu **kódja** csak a
+**következő Harness-indításnál** lép életbe (a futó processz a régi `index.js`-t
+futtatja) — addig a védelem **nem aktív**. A zár emellett **memóriabeli**: a Harness
+újraindításakor elvész (TTL nélkül nem örökölhető, és ez helyes is). A végleges
+megoldás **upstream**: a DSH-nak natívan kellene tudnia a többi session-ről; addig ez
+a kapu a háló.
+
+
 
 Hétköznapi nyelven: (1) **egy parancs**, ami 18 próbával megmondja, minden
 működik-e — frissítés után is, hogy egy csendes visszaesés ne tűnjön „szigorúbb

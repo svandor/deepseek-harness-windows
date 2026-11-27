@@ -11,6 +11,36 @@
 
   "globalRules": ["no-name-kill"],
 
+  "leases": {
+    "$comment": [
+      "GÉP-ÁLLAPOT-ZÁR: a DSH egy host-processzben futtat minden munkamenetet, ezért",
+      "két ágens felülírhatja egymás mérését. A pre-execute kapu ezekre a mintákra",
+      "lease-t ad; ha más élő ágens birtokolja, a hívás indoklással blokkol.",
+      "MÉRT ESET (2026-11-27): a Vector-ágens a 240 Hz-re visszaállt kijelzőt vizsgálta,",
+      "közben egy másik munkamenet `display-guard --apply`-jal 120 Hz-re váltott;",
+      "a Vector-ágens 3 lépést a rossz nyomon töltött (a felhasználót gyanúsította).",
+      "Olvasás (pl. `-Status`) szándékosan NEM kerül ide — az nem ütközik."
+    ],
+    "enabled": true,
+    "ttlMinutes": 20,
+    "resources": [
+      {
+        "id": "display-mode",
+        "what": "a kijelző módja / refresh rate (display-guard --apply/--watch, display-mode.ps1 -Set)",
+        "match": [
+          "display-guard\\.exe[^\\n]*--(apply|watch)",
+          "display-mode\\.ps1[^\\n]*-(Set|Apply)\\b"
+        ]
+      },
+      {
+        "id": "gpu-power",
+        "what": "GPU teljesítmény/órajel-beállítás írása (nvidia-smi --power-limit / persistence-mode)",
+        "match": ["nvidia-smi[^\\n]*(--power-limit|-pl\\b)", "nvidia-smi[^\\n]*(--persistence-mode|-pm\\b)"]
+      }
+    ]
+  },
+
+
   "workspaces": [
     {
       "id": "dsh",

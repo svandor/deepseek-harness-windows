@@ -22,6 +22,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { callCwd, createPolicyLoader, evaluatePre, workspaceForCwd } from './policy.js';
+import { createRegistry, describeActive, releaseAll, requestLease, resourceFor } from './lease.js';
 
 /** A plugin neve a boot gráfban. */
 const name = 'dsh-rule-guard';
@@ -31,6 +32,14 @@ const inject = [];
 
 /** A szabályfájl a plugin mellett (verziózott, a repóban). */
 const POLICY_FILE = fileURLToPath(new URL('../policy.json', import.meta.url));
+
+/**
+ * GÉP-SZINTŰ ERŐFORRÁS-ZÁRAK. A DSH egyetlen host-processzben futtat minden
+ * munkamenetet, ezért ez a nyilvántartó természeténél fogva KÖZÖS: két session
+ * ugyanazt a Map-et látja. Ez pótolja a hiányzó cross-session koordinációt
+ * (lásd `lib/lease.js` fejlécében a 2026-11-27-i mért esetet).
+ */
+const LEASES = createRegistry();
 
 /** Napló felső korlát: ennyi után a fájl újraindul (ne hízzon). */
 const LOG_MAX_BYTES = 2 * 1024 * 1024;
@@ -76,6 +85,61 @@ function pluginMessage(text) {
 }
 
 /**
+ * A tool-hívás szöveges tartalma (erre illeszkednek a lease-minták).
+ * @param {object} exec
+ * @returns {string}
+ */
+function commandText(exec) {
+  const args = exec?.arguments ?? {};
+  return [args.command, args.content, args.file_path, args.url, args.pattern, args.text]
+    .filter((value) => typeof value === 'string' && value !== '')
+    .join('\n');
+}
+
+/**
+ * GÉP-ÁLLAPOT-ZÁR kapuja (a `tools/pre-execute` vízesésben, a szabályok ELŐTT).
+ *
+ * Ha a parancs a policy `leases.resources` listája szerint gép-állapotot módosít:
+ *   - szabad (vagy a sajátunk) → lease-t adunk, ENGEDÜNK;
+ *   - MÁS élő ágens birtokolja → INDOKLÁSSAL blokkolunk.
+ * Hiba esetén ENGEDÜNK (a zár hibája ne akassza meg a munkát).
+ * @param {object} policy
+ * @param {object} exec
+ * @param {string} logFile
+ * @param {object} ctx
+ * @returns {{kind: 'deny', reason: string}|undefined}
+ */
+function leaseGate(policy, exec, logFile, ctx, leases) {
+  const config = policy?.leases;
+  if (config === undefined || config === null || config.enabled === false) return undefined;
+  const resource = resourceFor(Array.isArray(config.resources) ? config.resources : [], commandText(exec));
+  if (resource === undefined) return undefined;
+  const outcome = requestLease(leases, resource, exec, { ttlMinutes: config.ttlMinutes });
+  if (!outcome.granted) {
+    appendLog(logFile, {
+      at: new Date().toISOString(),
+      kind: 'lease-deny',
+      resource: resource.id,
+      holder: outcome.holder.label,
+      tool: exec?.name,
+      cwd: callCwd(exec)
+    });
+    logLine(ctx, 'info', `zár-ütközés: ${resource.id} (birtokos: ${outcome.holder.label}) — ${exec?.name}`);
+    return { kind: 'deny', reason: outcome.reason };
+  }
+  appendLog(logFile, {
+    at: new Date().toISOString(),
+    kind: 'lease-acquire',
+    resource: resource.id,
+    holder: outcome.holder.label,
+    tool: exec?.name,
+    command: outcome.holder.command.slice(0, 200),
+    cwd: callCwd(exec)
+  });
+  return undefined;
+}
+
+/**
  * Plugin belépési pont.
  * @param {object} ctx
  * @param {{policyPath?: string, logPath?: string}} [config]
@@ -83,6 +147,7 @@ function pluginMessage(text) {
 function apply(ctx, config = {}) {
   const policyFile = config.policyPath ?? POLICY_FILE;
   const logFile = config.logPath ?? defaultLogPath();
+  const leases = config.leaseRegistry ?? LEASES;
   const loadPolicy = createPolicyLoader(policyFile);
 
   try {
@@ -107,6 +172,10 @@ function apply(ctx, config = {}) {
       try {
         const policy = loadPolicy();
         if (policy !== undefined) {
+          // --- 1a) GÉP-ÁLLAPOT-ZÁR: nem írhatja felül két ágens ugyanazt -----
+          const leaseDecision = leaseGate(policy, exec, logFile, ctx, leases);
+          if (leaseDecision !== undefined) return leaseDecision;
+
           const decision = evaluatePre(policy, exec);
           if (decision !== undefined) {
             appendLog(logFile, {
@@ -137,11 +206,26 @@ function apply(ctx, config = {}) {
     ctx.on('agent/session-start', ({ agent } = {}) => {
       try {
         const policy = loadPolicy();
-        if (policy === undefined) return;
         const cwd = agent?.session?.header?.cwd;
-        const match = workspaceForCwd(policy, cwd);
+        const parts = [];
+        // (a) „NEM vagy egyedül": a DSH egy host-processzben futtat minden
+        // sessiont, és cross-session zár nélkül a másik ágens méréseit el lehet
+        // rontani. Ezt a modellnek TUDNIA kell az első lépés előtt.
+        if (policy?.leases?.enabled !== false) {
+          const active = describeActive(leases);
+          parts.push(
+            'NEM vagy egyedül a gépen: több DSH-munkamenet futhat egyszerre, közös gépi állapottal. ' +
+            'Gép-állapotot módosító művelet (kijelző mód, szolgáltatás, deploy) előtt a `tools/pre-execute` kapu ' +
+            'erőforrás-zárat kér; ha más ágens birtokolja, a hívás INDOKLÁSSAL blokkol. ' +
+            'Olvasás (pl. `-Status`) nem ütközik. ' +
+            (active.length === 0 ? 'Jelenleg nincs aktív zár.' : `Aktív zár(ak): ${active.join('; ')}.`)
+          );
+        }
+        // (b) a projekt kemény szabályai (ha vannak)
+        const match = policy === undefined ? undefined : workspaceForCwd(policy, cwd);
         const lines = match?.workspace?.sessionRules;
-        if (!Array.isArray(lines) || lines.length === 0) return;
+        if (Array.isArray(lines) && lines.length > 0) parts.push(lines.join('\n\n'));
+        if (parts.length === 0) return;
         // A szabály RENDSZER-kontextusként megy a modell elé. A harness
         // `agent.inject` csak user-role üzenetet fogad, ezért a szöveget explicit
         // jelölővel látjuk el, hogy a modell NE kezelje felhasználói feladatnak
@@ -153,7 +237,7 @@ function apply(ctx, config = {}) {
         const text =
           '[Rendszerszabály — állandó projekt-kontextus, NEM felhasználói üzenet; ' +
           'nincs belőle feladat, nem kell rá válaszolni vagy rákérdezni.]\n\n' +
-          lines.join('\n\n');
+          parts.join('\n\n');
         if (typeof agent?.inject === 'function') agent.inject(pluginMessage(text));
       } catch (error) {
         logLine(ctx, 'warn', `session-szabály injektálás hiba: ${String(error)}`);
@@ -161,6 +245,23 @@ function apply(ctx, config = {}) {
     });
   } catch (error) {
     logLine(ctx, 'warn', `a session-start figyelő nem regisztrálható: ${String(error)}`);
+  }
+
+  // --- 3) Session lezárása: a lease-ek elengedése --------------------------
+  try {
+    ctx.on('agent/disposed', ({ agent } = {}) => {
+      try {
+        const released = releaseAll(leases, agent);
+        if (released > 0) {
+          appendLog(logFile, { at: new Date().toISOString(), kind: 'lease-release', count: released });
+          logLine(ctx, 'info', `${released} erőforrás-zár elengedve (session lezárult)`);
+        }
+      } catch {
+        /* a lezárás nem hibázhat */
+      }
+    });
+  } catch (error) {
+    logLine(ctx, 'warn', `az agent/disposed figyelő nem regisztrálható: ${String(error)}`);
   }
 }
 

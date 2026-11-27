@@ -374,6 +374,19 @@ tömörítés után is meglegyenek.
 | `no-name-kill` | **globális** | `Stop-Process -Name`, `taskkill /IM node.exe`, `killall node` (1.6) |
 
 **Kötelező:**
+- **Cross-session gép-állapot-zár (`leases`)**: a DSH egyetlen host-processzben futtat
+  MINDEN munkamenetet, ezért két ágens felülírhatja egymás mérését. A `policy.json`
+  `leases.resources` listája szerint a `tools/pre-execute` kapu lease-t ad a
+  gép-állapotot MÓDOSÍTÓ parancsokra (pl. `display-guard --apply`, `nvidia-smi --power-limit`);
+  ha MÁS élő ágens birtokolja, a hívás **indoklással blokkol** (a TTL 20 perc = menekülőút).
+  Session-indításkor a modell megkapja: „NEM vagy egyedül a gépen" + az aktív zárak listáját.
+  **MÉRT ESET (2026-11-27):** a Vector-ágens (`765b76d2`) a 240 Hz-re visszaállt kijelzőt
+  vizsgálta, közben a DSH-repó ágense `display-guard --apply`-jal 120 Hz-re váltott, és a
+  Vector-ágens **3 lépést a rossz nyomon** töltött (a felhasználót gyanúsította: „maybe the
+  user locked and unlocked the screen at 10:36?"). Olvasás (`-Status`) szándékosan nem
+  ütközik. Új contested erőforrás: vedd fel a `leases.resources` alá.
+  **FIGYELEM:** a `policy.json` **hot-reload**, de a kapu KÓDJA (`lib/lease.js`) csak a
+  **következő Harness-indításnál** él (a futó processz a régi `index.js`-t futtatja).
 - A tiltás **determinisztikus**, nincs kikapcsolás és nincs `ask`. Ha a felhasználó
   mégis végleges törlést kér, a helyes út a lomtár-mechanizmus (visszaállítható);
   a `policy.json` módosítása tudatos, dokumentált döntés.
@@ -415,12 +428,29 @@ tömörítés után is meglegyenek.
   (`pipe-capture`, `msys-sh`, `schannel-tls`, `chromium-sandbox`, `node-spawn`,
   `sandbox-write`, `access-denied-hu` — utóbbi a **magyar** „A hozzáférés
   megtagadva", amit a beépített felismerés nem lát), és a kimenet végére fűz egy
-  konkrét, másolható teendőt (a hívás nem lesz hiba); `agent/session-start`-nál
+  konkrét, másolható teendőt; `agent/session-start`-nál
   rövid (≈1,1 KB) súgót injektál „NEM felhasználói üzenet" jelölővel; minden
   találatot a `~\.dsh\sandbox-sentinel.log`-ba ír (JSONL). Minden ág `try/catch` →
-  hiba esetén `next()`, a plugin soha nem rontja el a hívást. (4) **MÉRVE:**
+  hiba esetén `next()`, a plugin soha nem rontja el a hívást. **(3b) `isError`
+  HELYREÁLLÍTVA (ez a DSH-viselkedés javítása):** öt osztályban (`pipe-capture`,
+  `msys-sh`, `node-spawn`, `schannel-tls`, `chromium-sandbox`) a hívás **biztosan
+  bukott**, ezért a plugin `kind:'block'` döntéssel `isError: true`-vá teszi (az
+  eredeti kimenet megmarad, a jegyzet a végére kerül) — eddig a `pwsh` tool
+  `isError: false`-szal adta vissza, és a modell sikeresként látta. A
+  `sandbox-write` (a harness már jelöli) és az `access-denied-hu` (lehet
+  ártalmatlan) szándékosan nem kap átminősítést. **(3c) NYITOTT DSH-HIBA — a kör
+  üresen zárul:** az 1. kör azért állt meg válasz nélkül, mert a 7. lépés **csak
+  félbeszakadt gondolkodást** adott vissza (846 karakter, szöveg és tool-hívás
+  nélkül) → `turn/end reason=completed`. A stream a **közvetlen DeepSeek-route-on**
+  jött (`deepseek-official/deepseek-flash`, `maxTokens: 256000`), nem a proxyn és
+  nem a sandboxon; a híváskáderben **nincs** `turn/end` hook (csak
+  `agent/created|pre-step|request|status|disposed`, `agent/session-start`,
+  `tools/pre-execute`, `tools/post-execute`, és az `agent/status` csak
+  `{agent,status}`), ezért pluginból nem javítható — ez **upstream** (Sáv 3). A
+  munkamenet egyébként **nem állt le**: a „miért álltál le?" üzenet turn 2-t
+  indított, és az ágens azóta is dolgozik (22+ lépés). (4) **MÉRVE:**
   `test\classify.test.mjs` **13/13** (a mért sztringekkel, a magyar üzenettel,
-  „ne duplázzon" és téves-pozitív esetekkel), `test\plugin.test.mjs` **7/7** (hamis
+  „ne duplázzon" és téves-pozitív esetekkel), `test\plugin.test.mjs` **9/9** (hamis
   ctx: a jegyzet a helyére kerül, a normál kimenet változatlanul megy át, a
   fájl-toolokhoz nem szól hozzá, a súgó beinjektálódik); `node --check` OK.
   Telepítve: junction `~\.dsh\profiles\node_modules\dsh-sandbox-sentinel` +

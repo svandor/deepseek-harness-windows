@@ -50,7 +50,7 @@ test("a two hook beregisztrál (post-execute + session-start)", () => {
   assert.equal(typeof handlers.get("agent/session-start"), "function");
 });
 
-test("a named-pipe hibás kimenet megkapja a jegyzetet, és NEM hiba a hívás", async () => {
+test("a named-pipe hibás kimenet HIBAKÉNT jön vissza (a DSH eddig sikeresként adta)", async () => {
   const { handlers } = setUp();
   const post = handlers.get("tools/post-execute");
   let nextCalled = false;
@@ -59,12 +59,23 @@ test("a named-pipe hibás kimenet megkapja a jegyzetet, és NEM hiba a hívás",
     return { kind: "accept" };
   });
   assert.equal(nextCalled, false, "nem engedte tovább (van jegyzet)");
-  assert.equal(decision.kind, "accept");
-  assert.equal(decision.content.length, 2);
-  const note = String(decision.content[1].text);
+  assert.equal(decision.kind, "block", "a bukott hívás isError lesz");
+  assert.equal(decision.feedback.length, 2, "az eredeti kimenet megmarad");
+  assert.match(String(decision.feedback[0].text), /\\pipe\\/u);
+  const note = String(decision.feedback[1].text);
   assert.match(note, /\[sandbox-sentinel\]/u);
   assert.match(note, /cmd \/c/u);
   assert.match(note, /NEM eszkaláció/u);
+});
+
+test("a már hibás eredményt nem minősíti át (nincs dupla jelölés)", async () => {
+  const { handlers } = setUp();
+  const decision = await handlers.get("tools/post-execute")(
+    { name: "pwsh" },
+    { isError: true, content: PIPE_ERROR.content },
+    () => ({ kind: "accept" })
+  );
+  assert.equal(decision.kind, "accept");
 });
 
 test("a találat naplózódik (JSONL, a hibaosztály nevével)", async () => {
@@ -73,9 +84,22 @@ test("a találat naplózódik (JSONL, a hibaosztály nevével)", async () => {
   assert.equal(existsSync(logPath), true);
   const lines = readFileSync(logPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
   const last = lines.at(-1);
-  assert.equal(last.kind, "hit");
+  assert.equal(last.kind, "block", "a biztos bukás blokkként van naplózva");
   assert.equal(last.class, "pipe-capture");
   assert.equal(last.tool, "pwsh");
+});
+
+test("a bizonytalan esetekben NEM minősít át (csak jegyzetet fűz)", async () => {
+  const { handlers } = setUp();
+  // A magyar üzenet lehet ártalmatlan is (pl. egy védett fájl olvasása).
+  const decision = await handlers.get("tools/post-execute")(
+    { name: "pwsh" },
+    { content: [{ type: "text", text: "Get-Content : A hozzáférés megtagadva." }] },
+    () => ({ kind: "accept" })
+  );
+  assert.equal(decision.kind, "accept");
+  assert.equal(decision.content.length, 2);
+  assert.match(String(decision.content[1].text), /sandbox-sentinel/u);
 });
 
 test("a normál kimenet változatlanul megy tovább", async () => {

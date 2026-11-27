@@ -308,6 +308,30 @@ the model. **This track closes exactly that gap.**
    is how "did the complaints stop" becomes measurable.
 4. **Safe**: every branch is `try/catch` and falls through to `next()` — the plugin
    never breaks a call and never stops the boot.
+5. **Restoring `isError`** (this is a fix of DSH behaviour, not just an annotation):
+   in five classes (`pipe-capture`, `msys-sh`, `node-spawn`, `schannel-tls`,
+   `chromium-sandbox`) the call **definitely failed**, so the plugin returns a
+   `kind:'block'` decision, which makes it `isError: true` — the original output is
+   kept and only the note is appended. Until now the `pwsh` tool reported these as
+   `isError: false`, so the model saw a failure as a successful step. `sandbox-write`
+   (already marked by the harness) and `access-denied-hu` (may be harmless) are
+   deliberately **not** reclassified.
+
+**OPEN DSH DEFECT (not fixed, needs upstream):** the session's first turn stopped
+**without an answer** because the model's 7th step returned **only truncated
+reasoning** (846 characters, no text and no tool call), and the harness treated that
+as a **completed turn** (`turn/end reason=completed`) — writing nothing to the user.
+The stream came over the **direct DeepSeek route**
+(`deepseek-official/deepseek-flash`, `maxTokens: 256000`), so it was neither the
+local proxy nor the sandbox. From the plugin layer this **cannot** be fixed: the call
+frame has no `turn/end` (or equivalent) hook — the available ones are
+`agent/created`, `agent/pre-step`, `agent/request`, `agent/status`, `agent/disposed`,
+`agent/session-start`, `tools/pre-execute`, `tools/post-execute`, and `agent/status`
+carries only `{agent, status}`, no message content. So this is an **upstream report**
+(Track 3), and the practical protection in the meantime is that the model receives
+the correct tool pattern in the next turn (this track). **The harness itself did not
+crash** (pid 26620, started 2026-11-25 06:31; `harness.err.log` last written
+2026-11-23).
 
 **Measured:** `node plugins\dsh-sandbox-sentinel\test\classify.test.mjs` → **13/13**
 (with the measured strings, including the output of those two commands and the
@@ -386,6 +410,59 @@ the **next session creation** (the running harness was not restarted, §1.5).
 With it, `tools/browser-probe.mjs`, `tools/probe-terminal.mjs`,
 `tools/probe-hero.mjs` and any future visual check run **without escalation**, and
 the "browser" complaint disappears.
+
+### Track 4 — Agent coordination: machine-state lease — **DONE (2026-11-27)**
+
+**WHY (the user's observation):** "if you wanted to complete the other repo's task in
+competition with the other, running agent, that is also a DSH bug." They are right:
+the DSH runs **every session in a single host process**, with **no coordination
+between them** — no lock, no notice, no "another agent is working here".
+
+**MEASURED CASE (2026-11-27, same day as the one above):** the DSH repo's agent (this
+session) ran `display-guard.exe --apply` at 10:36:22, which switched the display from
+240 → 120 Hz — **while the Vector agent (`765b76d2`) was investigating exactly that
+display state**. From the Vector agent's own session log:
+
+| time (UTC) | step | what the model wrote |
+|---|---|---|
+| 09:37:46 | 9 | "the UXD log got entries at 10:36:23 … Maybe the user is interacting with the display settings right now" |
+| 09:39:01 | 15 | "WM_DISPLAYCHANGE occurred at … 10:36:22-24. Those are timestamps of display changes" |
+| 09:39:25 | 16 | "Hmm — maybe the user locked and unlocked the screen at 10:36?" |
+| (later) | 21–22 | "WHOA. The path 0 target refreshRate is now 120/1! … did I change it? No. … did the *user* change it?" |
+
+So it spent **at least four steps on a wrong track** and **blamed the user** — because
+nothing told it that another agent was working on the machine. This is the same error
+class as the sandbox's silent denials: **the system does not say what happened**.
+
+**IMPLEMENTATION — extending `dsh-rule-guard` (not a new plugin, the gate lives there):**
+
+- `lib/lease.js` (pure module): `resourceFor` (which command touches which resource),
+  `requestLease` (grant / deny with a reason), `releaseAll`, `prune`, `describeActive`.
+- `policy.json` → a **`leases`** block (hot-reload): `ttlMinutes: 20`, two resources:
+  `display-mode` (`display-guard --apply/--watch`, `display-mode.ps1 -Set`) and
+  `gpu-power` (`nvidia-smi --power-limit`, `--persistence-mode`). **Reading
+  (`-Status`) deliberately does not collide.**
+- `tools/pre-execute`: a lease gate **before** the rules — if another **live** agent
+  holds it: `deny` with a reason that names the holder, the start time, the remaining
+  time, **why** (the measured case) and the three ways out (read / ask the user / wait
+  for expiry).
+- `agent/session-start`: every session is told **"you are not alone on this machine"**
+  and sees the active leases. `agent/disposed`: a session releases its leases.
+- Log: `~\.dsh\rule-guard.log` (`lease-acquire`, `lease-deny`, `lease-release`).
+
+**MEASURED:** `node plugins\dsh-rule-guard\test\lease.test.mjs` → **11/11** (detection,
+reading excluded, two agents colliding with a reason, same-agent re-acquire, TTL
+expiry, release, wired gate: first call passes / second blocks / `-Status` passes / the
+notice is injected); the existing `policy.test.mjs` **23/23** unchanged;
+`node tools\check-rule-guard.mjs` → **15 clean, 0 errors**; `policy.json` is valid JSON
+(10 724 bytes).
+
+**LIMIT (stated):** `policy.json` is hot-reload, but the gate's **code** only takes
+effect at the **next harness start** (the running process still runs the old
+`index.js`) — until then the protection is **not active**. The lease is also
+**in-memory**: it is lost on a harness restart (which is correct — a TTL-bounded lock
+should not be inherited). The permanent fix is **upstream**: the DSH should natively
+know about the other sessions; until then this gate is the net.
 
 ### Track 3 — Knowledge, measurement, upstream (~1–2 hours)
 

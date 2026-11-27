@@ -39,6 +39,20 @@ const LOG_MAX_BYTES = 1024 * 1024;
  */
 const SHELL_TOOLS = new Set(["pwsh", "powershell", "powershell7", "bash", "sh", "shell", "terminal", "cmd"]);
 
+/**
+ * A hibaosztályok, amelyeknél a hívás **biztosan bukott**, ezért a DSH-nak is
+ * hibaként kell látnia (`kind:'block'` → `isError: true`).
+ *
+ * MIÉRT: a `pwsh` tool a sandbox-os elutasítást `isError: false`-szal adta vissza
+ * (csak `[exit code: 1]` volt a szövegben) — a modell így „sikeres" lépésként
+ * látta, és nem javította a formát. Mért eset: 2026-11-27, Vector `765b76d2`.
+ *
+ * A `sandbox-write` és az `access-denied-hu` SZÁNDÉKOSAN nincs itt: azokat a
+ * harness már hibaként jelöli, illetve a magyar üzenet lehet ártalmatlan is —
+ * ott csak jegyzetet fűzünk, nem minősítünk át.
+ */
+const ALWAYS_FATAL = new Set(["pipe-capture", "msys-sh", "node-spawn", "schannel-tls", "chromium-sandbox"]);
+
 /** A napló alapértelmezett helye: a DSH home (a harness processze írhatja). */
 function defaultLogPath() {
   const home = process.env.DSH_HOME ?? join(homedir(), ".dsh");
@@ -111,18 +125,21 @@ function apply(ctx, config = {}) {
         const hit = classify(text);
         if (hit === undefined) return next();
         const content = Array.isArray(result?.content) ? result.content : [];
+        const withNote = [...content, { type: "text", text: noteFor(hit) }];
         appendLog(logFile, {
           at: new Date().toISOString(),
-          kind: "hit",
+          kind: hit.escalate === false && ALWAYS_FATAL.has(hit.id) ? "block" : "hit",
           class: hit.id,
           tool: toolName,
           callId: exec?.callId,
           cwd: exec?.agent?.session?.header?.cwd
         });
-        return {
-          kind: "accept",
-          content: [...content, { type: "text", text: noteFor(hit) }]
-        };
+        // A biztos bukásokat HIBAKÉNT adjuk vissza (a DSH eddig sikeresként adta
+        // tovább őket) — a szöveg változatlan, csak a jegyzet kerül a végére.
+        if (ALWAYS_FATAL.has(hit.id) && result?.isError !== true) {
+          return { kind: "block", feedback: withNote };
+        }
+        return { kind: "accept", content: withNote };
       } catch (error) {
         logLine(ctx, "warn", `post-execute osztályozás hiba: ${String(error)}`);
         return next();
