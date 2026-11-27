@@ -363,9 +363,9 @@
       "targets": [
         "groq/openai/gpt-oss-120b",
         "openrouter/nvidia/nemotron-3.5-lightning:free",
-        "google/gemini-3.1-flash-lite",
         "google/gemini-3-flash-preview",
-        "openrouter/nvidia/nemotron-3.5-super-vl:free"
+        "openrouter/nvidia/nemotron-3.5-super-vl:free",
+        "google/gemini-3.1-flash-lite"
       ],
       "_comment_20261111": "A helyi Ollama záró szakasz (gemma4-12b-128k -> qwen2.5:7b-instruct -> qwen25-32k) KIVÉVE, a config.json `localOllama.archivedTargets`-ben őrizve — Windows alatt a betöltésük újraindítja a DSH-t.",
       "_comment_20261103": "2026-11-03: sorrend visszaallitva. A free-guard 2-napos demotalasa a Groq 413 (TPM 8000) es a lightning '200, de 0 tool_call' meresi artefakt miatt a ket legjobb ingyenes celot a 13 GB-os helyi modellek MOGE tette. A tagsag valtozatlan, csak a sorrend; a sorrendert a meresi ido (chain-doctor) a felelos."
@@ -377,9 +377,9 @@
       "targets": [
         "groq/openai/gpt-oss-120b",
         "openrouter/nvidia/nemotron-3.5-lightning:free",
-        "google/gemini-3.1-flash-lite",
         "google/gemini-3-flash-preview",
-        "openrouter/nvidia/nemotron-3.5-super-vl:free"
+        "openrouter/nvidia/nemotron-3.5-super-vl:free",
+        "google/gemini-3.1-flash-lite"
       ],
       "_comment_20261111": "A helyi Ollama záró szakasz KIVÉVE (localOllama.archivedTargets) — Windows alatt tilos a helyi modell betöltése.",
       "_comment_20261103": "2026-11-03: sorrend visszaallitva. A free-guard 2-napos demotalasa a Groq 413 (TPM 8000) es a lightning '200, de 0 tool_call' meresi artefakt miatt a ket legjobb ingyenes celot a 13 GB-os helyi modellek MOGE tette. A tagsag valtozatlan, csak a sorrend; a sorrendert a meresi ido (chain-doctor) a felelos."
