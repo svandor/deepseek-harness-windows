@@ -2,10 +2,10 @@
 
 > Hungarian original: [`SANDBOX-KAPACITAS-TERV.md`](SANDBOX-KAPACITAS-TERV.md)
 
-**Status:** **Track 0 and Track 2 are implemented** (2026-11-26, see
-[“Executing track 0”](#executing-track-0--measured-2026-11-26) and
-[“Track 2”](#track-2--the-browser-as-a-host-side-tool--done-2026-11-26));
-tracks 1 and 3 are still a plan. Every statement comes from a **measurement**
+**Status:** **Track 0, Track 1 and Track 2 are implemented** (2026-11-26/27, see
+[“Executing track 0”](#executing-track-0--measured-2026-11-26), [“Track 1”](#track-1--eliminating-silent-denials--done-2026-11-27)
+and [“Track 2”](#track-2--the-browser-as-a-host-side-tool--done-2026-11-26));
+track 3 is still a plan. Every statement comes from a **measurement**
 taken on this machine on 2026-11-26; the probe commands are in the
 [appendix](#appendix-a--the-measurement-commands) so they can be re-run at any time.
 
@@ -270,41 +270,55 @@ the browser, and PowerShell's output capture — those are tracks 1–2.
 `tools/git-sandbox-config.mjs` (dry-run by default, `--apply`) remains an open item so
 a machine rebuild can repeat it with one command.
 
-### Track 1 — Eliminating silent denials (~2–3 hours)
+### Track 1 — Eliminating silent denials — **DONE (2026-11-27)**
 
-New plugin: **`plugins/dsh-sandbox-sentinel`**, installed the proven
-`dsh-rule-guard` way (junction + a `- insert:` entry in `cordis.patch.yml`).
+New plugin: **`plugins/dsh-sandbox-sentinel`** (agent plane, installed the proven
+`dsh-rule-guard` way: junction + agent-preset entry).
 
-In plain words: this is a **signpost**. When one of the four known errors appears,
-the plugin writes next to it: "this was the sandbox, for this reason, do this
-instead" — and a short cheat sheet enters every conversation, so it does not have to
-be rediscovered.
+In plain words: this is a **signpost**. When one of the known errors appears, the
+plugin writes next to it: "this was the sandbox, for this reason, do this instead" —
+and a short cheat sheet enters every conversation, so it does not have to be
+rediscovered.
 
-1. **Result normalizer** in the tool pipeline's closing phase: when the output
-   contains one of the measured fingerprints, the plugin appends the **unchanged
-   built-in** marker texts:
-   - `[sandbox: file access denied under <mode> mode]`
-   - `[sandbox: escalation available — retry this exact <subject> once with
-     sandbox_permissions (the narrowest wider mode that suffices) + justification;
-     the approval prompt asks the user]`
+**Why it became urgent (measured, 2026-11-27, Vector `session-765b76d2`):** the agent
+called `& pwsh -File tools\display-mode.ps1 -Status 2>&1 | Out-String` and
+`& nvidia-smi … 2>&1 | Out-String`. The sandbox refused because of the named pipe:
 
-   Fingerprint table (EN + HU, because Windows error text is **localized**):
+```
+Program 'pwsh.exe' failed to run: Access to the path '\\.\pipe\LOCAL\dotnet_e1d6…' is denied
+```
 
-   | Fingerprint | Message to the agent |
-   |---|---|
-   | `SEC_E_NO_CREDENTIALS`, `SSL connection could not be established` | do not fix TLS: use `web_fetch`, `node -e fetch`, or `git -c http.sslBackend=openssl` |
-   | `couldn't create signal pipe`, `sh.exe: *** fatal error` | it is git's shell wrapper: `GIT_SSH` + native OpenSSH, **never** `core.sshCommand` |
-   | `platform_channel.cc`, `crashpad`, `hozzáférés megtagadva (0x5)` | Chromium cannot start inside the sandbox: `dsh-browser` (Track 2) or escalation |
-   | `EPERM spawnSync`, `EPERM spawn` | `stdio:'pipe'` is not allowed: `stdio:'inherit'`, or `cmd /c "… > file"` |
-   | `Access to the path '\\.\pipe\…' is denied` | already marked today — **do not** duplicate |
+In its own reasoning the agent translated this as **"Sandbox blocked launching
+external programs?"** — a wrong diagnosis (it is not launching that is forbidden but
+**capturing the output through a pipe**) — and then **closed the turn without an
+answer**. The same two commands ran fine as `cmd /c "… > file"` (`nvidia-smi` exit 0,
+full `display-mode.ps1 -Status` output) — the knowledge existed, it just never reached
+the model. **This track closes exactly that gap.**
 
-2. **Playbook injection** into the runtime context (as `dsh-rule-guard` does with
-   the project rules), short and factual: *"these operations work like this"* — so
-   it survives compaction and reaches subagents.
-3. **Log**: `state/sandbox-sentinel.log` (time, tool, fingerprint, session) — this
+**Implementation (refined against the plan):**
+
+1. **`tools/post-execute`**: seven error classes (`lib/classify.js`, a pure module) —
+   `pipe-capture`, `msys-sh`, `schannel-tls`, `chromium-sandbox`, `node-spawn`,
+   `sandbox-write`, `access-denied-hu` (the **Hungarian** "A hozzáférés megtagadva"
+   too, which the built-in detection never sees). On a hit a concrete, copy-pasteable
+   remedy is appended to the output — it does not block, the call stays successful.
+2. **`agent/session-start`**: a short (≈1.1 KB) cheat sheet with the four basic
+   patterns, marked "NOT a user message" (the lesson from `dsh-rule-guard`).
+3. **Log**: `~\.dsh\sandbox-sentinel.log` (JSONL: time, class, tool, session) — this
    is how "did the complaints stop" becomes measurable.
-4. **Test**: `test/fingerprints.test.mjs` with the **measured** strings (the table
-   in §1), plus the "do not duplicate an existing marker" case.
+4. **Safe**: every branch is `try/catch` and falls through to `next()` — the plugin
+   never breaks a call and never stops the boot.
+
+**Measured:** `node plugins\dsh-sandbox-sentinel\test\classify.test.mjs` → **13/13**
+(with the measured strings, including the output of those two commands and the
+Hungarian message; no false positives), `test\plugin.test.mjs` → **7/7** (the note
+lands in the right place, ordinary output passes through unchanged, file tools are
+not touched, the cheat sheet is injected). Installed: junction +
+`- id: sandbox-sentinel` (backup: `agent.cordis.yml.bak-2026-11-27-103602`),
+`install.ps1 -Check` → `HOOKS=agent/session-start,tools/post-execute
+CLASS=pipe-capture NOTE=OK`. **Takes effect at the next session creation** (the
+running harness was not restarted, §1.5).
+
 
 ### Track 2 — The browser as a host-side tool — **DONE (2026-11-26)**
 

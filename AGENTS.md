@@ -391,6 +391,57 @@ tömörítés után is meglegyenek.
 
 ## 4. Változásnapló
 
+- `2026-11-27` (Sáv 1: `dsh-sandbox-sentinel` — a néma sandbox-hibák jelzőtáblája) —
+  **a felhasználó jelezte egy Vector-munkamenetre (`765b76d2`, „240Hz kijelző hiba
+  vizsgálata"): „valami nem lett jó, nézd meg a képet", majd a munkamenetben:
+  „miért álltál le?".** (1) **MÉRT OK (mi történt):** a 6. lépésben az ágens
+  `& pwsh -File tools\display-mode.ps1 -Status 2>&1 | Out-String` és
+  `& nvidia-smi … 2>&1 | Out-String` alakban hívott → a sandbox a névtelen cső
+  miatt elutasította (`Program 'pwsh.exe' failed to run: Access to the path
+  '\\.\pipe\LOCAL\dotnet_e1d6…' is denied`). A 7. lépésben a modell a saját
+  gondolatmenetében ezt **rosszul** diagnosztizálta („Sandbox blocked launching
+  external programs?" — pedig nem az indítás tilos, hanem a **kimenet elkapása**),
+  és a kör **válasz nélkül** lezárult (`turn/end reason=completed`, üres
+  assistant-üzenet; a reasoning félbeszakadt). **A Harness NEM omlott össze és nem
+  indult újra** (pid 26620, indult 2026-11-25 06:31; a `harness.err.log` utolsó
+  írása 2026-11-23). A holtpont oka tehát a tool-tudás hiánya + egy megszakadt
+  modell-stream, nem a sandbox és nem a folyamat. (2) **HELYESBÍTÉS (a tudás megvolt,
+  csak nem ért oda):** ugyanaz a két parancs `cmd /c "… > fájl 2>&1"` alakban
+  **azonnal lefutott** — `nvidia-smi --query-gpu=…` → exit 0 (RTX 5080 Laptop,
+  driver 621.40, display_active=Enabled), `display-mode.ps1 -Status` → teljes
+  kimenet. A `-q -d DISPLAY` külön hibát ad („Failed to parse --display/-d flags"),
+  ez nem sandbox-kérdés. (3) **MEGVALÓSÍTÁS — új `plugins\dsh-sandbox-sentinel`**
+  (agent-sík): `tools/post-execute`-ban **hét mért hibaosztályt** ismer fel
+  (`pipe-capture`, `msys-sh`, `schannel-tls`, `chromium-sandbox`, `node-spawn`,
+  `sandbox-write`, `access-denied-hu` — utóbbi a **magyar** „A hozzáférés
+  megtagadva", amit a beépített felismerés nem lát), és a kimenet végére fűz egy
+  konkrét, másolható teendőt (a hívás nem lesz hiba); `agent/session-start`-nál
+  rövid (≈1,1 KB) súgót injektál „NEM felhasználói üzenet" jelölővel; minden
+  találatot a `~\.dsh\sandbox-sentinel.log`-ba ír (JSONL). Minden ág `try/catch` →
+  hiba esetén `next()`, a plugin soha nem rontja el a hívást. (4) **MÉRVE:**
+  `test\classify.test.mjs` **13/13** (a mért sztringekkel, a magyar üzenettel,
+  „ne duplázzon" és téves-pozitív esetekkel), `test\plugin.test.mjs` **7/7** (hamis
+  ctx: a jegyzet a helyére kerül, a normál kimenet változatlanul megy át, a
+  fájl-toolokhoz nem szól hozzá, a súgó beinjektálódik); `node --check` OK.
+  Telepítve: junction `~\.dsh\profiles\node_modules\dsh-sandbox-sentinel` +
+  `- id: sandbox-sentinel` (mentés: `agent.cordis.yml.bak-2026-11-27-103602`),
+  `install.ps1 -Check` → `HOOKS=agent/session-start,tools/post-execute
+  CLASS=pipe-capture NOTE=OK`. **Érvénybe lépés: a következő session-létrehozásnál**
+  (a futó Harness-t nem indítottuk újra, §1.5). (5) **A KIVÁLTÓ ÜGY LEZÁRVA (Vector):
+  a kijelző 240 Hz-en ragadt** — `display-mode.ps1 -Status` szerint
+  `\\.\DISPLAY5 5120x1440 @ 240 Hz`, kért 120 Hz, állapot „ELTÉR"; a
+  `display-guard.exe` autostartja **egyszeri** (`--apply --hz 120`), **nem fut**
+  (0 folyamat), ezért a boot utáni visszaállást semmi nem korrigálta (a napló utolsó
+  sora: 2026-11-25 06:31:10, 240→120 OK). A guard `--apply` most lefutott →
+  **visszaolvasva 5120x1440 @ 120 Hz, „rendben — a guard nem fog váltani"**. A
+  végleges megoldás a Vector repóban: `--watch <s>` (a guard támogatja) az egyszeri
+  autostart helyett. **FÁJLOK:** új `plugins\dsh-sandbox-sentinel\` (`package.json`,
+  `lib\classify.js`, `lib\index.js`, `test\classify.test.mjs`,
+  `test\plugin.test.mjs`, `install.ps1`, `README.md`), a
+  `docs\SANDBOX-KAPACITAS-TERV.md` (+ `.en.md`) 1. sávja és státusza.
+  **Nyitott:** Sáv 3 (`tools\sandbox-doctor.mjs`, `AGENTS.md` 5. pont,
+  `git-sandbox-config.mjs`, upstream).
+
 - `2026-11-26` (sandbox-kapacitás, 2. sáv: `browser` tool + a D3/D4 döntések) —
   **a felhasználó kérése: „3. pont: nyilván mind a három szintet el kell tudni érni
   böngészővel. építsd ki a javasoltak szerint. a külső oldalakra is kell néha a

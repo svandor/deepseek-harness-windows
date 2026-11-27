@@ -2,10 +2,11 @@
 
 > English mirror: [`SANDBOX-KAPACITAS-TERV.en.md`](SANDBOX-KAPACITAS-TERV.en.md)
 
-**Státusz:** a **0. sáv és a 2. sáv végrehajtva** (2026-11-26, lásd
-[„A 0. sáv végrehajtása"](#a-0-sáv-végrehajtása--mérve-2026-11-26) és
+**Státusz:** a **0., 1. és 2. sáv végrehajtva** (2026-11-26/27, lásd
+[„A 0. sáv végrehajtása"](#a-0-sáv-végrehajtása--mérve-2026-11-26),
+[„Sáv 1"](#sáv-1--a-néma-elutasítások-megszüntetése--kész-2026-11-27) és
 [„Sáv 2"](#sáv-2--böngésző-mint-host-oldali-tool--kész-2026-11-26));
-a Sáv 1 és 3 még terv. Minden állítás ezen a gépen, 2026-11-26-án
+a Sáv 3 még terv. Minden állítás ezen a gépen, 2026-11-26/27-én
 végzett **mérésből** származik; a mérési parancsok a [függelékben](#függelék-a--a-mérés-parancsai)
 vannak, hogy bármikor megismételhetők legyenek.
 
@@ -266,41 +267,56 @@ PowerShell kimenet-elfogását — ezek a Sáv 1–2 tételei.
 `tools/git-sandbox-config.mjs` (idempotens, dry-run, `--apply`) továbbra is nyitott
 tétel, hogy gép-újratelepítésnél egy paranccsal megismételhető legyen.
 
-### Sáv 1 — A néma elutasítások megszüntetése (~2–3 óra)
+### Sáv 1 — A néma elutasítások megszüntetése — **KÉSZ (2026-11-27)**
 
-Új plugin: **`plugins/dsh-sandbox-sentinel`**, a `dsh-rule-guard` bevált
-telepítési útján (junction + `- insert:` a `cordis.patch.yml`-ba).
+Új plugin: **`plugins/dsh-sandbox-sentinel`** (agent-sík, a `dsh-rule-guard`
+telepítési útján: junction + preset-bejegyzés).
 
 Hétköznapi nyelven: ez egy **jelzőtábla**. Amikor a négy ismert hiba valamelyike
 megjelenik, a plugin odaírja az ügynöknek, hogy „ez a sandbox volt, ezért, és ezt
 tedd helyette" — és minden beszélgetés elejére bekerül egy rövid súgó, hogy ne
 kelljen újra felfedezni.
 
-1. **Eredmény-normalizáló** a tool-végrehajtás lezáró fázisában: ha a kimenet
-   tartalmazza a mért ujjlenyomatok valamelyikét, a plugin a **változatlan
-   beépített** jelölő-szövegeket fűzi hozzá:
-   - `[sandbox: file access denied under <mode> mode]`
-   - `[sandbox: escalation available — retry this exact <subject> once with
-     sandbox_permissions (the narrowest wider mode that suffices) + justification;
-     the approval prompt asks the user]`
+**MIÉRT lett sürgős (mért eset, 2026-11-27, Vector `session-765b76d2`):** az ágens
+`& pwsh -File tools\display-mode.ps1 -Status 2>&1 | Out-String` és
+`& nvidia-smi … 2>&1 | Out-String` alakban hívott. A sandbox a névtelen cső miatt
+elutasította:
 
-   Ujjlenyomat-tábla (EN + HU, mert a Windows hibaszövegek **lokalizáltak**):
+```
+Program 'pwsh.exe' failed to run: Access to the path '\\.\pipe\LOCAL\dotnet_e1d6…' is denied
+```
 
-   | ujjlenyomat | üzenet az ágensnek |
-   |---|---|
-   | `SEC_E_NO_CREDENTIALS`, `SSL connection could not be established` | ne TLS-t javíts: `web_fetch`, `node -e fetch`, vagy `git -c http.sslBackend=openssl` |
-   | `couldn't create signal pipe`, `sh.exe: *** fatal error` | a git héj-wrapper-e: `GIT_SSH` + natív OpenSSH kell, **ne** `core.sshCommand` |
-   | `platform_channel.cc`, `crashpad`, `hozzáférés megtagadva (0x5)` | Chromium nem indulhat sandboxban: `dsh-browser` (Sáv 2) vagy eszkaláció |
-   | `EPERM spawnSync`, `EPERM spawn` | `stdio:'pipe'` tilos: `stdio:'inherit'`, vagy `cmd /c "… > fájl"` |
-   | `Access to the path '\\.\pipe\…' is denied` | már ma is jelölt — **ne** duplázzuk |
+Az ágens a saját gondolatmenetében ezt így fordította le: **„Sandbox blocked
+launching external programs?"** — vagyis rossz diagnózis (nem az indítás tilos,
+hanem a **kimenet csővezetéken való elkapása**), majd **válasz nélkül lezárta a
+kört**. Ugyanaz a két parancs `cmd /c "… > fájl"` alakban azonnal lefutott
+(`nvidia-smi` exit 0, `display-mode.ps1 -Status` teljes kimenet) — a tudás tehát
+megvolt, csak nem jutott el a modellig. **Ez a sáv pontosan ezt a rést zárja.**
 
-2. **Playbook-injektálás** a futásidejű kontextusba (mint a `dsh-rule-guard`
-   teszi a projekt-szabályokkal), rövid, tényszerű szöveggel: *„ezek a műveletek
-   így működnek"* — így tömörítés után és alügynököknél is megmarad.
-3. **Napló**: `state/sandbox-sentinel.log` (idő, tool, ujjlenyomat, session) —
+**Megvalósítás (a tervhez képest pontosítva):**
+
+1. **`tools/post-execute`**: hét hibaosztály (`lib/classify.js`, tiszta modul) —
+   `pipe-capture`, `msys-sh`, `schannel-tls`, `chromium-sandbox`, `node-spawn`,
+   `sandbox-write`, `access-denied-hu` (a **magyar** „A hozzáférés megtagadva" is,
+   amit a beépített felismerés nem lát). Találatnál a kimenet VÉGÉRE kerül egy
+   konkrét, másolható teendő — nem blokkol, a hívás sikeres marad.
+2. **`agent/session-start`**: rövid (≈1,1 KB) súgó a négy szabállyal, „NEM
+   felhasználói üzenet" jelölővel (a `dsh-rule-guard` tanulsága szerint).
+3. **Napló**: `~\.dsh\sandbox-sentinel.log` (JSONL: idő, osztály, tool, session) —
    ebből mérhető, hogy a panaszok megszűntek-e.
-4. **Teszt**: `test/fingerprints.test.mjs` a **mért** sztringekkel (a 8. oldal
-   táblázata), plusz a „ne duplázzon, ha már van jelölő" eset.
+4. **Biztonságos**: minden ág `try/catch`, hiba esetén `next()` — a plugin soha nem
+   rontja el a hívást és nem állítja meg a bootot.
+
+**MÉRVE:** `node plugins\dsh-sandbox-sentinel\test\classify.test.mjs` → **13/13**
+(a mért sztringekkel, köztük a fenti két parancs kimenetével és a magyar üzenettel;
+téves pozitív nélkül), `test\plugin.test.mjs` → **7/7** (a jegyzet a helyére kerül,
+a normál kimenet változatlanul megy át, a fájl-toolokhoz nem szól hozzá,
+a súgó beinjektálódik). Telepítve: junction +
+`- id: sandbox-sentinel` (mentés: `agent.cordis.yml.bak-2026-11-27-103602`),
+`install.ps1 -Check` → `HOOKS=agent/session-start,tools/post-execute
+CLASS=pipe-capture NOTE=OK`. **Érvénybe lépés: a következő session-létrehozásnál**
+(a futó Harness-t nem indítottuk újra, §1.5).
+
 
 ### Sáv 2 — Böngésző mint host-oldali tool — **KÉSZ (2026-11-26)**
 

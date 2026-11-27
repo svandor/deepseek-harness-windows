@@ -1,0 +1,22 @@
+{
+  "name": "dsh-sandbox-sentinel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A sandbox NÉMA hibaosztályainak felismerése és lefordítása cselekvéssé: a tool-kimenethez fűzött pontos útmutató + session-indító súgó.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./classify": "./lib/classify.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node test/classify.test.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.2"
+  },
+  "license": "MIT"
+}
